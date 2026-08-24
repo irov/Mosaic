@@ -1,0 +1,92 @@
+#include "Mosaic/Platform.hpp"
+
+namespace Mosaic
+{
+    //////////////////////////////////////////////////////////////////////////
+    bool NullPlatformAdapter::getClipboardText(String * const _out)
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        *_out = m_clipboard;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::setClipboardText(StringView text)
+    {
+        m_clipboard.assign(text);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool NullPlatformAdapter::writeConsole(StringView)
+    {
+        return false;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool NullPlatformAdapter::readFile(StringView, ByteVector * const _out)
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        return false;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool NullPlatformAdapter::writeFile(StringView, ByteSpan)
+    {
+        return false;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool NullPlatformAdapter::userDataPath(StringView, StringView, String * const _out)
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        return false;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    double NullPlatformAdapter::monotonicTime() const noexcept
+    {
+        return 0.0;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::setCursor(CursorShape)
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::setImeCandidateRect(const Rect &)
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void * NullPlatformAdapter::createWindow(const NativeWindowDescription &)
+    {
+        return nullptr;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::destroyWindow(void *)
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::showWindow(void *, bool)
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::setWindowBounds(void *, const Rect &)
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    MonitorSpan NullPlatformAdapter::monitors() const noexcept
+    {
+        return {};
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void NullPlatformAdapter::publishAccessibilityTree(SemanticNodeSpan)
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+} // namespace Mosaic

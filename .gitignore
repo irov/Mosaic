@@ -1,0 +1,10 @@
+/build/
+/build-*/
+/.cache/
+.DS_Store
+.vscode/
+.jupiter/
+.idea/
+compile_commands.json
+*.xcuserstate
+xcuserdata/

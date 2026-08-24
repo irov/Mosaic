@@ -1,0 +1,610 @@
+#include "Popup.hpp"
+#include "Interaction.hpp"
+#include "Utility.hpp"
+#include "Window.hpp"
+
+#include <algorithm>
+#include <utility>
+
+namespace Mosaic
+{
+    namespace Detail
+    {
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] Vec2 tooltipMaximumSize(const Context * ui, const Vec2 & requested) noexcept
+        {
+            Rect available = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
+            float width = requested.x > 0.f ? std::min(requested.x, available.width) : available.width;
+            float height = requested.y > 0.f ? std::min(requested.y, available.height) : available.height;
+            Vec2 result = {width, height};
+
+            return result;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] bool itemTooltipReady(Context * ui, const Response & item, const ItemTooltipOptions & options) noexcept
+        {
+            if(ui == nullptr)
+            {
+                return false;
+            }
+
+            if(item.id == InvalidId)
+            {
+                return false;
+            }
+
+            const Context::Persistent & state = ui->state(item.id);
+            bool navigationFocused = options.navigationFocus && ui->navigationFocused == item.id;
+            bool hovered = item.hovered() || navigationFocused == true || (options.allowWhenDisabled && item.disabled() && state.hoverLastFrame == ui->frame.number);
+
+            if(hovered == false)
+            {
+                return false;
+            }
+
+            float themeDelay = options.stationary ? ui->currentStyle->behavior.tooltipStationaryDelay : ui->currentStyle->behavior.tooltipHoverDelay;
+            float delay = options.delay < 0.f ? themeDelay : options.delay;
+            double hoverDuration = navigationFocused ? state.focusVisual >= 0.999f ? static_cast<double>(std::max(0.f, delay)) : 0.0 : options.stationary ? state.stationaryHoverDuration : state.hoverDuration;
+            bool sharedReady = options.sharedDelay && ui->sharedTooltipSource != InvalidId && ui->sharedTooltipSource != item.id && ui->input.timestamp <= ui->sharedTooltipVisibleUntil;
+            bool ready = sharedReady || hoverDuration >= static_cast<double>(std::max(0.f, delay));
+
+            if(ready == true)
+            {
+                ui->sharedTooltipSource = item.id;
+                ui->sharedTooltipVisibleUntil = ui->input.timestamp + 0.20;
+            }
+
+            return ready;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] float triangleSign(const Vec2 & point, const Vec2 & first, const Vec2 & second) noexcept
+        {
+            auto returnedValue = (point.x - second.x) * (first.y - second.y) - (first.x - second.x) * (point.y - second.y);
+
+            return returnedValue;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] bool pointInTriangle(const Vec2 & point, const Vec2 & first, const Vec2 & second, const Vec2 & third) noexcept
+        {
+            bool firstSide = Detail::triangleSign(point, first, second) < 0.f;
+            bool secondSide = Detail::triangleSign(point, second, third) < 0.f;
+            bool thirdSide = Detail::triangleSign(point, third, first) < 0.f;
+
+            return firstSide == secondSide && secondSide == thirdSide;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] bool menuAimHoldsCurrentPopup(const Context * ui) noexcept
+        {
+            if(ui->popupStack.size() < 2)
+            {
+                return false;
+            }
+
+            const PointerState * pointer = ui->input.primaryPointer();
+            const Context::PopupState & popup = ui->popupStack.back();
+
+            if(pointer == nullptr)
+            {
+                return false;
+            }
+
+            if(popup.bounds.empty() == true)
+            {
+                return false;
+            }
+
+            if((pointer->delta.x == 0.f && pointer->delta.y == 0.f))
+            {
+                return false;
+            }
+
+            Vec2 previous = pointer->position - pointer->delta;
+            bool opensRight = popup.bounds.x >= previous.x;
+            float edge = opensRight ? popup.bounds.x : popup.bounds.right();
+            Vec2 top = {edge, popup.bounds.y - 6.f};
+            Vec2 bottom = {edge, popup.bounds.bottom() + 6.f};
+            auto returnedValue = Detail::pointInTriangle(pointer->position, previous, top, bottom);
+
+            return returnedValue;
+        }
+        //////////////////////////////////////////////////////////////////////////
+    } // namespace Detail
+    //////////////////////////////////////////////////////////////////////////
+    Scope menuBar(Context * ui, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::menuBar(ui, MenuBarOptions{}, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope menuBar(Context * ui, const MenuBarOptions & menuBarOptions, const SourceLocation & location)
+    {
+        LayoutOptions layout;
+        layout.width = menuBarOptions.width;
+        layout.orientation = Orientation::Horizontal;
+        layout.gap = 0.f;
+        size_t node = ui->addNode(Detail::NodeKind::Row, {}, {}, layout, location, SemanticRole::Group, false, true);
+        ui->nodes[node].menuBar = true;
+        ui->nodes[node].fillBackground = menuBarOptions.fillBackground;
+        uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
+
+        return {ui, token, ui->nodes[node].id, true};
+    }
+    //////////////////////////////////////////////////////////////////////////
+    TreeScope menu(Context * ui, StringView label, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::menu(ui, label, MenuOptions{}, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    TreeScope menu(Context * ui, StringView label, const MenuOptions & menuOptions, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::menu(ui, {}, label, menuOptions, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    TreeScope menu(Context * ui, const Key & key, StringView label, const MenuOptions & menuOptions, const SourceLocation & location)
+    {
+        LayoutOptions layout;
+
+        if(menuOptions.width > 0.f)
+        {
+            layout.width = Dimension::fixed(menuOptions.width);
+        }
+
+        Id ownerId = combineId(ui->nodes[ui->currentParent].id, ui->localId(Detail::NodeKind::Button, key, location, false));
+        size_t existingOwner = ui->findFrameNodeIndex(ownerId);
+        bool append = existingOwner < ui->nodes.size() && ui->nodes[existingOwner].parent == ui->currentParent && ui->nodes[existingOwner].kind == Detail::NodeKind::Button && ui->nodes[existingOwner].semanticRole == SemanticRole::MenuItem;
+        size_t menuNode = existingOwner;
+        Response owner;
+
+        if(append == true)
+        {
+            owner = ui->nodes[menuNode].response;
+        }
+        else
+        {
+            menuNode = ui->addNode(Detail::NodeKind::Button, key, label, layout, location, SemanticRole::MenuItem, true);
+            ui->nodes[menuNode].fillBackground = menuOptions.fillBackground;
+            ui->nodes[menuNode].menuPopupItem = ui->currentInputLayer != InvalidId;
+            ui->nodes[menuNode].menuSubmenu = ui->currentInputLayer != InvalidId;
+            owner = ui->interact(menuNode);
+            ui->nodes[menuNode].response = owner;
+        }
+
+        Key popupKey("Menu popup");
+        PopupOptions options;
+        options.owner = owner.id;
+
+        if(Mosaic::debugBounds(ui, owner.id, &options.anchor) == false)
+        {
+            return {};
+        }
+
+        options.placement = ui->currentInputLayer == InvalidId ? PopupPlacement::Below : PopupPlacement::Right;
+        options.minimumSize = {ui->currentStyle->metrics.minimumPopupWidth, 0.f};
+        options.maximumSize = {420.f, 520.f};
+        options.allowSiblingOwners = true;
+        options.closeOnSelection = false;
+        bool nested = ui->currentInputLayer != InvalidId;
+
+        if(nested == false)
+        {
+            ui->menuBarItems.push_back(owner.id);
+        }
+
+        bool keyboardOpen = owner.focused() == true && ((nested == false && ui->input.keyPressed(KeyCode::Down) == true) || (nested == true && ui->input.keyPressed(KeyCode::Right) == true));
+        bool keyboardSiblingOpen = nested == false && owner.focused() == true && ui->popupStack.empty() == false && (ui->input.keyPressed(KeyCode::Left) == true || ui->input.keyPressed(KeyCode::Right) == true);
+        const Context::PopupState * state = Detail::findPopup(ui, Detail::popupId(ui, popupKey, owner.id));
+        bool popupActionHandled = false;
+
+        if(owner.clicked() == true || keyboardOpen == true)
+        {
+            popupActionHandled = true;
+
+            if(state != nullptr && state->open == true)
+            {
+                Mosaic::closeCurrentPopup(ui);
+            }
+            else
+            {
+                Mosaic::openPopup(ui, popupKey, options);
+            }
+        }
+        else if(keyboardSiblingOpen == true && (state == nullptr || state->open == false))
+        {
+            popupActionHandled = true;
+            Mosaic::openPopup(ui, popupKey, options);
+        }
+
+        const Context::PopupState * lastPopup = ui->popupStack.empty() == true ? nullptr : &ui->popupStack.back();
+        bool openHoveredSibling = owner.hovered() == true && lastPopup != nullptr && lastPopup->open == true && lastPopup->options.allowSiblingOwners == true && lastPopup->owner != owner.id;
+        bool nestedAimAllowsOpen = nested == false || (ui->state(owner.id).hoverDuration >= 0.08 && Detail::menuAimHoldsCurrentPopup(ui) == false);
+
+        if(popupActionHandled == false && openHoveredSibling == true && nestedAimAllowsOpen == true)
+        {
+            Mosaic::openPopup(ui, popupKey, options);
+        }
+
+        const Context::PopupState * activeState = Detail::findPopup(ui, Detail::popupId(ui, popupKey, owner.id));
+        lastPopup = ui->popupStack.empty() == true ? nullptr : &ui->popupStack.back();
+        bool closeNestedPopup = nested;
+
+        if(activeState == nullptr)
+        {
+            closeNestedPopup = false;
+        }
+
+        if(closeNestedPopup == true)
+        {
+            if(activeState->open == false)
+            {
+                closeNestedPopup = false;
+            }
+        }
+
+        if(ui->input.keyPressed(KeyCode::Left) == false)
+        {
+            closeNestedPopup = false;
+        }
+
+        if(lastPopup == nullptr)
+        {
+            closeNestedPopup = false;
+        }
+
+        if(closeNestedPopup == true)
+        {
+            if(lastPopup->id != activeState->id)
+            {
+                closeNestedPopup = false;
+            }
+        }
+
+        if(closeNestedPopup == true)
+        {
+            Mosaic::closeCurrentPopup(ui);
+            activeState = nullptr;
+        }
+
+        if(Context::Node * ownerNode = ui->findFrameNode(owner.id); ownerNode != nullptr)
+        {
+            ownerNode->selected = activeState != nullptr && activeState->open;
+        }
+
+        WindowScope popupScope = Mosaic::popup(ui, popupKey, options, location);
+        auto returnedValue = TreeScope(std::move(popupScope));
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response menuItem(Context * ui, StringView label, bool enabled, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::menuItem(ui, {}, label, enabled, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response menuItem(Context * ui, const Key & key, StringView label, bool enabled, const SourceLocation & location)
+    {
+        MenuItemOptions options;
+        options.enabled = enabled;
+        auto returnedValue = Mosaic::menuItem(ui, key, label, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response menuItem(Context * ui, StringView label, const MenuItemOptions & options, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::menuItem(ui, {}, label, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response menuItem(Context * ui, const Key & key, StringView label, const MenuItemOptions & options, const SourceLocation & location)
+    {
+        Response response;
+
+        if(options.enabled == true)
+        {
+            response = Mosaic::selectable(ui, key, label, options.selected || (options.checked != nullptr && *options.checked), location);
+        }
+        else
+        {
+            auto disabled = Mosaic::disabledScope(ui, true, location);
+            response = Mosaic::selectable(ui, key, label, options.selected, location);
+        }
+
+        if(Context::Node * node = ui->findFrameNode(response.id); node != nullptr)
+        {
+            node->semanticRole = SemanticRole::MenuItem;
+            node->menuPopupItem = ui->currentInputLayer != InvalidId;
+            node->menuCheckVisible = options.checked != nullptr || options.selected;
+            node->checked = (options.checked != nullptr && *options.checked) || options.selected;
+            node->valueText.assign(options.shortcut);
+            node->valueTextSize = ui->estimateText(node->valueText, *node->style);
+            node->valueTextPrepared = node->valueText.empty() == true;
+        }
+
+        if(response.clicked() == true && options.checked != nullptr)
+        {
+            *options.checked = !*options.checked;
+            Detail::setFlag(response, 6);
+        }
+
+        if(response.clicked() == true && options.closeOnActivate == true)
+        {
+            Mosaic::closeCurrentPopup(ui);
+        }
+
+        return response;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope popup(Context * ui, StringView label, bool * open, const Rect & bounds, const SourceLocation & location)
+    {
+        Rect popupBounds = bounds;
+
+        if(popupBounds.empty() == true)
+        {
+            Vec2 pointer;
+            if(Mosaic::pointerPosition(ui, &pointer) == false)
+            {
+                return {};
+            }
+
+            popupBounds = {pointer.x, pointer.y, 280.f, 180.f};
+        }
+
+        Id popupLayer = combineId(RootId, ui->localId(Detail::NodeKind::Window, {}, location, false));
+        Id previousInputLayer = ui->currentInputLayer;
+        ui->blockingInputLayer = popupLayer;
+        ui->currentInputLayer = popupLayer;
+
+        if(open == nullptr || *open == true)
+        {
+            Detail::popupBackdrop(ui, label, open, true, Color{0.f, 0.f, 0.f, 0.f}, popupBounds, location);
+        }
+
+        ui->currentInputLayer = previousInputLayer;
+
+        if(open != nullptr && *open == false)
+        {
+            return {};
+        }
+
+        WindowOptions options;
+        options.open = open;
+        options.initialBounds = popupBounds;
+        options.movable = false;
+        options.resizable = false;
+        options.input = false;
+        options.dockable = false;
+        options.titleBar = false;
+        WindowScope result = Mosaic::window(ui, {}, label, options, location);
+        Context::Node & popupNode = ui->nodes.back();
+        popupNode.inputLayer = popupLayer;
+
+        if(ui->scopes.empty() == false)
+        {
+            Context::ScopeState & scope = ui->scopes.back();
+            scope.previousInputLayer = previousInputLayer;
+        }
+
+        ui->currentInputLayer = popupLayer;
+        Detail::makePopupOpaque(ui, popupNode);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope modal(Context * ui, StringView label, bool * open, const Vec2 & size, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::modal(ui, {}, label, open, size, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope modal(Context * ui, const Key & key, StringView label, bool * open, const Vec2 & size, const SourceLocation & location)
+    {
+        Key resolvedKey = key.isExplicit() ? key : Key(ui->localId(Detail::NodeKind::Window, {}, location, false));
+        PopupOptions options;
+        options.owner = ui->nodes[ui->currentParent].id;
+        options.anchor = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
+        options.placement = PopupPlacement::Center;
+        options.minimumSize = size;
+        options.maximumSize = size;
+        options.closeOnClickOutside = false;
+        options.closeOnSelection = false;
+        options.modal = true;
+        options.titleBar = true;
+        options.backdropColor = ui->currentStyle->colors.modalDimBackground;
+        Id popupId = Detail::popupId(ui, resolvedKey, options.owner);
+
+        if(ui->popupClosedThisFrame.contains(popupId) == true)
+        {
+            if(open != nullptr)
+            {
+                *open = false;
+            }
+
+            return {};
+        }
+
+        if(open != nullptr && *open == false)
+        {
+            Mosaic::closePopup(ui, resolvedKey, options.owner);
+
+            return {};
+        }
+
+        if(Mosaic::isPopupOpen(ui, resolvedKey, options.owner) == false)
+        {
+            Mosaic::openPopup(ui, resolvedKey, options);
+        }
+
+        WindowScope result = Mosaic::popup(ui, resolvedKey, label, options, location);
+
+        if(open != nullptr && Mosaic::isPopupOpen(ui, resolvedKey, options.owner) == false)
+        {
+            *open = false;
+        }
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope tooltip(Context * ui, StringView label, const Vec2 & maximumSize, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::tooltip(ui, {}, label, maximumSize, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope tooltip(Context * ui, const Key & key, StringView label, const Vec2 & maximumSize, const SourceLocation & location)
+    {
+        Vec2 resolvedMaximumSize = Detail::tooltipMaximumSize(ui, maximumSize);
+        size_t previousParent = ui->currentParent;
+        ui->currentParent = 0;
+        WindowOptions options;
+        options.dockable = false;
+        options.movable = false;
+        options.resizable = false;
+        options.titleBar = false;
+        options.minimumSize = {};
+        options.maximumSize = resolvedMaximumSize;
+        Vec2 pointer;
+        if(Mosaic::pointerPosition(ui, &pointer) == false)
+        {
+            return {};
+        }
+
+        options.initialBounds = {pointer.x + 12.f, pointer.y + 18.f, resolvedMaximumSize.x, ui->currentStyle->metrics.controlHeight};
+        WindowScope result = Mosaic::window(ui, key, label, options, location);
+
+        if(result.id() != InvalidId)
+        {
+            Context::Node & tooltipNode = ui->nodes[ui->currentParent];
+            tooltipNode.windowAutoSize = true;
+            tooltipNode.windowPopup = true;
+            Context::Persistent & tooltipState = ui->state(tooltipNode);
+            tooltipState.windowPopup = true;
+            tooltipState.windowZOrder = ui->nextWindowZOrder++;
+            tooltipNode.windowZOrder = tooltipState.windowZOrder;
+            tooltipNode.windowMinimumSize = {};
+            tooltipNode.windowMaximumSize = resolvedMaximumSize;
+            ui->currentInputBlocked = true;
+            ui->currentNavigationBlocked = true;
+            tooltipNode.layout.width = SizeRule::Content;
+            tooltipNode.layout.height = SizeRule::Content;
+            tooltipNode.layout.maximum = resolvedMaximumSize;
+            tooltipNode.popupAnchor = {pointer.x + 12.f, pointer.y + 18.f, 1.f, 1.f};
+            tooltipNode.popupPlacement = PopupPlacement::Cursor;
+            Theme & style = ui->mutableStyle(tooltipNode);
+            style.colors.panel = style.colors.popup;
+            style.colors.background = style.colors.popup;
+            style.colors.border = style.colors.popupBorder;
+            style.colors.borderStrong = style.colors.popupBorder;
+
+            if(ui->scopes.empty() == false)
+            {
+                Context::ScopeState & scope = ui->scopes.back();
+                scope.previousParent = previousParent;
+            }
+        }
+        else
+        {
+            ui->currentParent = previousParent;
+        }
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void itemTooltip(Context * ui, const Response & item, StringView description, const Vec2 & size, const SourceLocation & location)
+    {
+        Mosaic::itemTooltip(ui, item, description, size, -1.f, location);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void itemTooltip(Context * ui, const Response & item, StringView description, const Vec2 & size, float delay, const SourceLocation & location)
+    {
+        ItemTooltipOptions options;
+        options.maximumSize = size;
+        options.delay = delay;
+        Mosaic::itemTooltip(ui, item, description, options, location);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void itemTooltip(Context * ui, const Response & item, StringView description, const ItemTooltipOptions & options, const SourceLocation & location)
+    {
+        if(Detail::itemTooltipReady(ui, item, options) == false)
+        {
+            return;
+        }
+
+        String tooltipName = "Item tooltip ";
+        String itemId;
+        if(Detail::toString(item.id, &itemId) == false)
+        {
+            return;
+        }
+
+        tooltipName += itemId;
+        size_t previousParent = ui->currentParent;
+        ui->currentParent = 0;
+        {
+            auto blocked = Mosaic::interactionScope(ui, false, location);
+            auto itemTooltip = Mosaic::tooltip(ui, Key(item.id), tooltipName, options.maximumSize, location);
+
+            if(itemTooltip.visible() == true)
+            {
+                TextOptions textOptions;
+                textOptions.wordWrap = true;
+                Mosaic::text(ui, description, textOptions, location);
+            }
+        }
+        ui->currentParent = previousParent;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope itemTooltip(Context * ui, const Response & item, const Key & key, const ItemTooltipOptions & options, const SourceLocation & location)
+    {
+        if(Detail::itemTooltipReady(ui, item, options) == false)
+        {
+            return {};
+        }
+
+        String tooltipName = "Item tooltip ";
+        String itemId;
+        if(Detail::toString(item.id, &itemId) == false)
+        {
+            return {};
+        }
+
+        String keyId;
+        if(Detail::toString(key.value(), &keyId) == false)
+        {
+            return {};
+        }
+
+        tooltipName += itemId;
+        tooltipName += " ";
+        tooltipName += keyId;
+        auto returnedValue = Mosaic::tooltip(ui, Key(combineId(item.id, key.value())), tooltipName, options.maximumSize, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response helpMarker(Context * ui, StringView description, const HelpMarkerOptions & options, const SourceLocation & location)
+    {
+        StringView marker = options.marker.empty() == true ? StringView("(?)") : options.marker;
+        size_t node = ui->addNode(Detail::NodeKind::Button, {}, marker, {}, location, SemanticRole::None, false);
+        Context::Node & markerNode = ui->nodes[node];
+        markerNode.fillBackground = false;
+        markerNode.fillHoverBackground = false;
+        Theme & style = ui->mutableStyle(markerNode);
+        style.colors.text = style.colors.textDisabled;
+        Response response = ui->interact(node, false);
+        markerNode.response = response;
+        Mosaic::itemTooltip(ui, response, description, options.tooltipSize, options.tooltipDelay, location);
+
+        return response;
+    }
+    //////////////////////////////////////////////////////////////////////////
+} // namespace Mosaic
