@@ -34,19 +34,74 @@ namespace Mosaic
             }
 
             const Context::Persistent & state = ui->state(item.id);
-            bool navigationFocused = options.navigationFocus && ui->navigationFocused == item.id;
-            bool hovered = item.hovered() || navigationFocused == true || (options.allowWhenDisabled && item.disabled() && state.hoverLastFrame == ui->frame.number);
+            bool navigationFocused = options.navigationFocus;
+            navigationFocused = navigationFocused == true && ui->currentStyle->behavior.tooltipNavigationFocus == true;
+            navigationFocused = navigationFocused == true && ui->navigationFocused == item.id;
+            bool hovered = item.hovered();
+            hovered = hovered == true || navigationFocused == true;
+
+            if(options.allowWhenDisabled == true && item.disabled() == true && state.hoverLastFrame == ui->frame.number)
+            {
+                hovered = true;
+            }
 
             if(hovered == false)
             {
                 return false;
             }
 
-            float themeDelay = options.stationary ? ui->currentStyle->behavior.tooltipStationaryDelay : ui->currentStyle->behavior.tooltipHoverDelay;
-            float delay = options.delay < 0.f ? themeDelay : options.delay;
-            double hoverDuration = navigationFocused ? state.focusVisual >= 0.999f ? static_cast<double>(std::max(0.f, delay)) : 0.0 : options.stationary ? state.stationaryHoverDuration : state.hoverDuration;
-            bool sharedReady = options.sharedDelay && ui->sharedTooltipSource != InvalidId && ui->sharedTooltipSource != item.id && ui->input.timestamp <= ui->sharedTooltipVisibleUntil;
-            bool ready = sharedReady || hoverDuration >= static_cast<double>(std::max(0.f, delay));
+            bool stationary = options.stationary;
+            float policyDelay = ui->currentStyle->behavior.tooltipShortDelay;
+            TooltipDelay delayPolicy = options.delayPolicy;
+
+            if(delayPolicy == TooltipDelay::Default)
+            {
+                delayPolicy = ui->currentStyle->behavior.tooltipMouseDelay;
+                stationary = stationary == true || ui->currentStyle->behavior.tooltipMouseStationary == true;
+            }
+
+            switch(delayPolicy)
+            {
+            case TooltipDelay::Default:
+                policyDelay = ui->currentStyle->behavior.tooltipShortDelay;
+                break;
+            case TooltipDelay::Short:
+                policyDelay = ui->currentStyle->behavior.tooltipShortDelay;
+                break;
+            case TooltipDelay::None:
+                policyDelay = 0.f;
+                break;
+            case TooltipDelay::Normal:
+                policyDelay = ui->currentStyle->behavior.tooltipNormalDelay;
+                break;
+            }
+
+            float delay = options.delay < 0.f ? policyDelay : options.delay;
+            double hoverDuration = state.hoverDuration;
+
+            if(navigationFocused == true)
+            {
+                hoverDuration = 0.0;
+
+                if(state.focusVisual >= 0.999f)
+                {
+                    hoverDuration = static_cast<double>(std::max(0.f, delay));
+                }
+            }
+
+            bool sharedReady = options.sharedDelay;
+            sharedReady = sharedReady == true && ui->currentStyle->behavior.tooltipMouseSharedDelay == true;
+            sharedReady = sharedReady == true && ui->sharedTooltipSource != InvalidId;
+            sharedReady = sharedReady == true && ui->sharedTooltipSource != item.id;
+            sharedReady = sharedReady == true && ui->input.timestamp <= ui->sharedTooltipVisibleUntil;
+            bool stationaryReady = stationary == false || navigationFocused == true;
+
+            if(stationaryReady == false)
+            {
+                stationaryReady = state.stationaryHoverDuration >= static_cast<double>(std::max(0.f, ui->currentStyle->behavior.tooltipStationaryDelay));
+            }
+
+            bool ready = stationaryReady == true && (sharedReady == true || hoverDuration >= static_cast<double>(std::max(0.f, delay)));
 
             if(ready == true)
             {
@@ -119,6 +174,21 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope menuBar(Context * ui, const MenuBarOptions & menuBarOptions, const SourceLocation & location)
     {
+        if(ui == nullptr)
+        {
+            return {};
+        }
+
+        if(ui->currentWindow != InvalidId)
+        {
+            Context::Node * windowNode = ui->findFrameNode(ui->currentWindow);
+
+            if(windowNode != nullptr)
+            {
+                windowNode->mutableWindowData().menuBar = true;
+            }
+        }
+
         LayoutOptions layout;
         layout.width = menuBarOptions.width;
         layout.orientation = Orientation::Horizontal;
@@ -129,6 +199,63 @@ namespace Mosaic
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[node].id, true};
+    }
+    //////////////////////////////////////////////////////////////////////////
+    MainMenuBarScope mainMenuBar(Context * ui, const MenuBarOptions & options, const SourceLocation & location)
+    {
+        if(ui == nullptr)
+        {
+            return {};
+        }
+
+        if(ui->mainMenuBarSubmitted == true)
+        {
+            return {};
+        }
+
+        Viewport viewport;
+
+        if(Mosaic::currentViewport(ui, &viewport) == false)
+        {
+            return {};
+        }
+
+        Rect workArea = viewport.workArea.empty() == true ? viewport.bounds : viewport.workArea;
+        float menuHeight = ui->currentStyle->metrics.controlHeight + ui->currentStyle->metrics.framePadding.top + ui->currentStyle->metrics.framePadding.bottom;
+        WindowOptions windowOptions;
+        windowOptions.initialBounds = {workArea.x, workArea.y, workArea.width, menuHeight};
+        windowOptions.minimumSize = {1.f, menuHeight};
+        windowOptions.maximumSize = {workArea.width, menuHeight};
+        windowOptions.titleBar = false;
+        windowOptions.movable = false;
+        windowOptions.resizable = false;
+        windowOptions.dockable = false;
+        windowOptions.bringToFront = false;
+        windowOptions.saveSettings = false;
+        WindowScope window = Mosaic::window(ui, Key("Main menu bar"), {}, windowOptions, location);
+        Mosaic::setWindowBounds(ui, window.id(), windowOptions.initialBounds);
+        Context::Node * windowNode = ui->findFrameNode(window.id());
+
+        if(windowNode != nullptr)
+        {
+            Context::Persistent & persistentState = ui->state(*windowNode);
+            persistentState.windowData().zOrder = ui->nextWindowZOrder++;
+            windowNode->mutableWindowData().zOrder = persistentState.windowData().zOrder;
+        }
+
+        ui->mainMenuBarSubmitted = true;
+        ui->viewport.workArea = workArea;
+        ui->viewport.workArea.y += menuHeight;
+        ui->viewport.workArea.height = std::max(0.f, ui->viewport.workArea.height - menuHeight);
+
+        if(window.visible() == false)
+        {
+            return {std::move(window), {}};
+        }
+
+        Scope menuBar = Mosaic::menuBar(ui, options, location);
+
+        return {std::move(window), std::move(menuBar)};
     }
     //////////////////////////////////////////////////////////////////////////
     TreeScope menu(Context * ui, StringView label, const SourceLocation & location)
@@ -154,7 +281,8 @@ namespace Mosaic
             layout.width = Dimension::fixed(menuOptions.width);
         }
 
-        Id ownerId = combineId(ui->nodes[ui->currentParent].id, ui->localId(Detail::NodeKind::Button, key, location, false));
+        Id identityParent = ui->nodes[ui->currentParent].identityScope;
+        Id ownerId = combineId(identityParent, ui->localId(Detail::NodeKind::Button, key, location, false));
         size_t existingOwner = ui->findFrameNodeIndex(ownerId);
         bool append = existingOwner < ui->nodes.size() && ui->nodes[existingOwner].parent == ui->currentParent && ui->nodes[existingOwner].kind == Detail::NodeKind::Button && ui->nodes[existingOwner].semanticRole == SemanticRole::MenuItem;
         size_t menuNode = existingOwner;
@@ -324,7 +452,7 @@ namespace Mosaic
             node->menuCheckVisible = options.checked != nullptr || options.selected;
             node->checked = (options.checked != nullptr && *options.checked) || options.selected;
             node->valueText.assign(options.shortcut);
-            node->valueTextSize = ui->estimateText(node->valueText, *node->style);
+            node->valueData().valueTextSize = ui->estimateText(node->valueText, *node->style);
             node->valueTextPrepared = node->valueText.empty() == true;
         }
 
@@ -409,11 +537,12 @@ namespace Mosaic
     {
         Key resolvedKey = key.isExplicit() ? key : Key(ui->localId(Detail::NodeKind::Window, {}, location, false));
         PopupOptions options;
-        options.owner = ui->nodes[ui->currentParent].id;
+        options.owner = ui->nodes[ui->currentParent].identityScope;
         options.anchor = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
         options.placement = PopupPlacement::Center;
-        options.minimumSize = size;
-        options.maximumSize = size;
+        Rect available = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
+        options.minimumSize = {size.x > 0.f ? size.x : 0.f, size.y > 0.f ? size.y : 0.f};
+        options.maximumSize = {size.x > 0.f ? size.x : available.width, size.y > 0.f ? size.y : available.height};
         options.closeOnClickOutside = false;
         options.closeOnSelection = false;
         options.modal = true;
@@ -445,6 +574,24 @@ namespace Mosaic
 
         WindowScope result = Mosaic::popup(ui, resolvedKey, label, options, location);
 
+        if(result.id() != InvalidId && (size.x <= 0.f || size.y <= 0.f))
+        {
+            Context::Node & modalNode = ui->nodes[ui->currentParent];
+            modalNode.mutableWindowData().autoSize = true;
+            modalNode.mutableWindowData().fitContentWidth = size.x <= 0.f;
+            modalNode.mutableWindowData().fitContentHeight = size.y <= 0.f;
+
+            if(size.x <= 0.f)
+            {
+                modalNode.layout.width = SizeRule::Content;
+            }
+
+            if(size.y <= 0.f)
+            {
+                modalNode.layout.height = SizeRule::Content;
+            }
+        }
+
         if(open != nullptr && Mosaic::isPopupOpen(ui, resolvedKey, options.owner) == false)
         {
             *open = false;
@@ -455,50 +602,74 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     WindowScope tooltip(Context * ui, StringView label, const Vec2 & maximumSize, const SourceLocation & location)
     {
-        auto returnedValue = Mosaic::tooltip(ui, {}, label, maximumSize, location);
+        auto returnedValue = Mosaic::tooltip(ui, {}, label, {}, maximumSize, location);
 
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
     WindowScope tooltip(Context * ui, const Key & key, StringView label, const Vec2 & maximumSize, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::tooltip(ui, key, label, {}, maximumSize, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope tooltip(Context * ui, StringView label, const Vec2 & minimumSize, const Vec2 & maximumSize, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::tooltip(ui, {}, label, minimumSize, maximumSize, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope tooltip(Context * ui, const Key & key, StringView label, const Vec2 & minimumSize, const Vec2 & maximumSize, const SourceLocation & location)
+    {
         Vec2 resolvedMaximumSize = Detail::tooltipMaximumSize(ui, maximumSize);
+        Vec2 resolvedMinimumSize;
+        resolvedMinimumSize.x = std::clamp(minimumSize.x, 0.f, resolvedMaximumSize.x);
+        resolvedMinimumSize.y = std::clamp(minimumSize.y, 0.f, resolvedMaximumSize.y);
         size_t previousParent = ui->currentParent;
         ui->currentParent = 0;
-        WindowOptions options;
-        options.dockable = false;
-        options.movable = false;
-        options.resizable = false;
-        options.titleBar = false;
-        options.minimumSize = {};
-        options.maximumSize = resolvedMaximumSize;
+        WindowOptions windowOptions;
+        windowOptions.dockable = false;
+        windowOptions.movable = false;
+        windowOptions.resizable = false;
+        windowOptions.titleBar = false;
+        windowOptions.minimumSize = resolvedMinimumSize;
+        windowOptions.maximumSize = resolvedMaximumSize;
         Vec2 pointer;
         if(Mosaic::pointerPosition(ui, &pointer) == false)
         {
+            ui->currentParent = previousParent;
+
             return {};
         }
 
-        options.initialBounds = {pointer.x + 12.f, pointer.y + 18.f, resolvedMaximumSize.x, ui->currentStyle->metrics.controlHeight};
-        WindowScope result = Mosaic::window(ui, key, label, options, location);
+        float initialWidth = std::max(ui->currentStyle->metrics.minimumPopupWidth, resolvedMinimumSize.x);
+        initialWidth = std::min(initialWidth, resolvedMaximumSize.x);
+        float initialHeight = std::max(ui->currentStyle->metrics.controlHeight, resolvedMinimumSize.y);
+        initialHeight = std::min(initialHeight, resolvedMaximumSize.y);
+        windowOptions.initialBounds = {pointer.x + 12.f, pointer.y + 18.f, initialWidth, initialHeight};
+        WindowScope result = Mosaic::window(ui, key, label, windowOptions, location);
 
         if(result.id() != InvalidId)
         {
             Context::Node & tooltipNode = ui->nodes[ui->currentParent];
-            tooltipNode.windowAutoSize = true;
-            tooltipNode.windowPopup = true;
+            tooltipNode.mutableWindowData().autoSize = true;
+            tooltipNode.mutableWindowData().popup = true;
             Context::Persistent & tooltipState = ui->state(tooltipNode);
-            tooltipState.windowPopup = true;
-            tooltipState.windowZOrder = ui->nextWindowZOrder++;
-            tooltipNode.windowZOrder = tooltipState.windowZOrder;
-            tooltipNode.windowMinimumSize = {};
-            tooltipNode.windowMaximumSize = resolvedMaximumSize;
+            tooltipState.windowData().popup = true;
+            tooltipState.windowData().zOrder = ui->nextWindowZOrder++;
+            tooltipNode.mutableWindowData().zOrder = tooltipState.windowData().zOrder;
+            tooltipNode.mutableWindowData().minimumSize = resolvedMinimumSize;
+            tooltipNode.mutableWindowData().maximumSize = resolvedMaximumSize;
             ui->currentInputBlocked = true;
             ui->currentNavigationBlocked = true;
             tooltipNode.layout.width = SizeRule::Content;
             tooltipNode.layout.height = SizeRule::Content;
+            tooltipNode.layout.minimum = resolvedMinimumSize;
             tooltipNode.layout.maximum = resolvedMaximumSize;
-            tooltipNode.popupAnchor = {pointer.x + 12.f, pointer.y + 18.f, 1.f, 1.f};
-            tooltipNode.popupPlacement = PopupPlacement::Cursor;
+            tooltipNode.mutableWindowData().popupAnchor = {pointer.x + 12.f, pointer.y + 18.f, 1.f, 1.f};
+            tooltipNode.mutableWindowData().popupPlacement = PopupPlacement::Cursor;
             Theme & style = ui->mutableStyle(tooltipNode);
             style.colors.panel = style.colors.popup;
             style.colors.background = style.colors.popup;
@@ -551,7 +722,7 @@ namespace Mosaic
         ui->currentParent = 0;
         {
             auto blocked = Mosaic::interactionScope(ui, false, location);
-            auto itemTooltip = Mosaic::tooltip(ui, Key(item.id), tooltipName, options.maximumSize, location);
+            auto itemTooltip = Mosaic::tooltip(ui, Key(item.id), tooltipName, options.minimumSize, options.maximumSize, location);
 
             if(itemTooltip.visible() == true)
             {
@@ -586,7 +757,7 @@ namespace Mosaic
         tooltipName += itemId;
         tooltipName += " ";
         tooltipName += keyId;
-        auto returnedValue = Mosaic::tooltip(ui, Key(combineId(item.id, key.value())), tooltipName, options.maximumSize, location);
+        auto returnedValue = Mosaic::tooltip(ui, Key(combineId(item.id, key.value())), tooltipName, options.minimumSize, options.maximumSize, location);
 
         return returnedValue;
     }
@@ -602,7 +773,11 @@ namespace Mosaic
         style.colors.text = style.colors.textDisabled;
         Response response = ui->interact(node, false);
         markerNode.response = response;
-        Mosaic::itemTooltip(ui, response, description, options.tooltipSize, options.tooltipDelay, location);
+        ItemTooltipOptions tooltipOptions;
+        tooltipOptions.minimumSize = options.tooltipMinimumSize;
+        tooltipOptions.maximumSize = options.tooltipSize;
+        tooltipOptions.delay = options.tooltipDelay;
+        Mosaic::itemTooltip(ui, response, description, tooltipOptions, location);
 
         return response;
     }

@@ -30,11 +30,27 @@ namespace Mosaic
 
         SystemAllocator g_systemAllocator;
         std::atomic<Allocator *> g_defaultAllocator = &g_systemAllocator;
+        thread_local Allocator * g_constructionAllocator = nullptr;
+        //////////////////////////////////////////////////////////////////////////
+        Allocator * setConstructionAllocator(Allocator * allocator) noexcept
+        {
+            Allocator * previous = g_constructionAllocator;
+            g_constructionAllocator = allocator;
+
+            return previous;
+        }
     } // namespace Detail
     //////////////////////////////////////////////////////////////////////////
     Allocator & defaultAllocator() noexcept
     {
-        Allocator & returnedValue = *Detail::g_defaultAllocator.load(std::memory_order_acquire);
+        Allocator * allocator = Detail::g_constructionAllocator;
+
+        if(allocator == nullptr)
+        {
+            allocator = Detail::g_defaultAllocator.load(std::memory_order_acquire);
+        }
+
+        Allocator & returnedValue = *allocator;
 
         return returnedValue;
     }

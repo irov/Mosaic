@@ -403,6 +403,13 @@ namespace MosaicExample
         Mosaic::Theme theme = Mosaic::getTheme(ui);
         theme.behavior.hoverEnabled = m_touchMode == false;
         theme.behavior.animationsEnabled = m_animations;
+        theme.behavior.rectangleTessellationQuality = m_roundedRectangleQuality;
+        theme.metrics.gap = m_layoutGap;
+        theme.metrics.popupPadding = Mosaic::EdgeInsets(m_popupPadding);
+        theme.metrics.minimumPopupWidth = m_minimumPopupWidth;
+        theme.metrics.windowTitleHeight = m_windowTitleHeight;
+        theme.metrics.controlHeight = m_controlHeight;
+        theme.metrics.minimumControlWidth = m_minimumControlWidth;
         Mosaic::setTheme(ui, theme);
 
         if(Mosaic::shortcuts(ui).triggered("Save Layout") == true)
@@ -413,7 +420,7 @@ namespace MosaicExample
 
         if(Mosaic::shortcuts(ui).triggered("Toggle Simulation") == true)
         {
-            m_simulating = !m_simulating;
+            m_simulating = m_simulating == false;
         }
 
         drawTopBar(ui);
@@ -908,7 +915,7 @@ namespace MosaicExample
 
                 if(Mosaic::button(ui, m_simulating ? "Stop" : "Run").clicked() == true)
                 {
-                    m_simulating = !m_simulating;
+                    m_simulating = m_simulating == false;
                 }
             }
             Mosaic::toggle(ui, "Pause", &m_paused);
@@ -1388,6 +1395,25 @@ namespace MosaicExample
             }
         }
 
+        {
+            auto windowOptions = Mosaic::treeNode(ui, Mosaic::Key("window behavior laboratory"), "Window behavior laboratory");
+
+            if(windowOptions.expanded() == true)
+            {
+                Mosaic::checkbox(ui, "Navigation inputs", &m_windowOptionsNavigationInputs);
+                Mosaic::checkbox(ui, "Navigation focus", &m_windowOptionsNavigationFocus);
+                Mosaic::checkbox(ui, "Pointer input", &m_windowOptionsPointerInput);
+                Mosaic::checkbox(ui, "Always auto-resize", &m_windowOptionsAutoResize);
+                Mosaic::checkbox(ui, "Always horizontal scrollbar", &m_windowOptionsHorizontalScrollbar);
+                Mosaic::checkbox(ui, "Always vertical scrollbar", &m_windowOptionsVerticalScrollbar);
+
+                if(Mosaic::button(ui, "Open window behavior lab").clicked() == true)
+                {
+                    m_windowOptionsLabOpen = true;
+                }
+            }
+        }
+
         Mosaic::separator(ui);
         Mosaic::TextInputOptions countOptions;
         countOptions.numeric = true;
@@ -1435,6 +1461,147 @@ namespace MosaicExample
             for(uint32_t index = 0; index != m_generatedCheckboxCount; ++index)
             {
                 Mosaic::checkbox(ui, Mosaic::Key(index), "Checkbox", &m_generatedCheckboxes[index].checked);
+            }
+        }
+
+        {
+            auto extensions = Mosaic::treeNode(ui, Mosaic::Key("Mosaic style extensions"), "Mosaic style extensions");
+
+            if(extensions.expanded() == true)
+            {
+                Mosaic::slider(ui, "Layout gap", &m_layoutGap, 0.f, 20.f);
+                Mosaic::slider(ui, "Popup padding", &m_popupPadding, 0.f, 20.f);
+                Mosaic::slider(ui, "Minimum popup width", &m_minimumPopupWidth, 80.f, 360.f);
+                Mosaic::slider(ui, "Window title height", &m_windowTitleHeight, 18.f, 48.f);
+                Mosaic::slider(ui, "Control height", &m_controlHeight, 16.f, 44.f);
+                Mosaic::slider(ui, "Minimum control width", &m_minimumControlWidth, 40.f, 260.f);
+                Mosaic::slider(ui, "Rounded rectangle quality", &m_roundedRectangleQuality, uint8_t{1}, uint8_t{64});
+                Mosaic::Response tooltipPolicy = Mosaic::button(ui, "Tooltip without shared delay");
+                Mosaic::ItemTooltipOptions tooltipOptions;
+                tooltipOptions.delayPolicy = Mosaic::TooltipDelay::Short;
+                tooltipOptions.sharedDelay = false;
+                Mosaic::itemTooltip(ui, tooltipPolicy, "This Mosaic-specific example always pays its own hover delay.", tooltipOptions);
+            }
+        }
+
+        drawFontDiagnostics(ui);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void FakeEditor::drawFontDiagnostics(Mosaic::Context * ui)
+    {
+        auto diagnostics = Mosaic::treeNode(ui, Mosaic::Key("font diagnostics"), "Font Cache Inspector");
+
+        if(diagnostics.expanded() == false)
+        {
+            return;
+        }
+
+        Mosaic::FontCacheMetrics metrics;
+        if(Mosaic::fontCacheMetrics(ui, &metrics) == false)
+        {
+            Mosaic::text(ui, "Font cache information is unavailable.");
+        }
+        else
+        {
+            Mosaic::String summary = "Fonts ";
+            summary += Detail::number(metrics.fontCount);
+            summary += ", faces ";
+            summary += Detail::number(metrics.resolvedFaceCount);
+            summary += ", glyphs ";
+            summary += Detail::number(metrics.glyphCount);
+            summary += ", atlas pages ";
+            summary += Detail::number(metrics.atlasPageCount);
+            summary += ", bytes ";
+            summary += Detail::number(metrics.atlasMemory);
+            Mosaic::text(ui, summary);
+
+            const Mosaic::Frame & frame = Mosaic::getFrame(ui);
+            Mosaic::String textCache = "Text cache: ";
+            textCache += Detail::number(frame.metrics.textCacheEntryCount);
+            textCache += " entries, ";
+            textCache += Detail::number(frame.metrics.textCacheHitCount);
+            textCache += " hits, ";
+            textCache += Detail::number(frame.metrics.textCacheMissCount);
+            textCache += " misses, ";
+            textCache += Detail::number(frame.metrics.textCacheEvictionCount);
+            textCache += " evictions, ";
+            textCache += Detail::number(frame.metrics.textCacheMemory);
+            textCache += " bytes";
+            Mosaic::text(ui, textCache);
+
+            Mosaic::String timings = "CPU ms: build ";
+            timings += Detail::number(frame.metrics.buildMilliseconds);
+            timings += ", layout ";
+            timings += Detail::number(frame.metrics.layoutMilliseconds);
+            timings += ", emit ";
+            timings += Detail::number(frame.metrics.emitMilliseconds);
+            Mosaic::text(ui, timings);
+
+            Mosaic::FontCacheEntryVector fonts;
+            if(Mosaic::fontCacheEntries(ui, &fonts) == true)
+            {
+                auto fontEntries = Mosaic::treeNode(ui, Mosaic::Key("font cache entries"), "Resolved font entries");
+
+                if(fontEntries.expanded() == true)
+                {
+                    Mosaic::TableOptions options;
+                    options.headers = true;
+                    options.rowBackground = true;
+                    options.bordersInnerHorizontal = true;
+                    auto table = Mosaic::table(ui, "Font entries", 3, options);
+                    Mosaic::tableSetupColumn(ui, 0, "Font");
+                    Mosaic::tableSetupColumn(ui, 1, "Size");
+                    Mosaic::tableSetupColumn(ui, 2, "Line height");
+                    Mosaic::tableHeadersRow(ui);
+                    for(size_t index = 0; index != fonts.size(); ++index)
+                    {
+                        const Mosaic::FontCacheEntry & entry = fonts[index];
+                        Mosaic::tableNextRow(ui, Mosaic::Key(index));
+                        (void)Mosaic::tableSetColumn(ui, 0);
+                        Mosaic::text(ui, entry.font == Mosaic::MonospaceFont ? "Monospace" : "Default");
+                        (void)Mosaic::tableSetColumn(ui, 1);
+                        Mosaic::text(ui, Detail::number(entry.size));
+                        (void)Mosaic::tableSetColumn(ui, 2);
+                        Mosaic::text(ui, Detail::number(entry.metrics.lineHeight()));
+                    }
+                }
+            }
+
+            Mosaic::GlyphCacheEntryVector glyphs;
+            if(Mosaic::glyphCacheEntries(ui, &glyphs) == true)
+            {
+                Mosaic::String glyphLabel = "Cached glyphs ";
+                glyphLabel += Detail::number(glyphs.size());
+                Mosaic::text(ui, glyphLabel);
+            }
+        }
+
+        auto textBounds = Mosaic::treeNode(ui, Mosaic::Key("text bounds diagnostics"), "Text BB");
+
+        if(textBounds.expanded() == true)
+        {
+            constexpr Mosaic::Array<Mosaic::StringView, 2> samples = {
+                "The quick brown fox jumps over the lazy dog. This sample validates wrapped proportional text bounds.",
+                "WWWW iiiii 0123456789 — cached geometry must preserve the exact measured bounds."};
+            constexpr Mosaic::Array<float, 2> widths = {180.f, 240.f};
+
+            for(size_t index = 0; index != samples.size(); ++index)
+            {
+                auto sampleScope = Mosaic::scope(ui, Mosaic::Key(index));
+                Mosaic::TextOptions options;
+                options.wordWrap = true;
+                options.layout.width = Mosaic::Dimension::fixed(widths[index]);
+                Mosaic::Response sample = Mosaic::text(ui, samples[index], options);
+                Mosaic::Rect bounds;
+
+                if(Mosaic::debugBounds(ui, sample.id, &bounds) == true)
+                {
+                    Mosaic::String measured = "Text BB: ";
+                    measured += Detail::number(bounds.width);
+                    measured += " x ";
+                    measured += Detail::number(bounds.height);
+                    Mosaic::text(ui, measured);
+                }
             }
         }
     }
@@ -1551,6 +1718,11 @@ namespace MosaicExample
         }
         else
         {
+            Mosaic::String popupStatus = "Popup stack: ";
+            popupStatus += Detail::number(Mosaic::popupLevel(ui));
+            popupStatus += Mosaic::isAnyPopupOpen(ui) == true ? " open" : " empty";
+            Mosaic::text(ui, popupStatus);
+
             Mosaic::LayoutOptions eventLayout;
             eventLayout.width = Mosaic::SizeRule::Fill;
             eventLayout.height = Mosaic::Dimension::fixed(170.f);
@@ -1630,6 +1802,37 @@ namespace MosaicExample
     //////////////////////////////////////////////////////////////////////////
     void FakeEditor::drawTransientWindows(Mosaic::Context * ui)
     {
+        if(m_windowOptionsLabOpen == true)
+        {
+            Mosaic::WindowOptions options;
+            options.open = &m_windowOptionsLabOpen;
+            options.initialBounds = {360.f, 180.f, 390.f, 260.f};
+            options.navigationInputs = m_windowOptionsNavigationInputs;
+            options.navigationFocus = m_windowOptionsNavigationFocus;
+            options.pointerInput = m_windowOptionsPointerInput;
+            options.alwaysAutoResize = m_windowOptionsAutoResize;
+            options.scroll.axes = Mosaic::ScrollAxes::Both;
+            options.scroll.alwaysHorizontalScrollbar = m_windowOptionsHorizontalScrollbar;
+            options.scroll.alwaysVerticalScrollbar = m_windowOptionsVerticalScrollbar;
+            auto window = Mosaic::window(ui, "Window behavior lab", options);
+
+            if(window.visible() == true)
+            {
+                Mosaic::text(ui, "These Mosaic-specific window controls intentionally live in Fake Editor.");
+                Mosaic::ButtonOptions wideButton;
+                wideButton.width = Mosaic::Dimension::fixed(520.f);
+                Mosaic::button(ui, Mosaic::Key("wide scrolling content"), "Wide content used to exercise horizontal scrolling", wideButton);
+
+                for(size_t index = 0; index != 12; ++index)
+                {
+                    auto lineScope = Mosaic::scope(ui, Mosaic::Key(index));
+                    Mosaic::String line = "Scrollable content line ";
+                    line += Detail::number(index + 1);
+                    Mosaic::text(ui, line);
+                }
+            }
+        }
+
         if(m_addComponentOwner != Mosaic::InvalidId)
         {
             Mosaic::PopupOptions popupOptions;

@@ -2,6 +2,8 @@
 
 #include "Mosaic/Mosaic.hpp"
 #include "DrawList.hpp"
+#include "FrameArena.hpp"
+#include "FrameRenderData.hpp"
 
 #include <functional>
 #include <limits>
@@ -10,6 +12,70 @@ namespace Mosaic
 {
     namespace Detail
     {
+        class AllocationTracker final : public Allocator
+        {
+        public:
+            explicit AllocationTracker(Allocator * allocator) noexcept : m_allocator(allocator)
+            {
+            }
+
+            [[nodiscard]] void * allocate(size_t size, size_t alignment) noexcept override
+            {
+                if(m_allocator == nullptr)
+                {
+                    return nullptr;
+                }
+
+                void * memory = m_allocator->allocate(size, alignment);
+
+                if(memory != nullptr)
+                {
+                    ++m_allocationCount;
+                    m_allocationBytes += size;
+                }
+
+                return memory;
+            }
+
+            void deallocate(void * memory, size_t size, size_t alignment) noexcept override
+            {
+                if(m_allocator == nullptr)
+                {
+                    return;
+                }
+
+                m_allocator->deallocate(memory, size, alignment);
+            }
+
+            void reset() noexcept
+            {
+                m_allocationCount = 0;
+                m_allocationBytes = 0;
+            }
+
+            [[nodiscard]] Allocator * backingAllocator() const noexcept
+            {
+                return m_allocator;
+            }
+
+            [[nodiscard]] size_t allocationCount() const noexcept
+            {
+                return m_allocationCount;
+            }
+
+            [[nodiscard]] size_t allocationBytes() const noexcept
+            {
+                return m_allocationBytes;
+            }
+
+        private:
+            Allocator * m_allocator = nullptr;
+            size_t m_allocationCount = 0;
+            size_t m_allocationBytes = 0;
+        };
+
+        using AllocationTrackerPtr = UniquePtr<AllocationTracker>;
+
         inline constexpr uint32_t CulledNodeFlag = 1U << 31U;
 
         enum class ItemPressPolicy : uint8_t
@@ -107,16 +173,32 @@ namespace Mosaic
 
         struct NumericState
         {
+            enum class ValueKind : uint8_t
+            {
+                None,
+                Signed,
+                Unsigned,
+                Floating
+            };
+
             long double dragStartValue = 0.L;
             long double dragValueSpeed = 0.L;
             long double dragAccumulator = 0.L;
             long double dragLastApplied = 0.L;
+            uint64_t integralDragStart = 0;
+            uint64_t integralDragLastApplied = 0;
+            uint64_t integralDragRateWhole = 0;
+            uint64_t integralDragRateRemainder = 0;
+            uint64_t integralDragRateDenominator = 1;
+            int64_t integralDragMotion = 0;
             float sliderGrabOffset = 0.f;
             String temporaryText;
-            long double lastValue = 0.L;
+            int64_t lastSignedValue = 0;
+            uint64_t lastUnsignedValue = 0;
+            long double lastFloatingValue = 0.L;
+            ValueKind lastValueKind = ValueKind::None;
             bool initialized = false;
             bool temporaryInput = false;
-            bool temporaryReplace = false;
             bool temporaryDoubleClickBlocked = false;
             bool dragThresholdPassed = false;
         };
@@ -180,14 +262,13 @@ namespace Mosaic
 
         using PreparedGlyphVector = Vector<PreparedGlyph>;
 
-        struct PreparedTextBatch
+        struct PreparedTextRunBatch
         {
             TextureHandle texture = 0;
-            VertexVector vertices;
-            IndexVector indices;
+            TexturedRectInstanceVector rectangles;
         };
 
-        using PreparedTextBatchVector = Vector<PreparedTextBatch>;
+        using PreparedTextRunBatchVector = Vector<PreparedTextRunBatch>;
         using StringQuad = Array<String, 4>;
         using Vec2Quad = Array<Vec2, 4>;
 
@@ -213,7 +294,7 @@ namespace Mosaic
             SizeVector clusters;
             Vec2Vector positions;
             ShapedTextLineVector lines;
-            PreparedTextBatchVector batches;
+            PreparedTextRunBatchVector batches;
             uint64_t key = 0;
             uint64_t lastFrame = 0;
             CachedText * previous = nullptr;
@@ -242,6 +323,17 @@ namespace Mosaic
             uint8_t uses = 0;
         };
 
+        struct TextMeasureCacheEntry
+        {
+            String text;
+            Vec2 size;
+            const FontProvider * provider = nullptr;
+            uint64_t providerRevision = 0;
+            FontHandle font = DefaultFont;
+            uint32_t fontSize = 0;
+            uint64_t key = 0;
+        };
+
         struct TransientTextIndexEntry
         {
             uint64_t key = 0;
@@ -250,194 +342,429 @@ namespace Mosaic
         };
 
         using TextUseHistoryArray = Array<TextUseHistory, 4096>;
+        using TextMeasureCache = Vector<TextMeasureCacheEntry>;
         using TransientTextIndexVector = Vector<TransientTextIndexEntry>;
         using ThemePtr = UniquePtr<Theme>;
         using ThemePtrVector = Vector<ThemePtr>;
 
         struct Persistent;
 
+        struct ScrollNodePayload
+        {
+            ScrollOptions options;
+        };
+
+        struct TableNodePayload
+        {
+            TableOptions options;
+            Id settingsId = InvalidId;
+        };
+
+        struct TableItemNodePayload
+        {
+            TableColumnOptions columnOptions;
+            SortDirection sortDirection = SortDirection::None;
+            uint32_t sortOrder = 0;
+            Array<Color, 2> rowBackgrounds;
+            Array<bool, 2> rowBackgroundsEnabled = {false, false};
+            Color cellBackground;
+            uint32_t row = 0;
+            uint32_t column = 0;
+            bool cellBackgroundEnabled : 1 = false;
+            bool header : 1 = false;
+        };
+
+        struct WindowNodePayload
+        {
+            Rect resizeBounds;
+            Rect popupAnchor;
+            Vec2 contentSize;
+            Vec2 minimumSize;
+            Vec2 maximumSize = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+            uint64_t zOrder = 0;
+            DockNodeId dockNode = 0;
+            uint32_t dockGroup = 0;
+            float backgroundAlpha = 1.f;
+            PopupPlacement popupPlacement = PopupPlacement::Automatic;
+            PopupHorizontalAlignment popupHorizontalAlignment = PopupHorizontalAlignment::Start;
+            WindowCollapsePlacement collapsePlacement = WindowCollapsePlacement::Right;
+            uint8_t resizeEdges = 0;
+            bool titleVisible : 1 = true;
+            bool menuBar : 1 = false;
+            bool backgroundVisible : 1 = true;
+            bool unsavedDocument : 1 = false;
+            bool docked : 1 = false;
+            bool dockAutoHideTabBar : 1 = false;
+            bool collapsed : 1 = false;
+            bool closeVisible : 1 = false;
+            bool closeHovered : 1 = false;
+            bool collapseVisible : 1 = false;
+            bool collapseHovered : 1 = false;
+            bool resizeHovered : 1 = false;
+            bool resizable : 1 = false;
+            bool resizeGripVisible : 1 = false;
+            bool autoSize : 1 = false;
+            bool alwaysAutoResize : 1 = false;
+            bool fitContentWidth : 1 = false;
+            bool fitContentHeight : 1 = false;
+            bool contentSizeExplicit : 1 = false;
+            bool scrollable : 1 = false;
+            bool popup : 1 = false;
+            bool bringToFront : 1 = true;
+            bool attachedPopup : 1 = false;
+        };
+
+        struct ImageNodePayload
+        {
+            TextureHandle texture = 0;
+            SamplerFilter sampler = SamplerFilter::Linear;
+            Rect uv = {0.f, 0.f, 1.f, 1.f};
+            Color background;
+            Color borderColor;
+            float rounding = 0.f;
+            float borderSize = 0.f;
+            float padding = 2.f;
+            bool backgroundEnabled : 1 = false;
+        };
+
+        struct TreeNodePayload
+        {
+            Rect frameBounds;
+            Rect frameClip;
+            Rect labelClip;
+            TreeLineMode lines = TreeLineMode::None;
+            bool framed : 1 = false;
+            bool leaf : 1 = false;
+            bool bullet : 1 = false;
+            bool framePadding : 1 = false;
+            bool spanLabelWidth : 1 = false;
+            bool spanAllColumns : 1 = false;
+            bool labelSpanAllColumns : 1 = false;
+            bool alignLabelWithCurrentX : 1 = false;
+            bool navigationLeftJumpsToParent : 1 = false;
+            bool closeVisible : 1 = false;
+            bool closeHovered : 1 = false;
+        };
+
+        struct TextEditNodePayload
+        {
+            size_t cursor = 0;
+            size_t anchor = 0;
+            size_t compositionBegin = 0;
+            size_t compositionEnd = 0;
+            float scrollX = 0.f;
+            float scrollY = 0.f;
+            bool multiline : 1 = false;
+            bool password : 1 = false;
+            bool hint : 1 = false;
+            bool numeric : 1 = false;
+            bool temporaryNumeric : 1 = false;
+        };
+
+        struct NodeDebugPayload
+        {
+            StringView file;
+            StringView function;
+            uint64_t identityIntegral = 0;
+            uint32_t line = 0;
+            IdentityValueKind identityValueKind = IdentityValueKind::Callsite;
+        };
+
+        struct ValueNodePayload
+        {
+            Vec2 valueTextSize;
+            size_t colorTextDataIndex = std::numeric_limits<size_t>::max();
+            float scalar = 0.f;
+            float secondaryScalar = 0.f;
+            float textWrapWidth = 0.f;
+            float itemWidth = 0.f;
+            float splitMinimumFirst = 0.f;
+            float splitMinimumSecond = 0.f;
+            bool itemWidthRequested : 1 = false;
+            bool colorMarkerEnabled : 1 = false;
+        };
+
         struct Node
         {
             Detail::NodeKind kind = Detail::NodeKind::Scope;
+            ItemRef item;
             Id id = InvalidId;
             Id parentId = InvalidId;
+            Id identityScope = InvalidId;
+            Id identityParent = InvalidId;
+            Id identityLocal = InvalidId;
             size_t parent = 0;
             size_t firstChild = std::numeric_limits<size_t>::max();
             size_t lastChild = std::numeric_limits<size_t>::max();
             size_t nextSibling = std::numeric_limits<size_t>::max();
             String label;
             String valueText;
-            StringView file;
-            StringView function;
-            uint32_t line = 0;
             Persistent * persistentState = nullptr;
             LayoutOptions layout;
             const Theme * style = nullptr;
             Vec2 measured;
             Vec2 textSize;
             float baseline = 0.f;
-            bool baselineValid = false;
+            bool baselineValid : 1 = false;
             Rect bounds;
             Rect content;
             Rect clip;
             Rect visualClip;
             Rect childrenClip;
             Rect explicitClip;
-            Rect treeFrameBounds;
-            Rect treeFrameClip;
-            Rect treeLabelClip;
             Response response;
             SemanticRole semanticRole = SemanticRole::None;
             Id inputLayer = InvalidId;
             Id windowOwner = InvalidId;
-            bool visible = true;
-            bool disabled = false;
-            bool inputBlocked = false;
-            bool navigationBlocked = false;
-            bool focusable = false;
-            bool cursorOverride = false;
+            uint64_t windowSubmission = 0;
+            bool visible : 1 = true;
+            bool disabled : 1 = false;
+            bool inputBlocked : 1 = false;
+            bool navigationBlocked : 1 = false;
+            bool focusable : 1 = false;
+            bool anonymousIdentity : 1 = false;
+            bool sameLine : 1 = false;
+            float sameLineOffset = 0.f;
+            float sameLineSpacing = -1.f;
+            bool alignTextToFramePadding : 1 = false;
+            SameLineOptions nextSameLine;
+            bool nextSameLinePending : 1 = false;
+            bool nextTextAlignToFramePadding : 1 = false;
+            bool cursorOverride : 1 = false;
             CursorShape cursor = CursorShape::Arrow;
-            bool checked = false;
-            bool selected = false;
-            bool expanded = false;
-            bool treeFramed = false;
-            bool treeLeaf = false;
-            bool treeBullet = false;
-            bool treeFramePadding = false;
-            bool treeSpanLabelWidth = false;
-            bool treeSpanAllColumns = false;
-            bool treeLabelSpanAllColumns = false;
-            bool treeAlignLabelWithCurrentX = false;
-            bool treeNavigationLeftJumpsToParent = false;
-            TreeLineMode treeLines = TreeLineMode::None;
-            bool treeCloseVisible = false;
-            bool treeCloseHovered = false;
-            bool multiline = false;
-            bool password = false;
-            bool wordWrap = false;
-            bool textHint = false;
-            bool numericInput = false;
-            bool readOnly = false;
-            bool showValuePopup = false;
-            bool showValueOnTrack = true;
-            bool showValueTooltip = false;
-            bool colorMarkerEnabled = false;
-            bool textPrepared = false;
-            bool valueTextPrepared = true;
-            bool scrollLayoutDirty = false;
-            bool scrollResizeHovered = false;
-            bool sliderVertical = false;
+            bool checked : 1 = false;
+            bool selected : 1 = false;
+            bool expanded : 1 = false;
+            bool idConflict : 1 = false;
+            bool wordWrap : 1 = false;
+            bool readOnly : 1 = false;
+            bool showValuePopup : 1 = false;
+            bool showValueOnTrack : 1 = true;
+            bool showValueTooltip : 1 = false;
+            bool textPrepared : 1 = false;
+            bool valueTextPrepared : 1 = true;
+            bool scrollLayoutDirty : 1 = false;
+            bool scrollResizeHovered : 1 = false;
+            bool sliderVertical : 1 = false;
             uint8_t scrollResizeEdges = 0;
             float tooltipDelay = 0.25f;
             Validation validation = Validation::Normal;
-            bool windowTitleVisible = true;
-            bool windowBackgroundVisible = true;
-            float windowBackgroundAlpha = 1.f;
-            bool windowUnsavedDocument = false;
-            bool windowDocked = false;
-            bool windowDockAutoHideTabBar = false;
-            uint32_t windowDockGroup = 0;
-            bool windowCollapsed = false;
-            bool windowCloseVisible = false;
-            bool windowCloseHovered = false;
-            bool windowCollapseVisible = false;
-            bool windowCollapseHovered = false;
-            WindowCollapsePlacement windowCollapsePlacement = WindowCollapsePlacement::Right;
-            bool windowResizeHovered = false;
-            bool windowResizable = false;
-            bool windowResizeGripVisible = false;
-            uint8_t windowResizeEdges = 0;
-            Rect windowResizeBounds;
-            bool windowAutoSize = false;
-            bool windowFitContentWidth = false;
-            bool windowFitContentHeight = false;
-            bool windowContentSizeExplicit = false;
-            Vec2 windowContentSize;
-            bool windowScrollable = false;
-            bool windowPopup = false;
-            bool windowBringToFront = true;
-            bool windowAttachedPopup = false;
-            bool menuBar = false;
-            bool menuPopupItem = false;
-            bool menuCheckVisible = false;
-            bool menuSubmenu = false;
-            bool fillBackground = true;
-            bool fillHoverBackground = true;
-            bool highlighted = false;
-            bool selectableSpanAllColumns = false;
-            bool arrowButton = false;
-            bool hyperlink = false;
-            bool overrideTextAlignment = false;
+            bool menuBar : 1 = false;
+            bool menuPopupItem : 1 = false;
+            bool menuCheckVisible : 1 = false;
+            bool menuSubmenu : 1 = false;
+            bool legacyColumns : 1 = false;
+            bool fillBackground : 1 = true;
+            bool fillHoverBackground : 1 = true;
+            bool highlighted : 1 = false;
+            bool selectableSpanAllColumns : 1 = false;
+            bool arrowButton : 1 = false;
+            bool hyperlink : 1 = false;
+            bool overrideTextAlignment : 1 = false;
             Vec2 textAlignment;
-            bool tabSelectedOverline = false;
-            bool tabLeading = false;
-            bool tabTrailing = false;
-            bool tabCloseVisible = false;
-            bool tabCloseHovered = false;
-            bool tabUnsavedDocument = false;
-            bool comboShowArrow = true;
-            bool comboShowPreview = true;
-            bool comboWidthFitPreview = false;
+            bool tabSelectedOverline : 1 = false;
+            bool tabLeading : 1 = false;
+            bool tabTrailing : 1 = false;
+            bool tabCloseVisible : 1 = false;
+            bool tabCloseHovered : 1 = false;
+            bool tabUnsavedDocument : 1 = false;
+            bool comboShowArrow : 1 = true;
+            bool comboShowPreview : 1 = true;
+            bool comboWidthFitPreview : 1 = false;
             Direction direction = Direction::Right;
-            bool colorShowInputs = false;
-            bool colorShowPreview = true;
+            bool colorShowInputs : 1 = false;
+            bool colorShowPreview : 1 = true;
             ColorInputMode colorInputMode = ColorInputMode::RgbByte;
-            bool colorAlphaBackground = true;
-            bool colorAlphaPreviewHalf = false;
-            bool colorBorder = true;
-            bool colorMarkers = true;
-            bool colorHdr = false;
+            bool colorAlphaBackground : 1 = true;
+            bool colorAlphaPreviewHalf : 1 = false;
+            bool colorBorder : 1 = true;
+            bool colorMarkers : 1 = true;
+            bool colorHdr : 1 = false;
             uint8_t colorComponents = 0;
             LabelPlacement labelPlacement = LabelPlacement::Before;
-            DockNodeId windowDockNode = 0;
-            float scalar = 0.f;
-            float secondaryScalar = 0.f;
-            float textScrollX = 0.f;
-            float textScrollY = 0.f;
-            float textWrapWidth = 0.f;
-            float itemWidth = 0.f;
-            bool itemWidthRequested = false;
-            uint64_t windowZOrder = 0;
-            float splitMinimumFirst = 0.f;
-            float splitMinimumSecond = 0.f;
-            Vec2 windowMinimumSize;
-            Vec2 windowMaximumSize = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
-            Rect popupAnchor;
-            PopupPlacement popupPlacement = PopupPlacement::Automatic;
-            PopupHorizontalAlignment popupHorizontalAlignment = PopupHorizontalAlignment::Start;
-            TextureHandle texture = 0;
-            Rect uv = {0.f, 0.f, 1.f, 1.f};
             Color tint = {1.f, 1.f, 1.f, 1.f};
-            Color imageBackground;
-            float imagePadding = 2.f;
-            bool imageBackgroundEnabled = false;
             Color colorMarker;
-            ScrollOptions scrollOptions;
-            TableOptions tableOptions;
-            Id tableSettingsId = InvalidId;
-            TableColumnOptions tableColumnOptions;
-            SortDirection tableSortDirection = SortDirection::None;
-            uint32_t tableSortOrder = 0;
-            Array<Color, 2> tableRowBackgrounds;
-            Array<bool, 2> tableRowBackgroundsEnabled = {false, false};
-            Color tableCellBackground;
-            bool tableCellBackgroundEnabled = false;
-            uint32_t tableRow = 0;
-            uint32_t tableColumn = 0;
-            bool tableHeader = false;
-            size_t textCursor = 0;
-            size_t textAnchor = 0;
-            size_t compositionBegin = 0;
-            size_t compositionEnd = 0;
+            ScrollNodePayload * scrollPayload = nullptr;
+            TableNodePayload * tablePayload = nullptr;
+            TableItemNodePayload * tableItemPayload = nullptr;
+            WindowNodePayload * windowPayload = nullptr;
+            ImageNodePayload * imagePayload = nullptr;
+            TreeNodePayload * treePayload = nullptr;
+            TextEditNodePayload * textEditPayload = nullptr;
+            NodeDebugPayload * debugPayload = nullptr;
+            ValueNodePayload * valuePayload = nullptr;
             const CachedText * textRun = nullptr;
             const CachedText * valueTextRun = nullptr;
-            Vec2 valueTextSize;
-            size_t colorTextDataIndex = std::numeric_limits<size_t>::max();
             size_t canvasCommandIndex = std::numeric_limits<size_t>::max();
             uint32_t canvasChannel = 0;
             uint32_t canvasChannelCount = 1;
             CanvasLayer canvasLayer = CanvasLayer::Local;
             size_t frameStringIndex = std::numeric_limits<size_t>::max();
+
+            [[nodiscard]] const ScrollOptions & scrollOptions() const noexcept
+            {
+                static const ScrollOptions DefaultOptions;
+
+                if(scrollPayload == nullptr)
+                {
+                    return DefaultOptions;
+                }
+
+                return scrollPayload->options;
+            }
+
+            [[nodiscard]] ScrollOptions & mutableScrollOptions() noexcept
+            {
+                return scrollPayload->options;
+            }
+
+            [[nodiscard]] const TableOptions & tableOptions() const noexcept
+            {
+                static const TableOptions DefaultOptions;
+
+                if(tablePayload == nullptr)
+                {
+                    return DefaultOptions;
+                }
+
+                return tablePayload->options;
+            }
+
+            [[nodiscard]] TableOptions & mutableTableOptions() noexcept
+            {
+                return tablePayload->options;
+            }
+
+            [[nodiscard]] Id tableSettingsId() const noexcept
+            {
+                Id returnedValue = tablePayload == nullptr ? InvalidId : tablePayload->settingsId;
+
+                return returnedValue;
+            }
+
+            void setTableSettingsId(Id settingsId) noexcept
+            {
+                tablePayload->settingsId = settingsId;
+            }
+
+            [[nodiscard]] const TableItemNodePayload & tableItem() const noexcept
+            {
+                static const TableItemNodePayload DefaultPayload;
+
+                if(tableItemPayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *tableItemPayload;
+            }
+
+            [[nodiscard]] TableItemNodePayload & mutableTableItem() noexcept
+            {
+                return *tableItemPayload;
+            }
+
+            [[nodiscard]] const WindowNodePayload & windowData() const noexcept
+            {
+                static const WindowNodePayload DefaultPayload;
+
+                if(windowPayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *windowPayload;
+            }
+
+            [[nodiscard]] WindowNodePayload & mutableWindowData() noexcept
+            {
+                return *windowPayload;
+            }
+
+            [[nodiscard]] const ImageNodePayload & imageData() const noexcept
+            {
+                static const ImageNodePayload DefaultPayload;
+
+                if(imagePayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *imagePayload;
+            }
+
+            [[nodiscard]] ImageNodePayload & mutableImageData() noexcept
+            {
+                return *imagePayload;
+            }
+
+            [[nodiscard]] const TreeNodePayload & treeData() const noexcept
+            {
+                static const TreeNodePayload DefaultPayload;
+
+                if(treePayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *treePayload;
+            }
+
+            [[nodiscard]] TreeNodePayload & mutableTreeData() noexcept
+            {
+                return *treePayload;
+            }
+
+            [[nodiscard]] TextEditNodePayload & textEditData() noexcept
+            {
+                return *textEditPayload;
+            }
+
+            [[nodiscard]] const TextEditNodePayload & textEditData() const noexcept
+            {
+                static const TextEditNodePayload DefaultPayload;
+
+                if(textEditPayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *textEditPayload;
+            }
+
+            [[nodiscard]] const NodeDebugPayload & debugData() const noexcept
+            {
+                static const NodeDebugPayload DefaultPayload;
+
+                if(debugPayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *debugPayload;
+            }
+
+            [[nodiscard]] NodeDebugPayload & mutableDebugData() noexcept
+            {
+                return *debugPayload;
+            }
+
+            [[nodiscard]] const ValueNodePayload & valueData() const noexcept
+            {
+                static const ValueNodePayload DefaultPayload;
+
+                if(valuePayload == nullptr)
+                {
+                    return DefaultPayload;
+                }
+
+                return *valuePayload;
+            }
+
+            [[nodiscard]] ValueNodePayload & valueData() noexcept
+            {
+                return *valuePayload;
+            }
         };
 
         struct RecycledNodeStorage
@@ -452,6 +779,7 @@ namespace Mosaic
             String semanticDescription;
             String semanticValue;
             String path;
+            String identityDebugValue;
         };
 
         struct TableColumnState
@@ -485,6 +813,7 @@ namespace Mosaic
             SizeVector displayOrder;
             uint32_t currentRow = 0;
             uint32_t currentColumn = 0;
+            Id currentRowIdentity = InvalidId;
             uint32_t headerRowCount = 0;
             uint32_t draggingColumn = std::numeric_limits<uint32_t>::max();
             uint32_t contextColumn = std::numeric_limits<uint32_t>::max();
@@ -530,6 +859,67 @@ namespace Mosaic
             uint64_t lastFrame = 0;
         };
 
+        struct WindowPersistentState
+        {
+            Rect bounds;
+            Rect resizeStartBounds;
+            Vec2 dragOffset;
+            uint64_t zOrder = 0;
+            uint64_t visibleLastFrame = 0;
+            uint8_t resizeEdges = 0;
+            uint8_t interaction = 0;
+            bool initialized : 1 = false;
+            bool settingsPolicyInitialized : 1 = false;
+            bool saveSettings : 1 = true;
+            bool visible : 1 = false;
+            bool acceptsInput : 1 = true;
+            bool acceptsPointerInput : 1 = true;
+            bool acceptsNavigationFocus : 1 = true;
+            bool bringToFront : 1 = true;
+            bool popup : 1 = false;
+            bool contentWidthFitted : 1 = false;
+            bool contentHeightFitted : 1 = false;
+            bool positionConditionApplied : 1 = false;
+            bool sizeConditionApplied : 1 = false;
+            bool contentSizeConditionApplied : 1 = false;
+            bool collapsedConditionApplied : 1 = false;
+            bool collapsedValue : 1 = false;
+            bool collapsedInitialized : 1 = false;
+            bool resizingDockHost : 1 = false;
+            bool dragging : 1 = false;
+            bool backgroundMovePending : 1 = false;
+        };
+
+        struct ScrollPersistentState
+        {
+            float value = 0.f;
+            float extent = 0.f;
+            Vec2 position;
+            Vec2 target;
+            Vec2 velocity;
+            Vec2 range;
+            Vec2 contentSize;
+            uint64_t animationFrame = 0;
+            Orientation orientation = Orientation::Vertical;
+            Rect trackBounds;
+            Rect thumbBounds;
+            Rect verticalTrack;
+            Rect verticalThumb;
+            Rect horizontalTrack;
+            Rect horizontalThumb;
+            float dragOffset = 0.f;
+            uint8_t draggingAxis = 0;
+            Vec2 areaSize;
+            Vec2 resizeStartSize;
+            uint8_t resizeEdges = 0;
+            bool targetInitialized : 1 = false;
+            bool toEndX : 1 = false;
+            bool toEndY : 1 = false;
+            bool draggingScrollbar : 1 = false;
+            bool areaSizeInitialized : 1 = false;
+            bool resizingArea : 1 = false;
+        };
+
         struct Persistent
         {
             Rect lastBounds;
@@ -538,60 +928,13 @@ namespace Mosaic
             Rect pressClip;
             Id lastInputLayer = InvalidId;
             Id windowOwner = InvalidId;
-            Rect windowBounds;
-            bool windowInitialized = false;
-            bool windowSettingsPolicyInitialized = false;
-            bool windowSaveSettings = true;
-            bool windowVisible = false;
-            bool windowAcceptsInput = true;
-            bool windowBringToFront = true;
-            bool windowPopup = false;
-            uint64_t windowZOrder = 0;
-            bool windowContentWidthFitted = false;
-            bool windowContentHeightFitted = false;
-            bool windowPositionConditionApplied = false;
-            bool windowSizeConditionApplied = false;
-            bool windowContentSizeConditionApplied = false;
-            bool windowCollapsedConditionApplied = false;
-            bool windowCollapsedValue = false;
-            bool windowCollapsedInitialized = false;
-            uint64_t windowVisibleLastFrame = 0;
-            bool expanded = false;
-            bool expandedInitialized = false;
+            bool expanded : 1 = false;
+            bool expandedInitialized : 1 = false;
             Id autoCloseTree = InvalidId;
-            float scroll = 0.f;
-            float scrollExtent = 0.f;
-            Vec2 scrollPosition;
-            Vec2 scrollTarget;
-            Vec2 scrollVelocity;
-            Vec2 scrollRange;
-            Vec2 scrollContentSize;
-            bool scrollTargetInitialized = false;
-            bool scrollToEndX = false;
-            bool scrollToEndY = false;
-            Orientation scrollOrientation = Orientation::Vertical;
-            Rect scrollbarTrackBounds;
-            Rect scrollbarThumbBounds;
-            Rect verticalScrollbarTrack;
-            Rect verticalScrollbarThumb;
-            Rect horizontalScrollbarTrack;
-            Rect horizontalScrollbarThumb;
-            float scrollbarDragOffset = 0.f;
-            bool draggingScrollbar = false;
-            uint8_t draggingScrollAxis = 0;
-            Vec2 scrollAreaSize;
-            Vec2 scrollResizeStartSize;
-            bool scrollAreaSizeInitialized = false;
-            bool resizingScrollArea = false;
-            uint8_t scrollResizeEdges = 0;
-            bool editing = false;
-            bool acceptsTabInput = false;
-            Vec2 dragOffset;
+            bool editing : 1 = false;
+            bool acceptsTabInput : 1 = false;
             Vec2 dragStartPosition;
             Vec2 dragLastPosition;
-            Rect windowResizeStartBounds;
-            uint8_t windowResizeEdges = 0;
-            bool resizingDockHost = false;
             size_t numericStateIndex = std::numeric_limits<size_t>::max();
             double pressStartedTimestamp = 0.0;
             double lastRepeatTimestamp = 0.0;
@@ -604,10 +947,7 @@ namespace Mosaic
             Rect splitterBounds;
             Orientation splitterOrientation = Orientation::Horizontal;
             uint32_t splitterSnapIndex = 0;
-            bool draggingWindow = false;
-            bool windowBackgroundMovePending = false;
-            uint8_t windowInteraction = 0;
-            bool visualInitialized = false;
+            bool visualInitialized : 1 = false;
             float hoverVisual = 0.f;
             float activeVisual = 0.f;
             float selectionVisual = 0.f;
@@ -615,8 +955,107 @@ namespace Mosaic
             float scalarVisual = 0.f;
             uint64_t firstFrame = 0;
             uint64_t lastFrame = 0;
+            Allocator * allocator = nullptr;
+            UniquePtr<WindowPersistentState> window;
+            UniquePtr<ScrollPersistentState> scroll;
             UniquePtr<TableState> table;
+
+            [[nodiscard]] WindowPersistentState & windowData()
+            {
+                if(window == nullptr)
+                {
+                    window = makeUnique<WindowPersistentState>(*allocator);
+                }
+
+                return *window;
+            }
+
+            [[nodiscard]] const WindowPersistentState & windowData() const noexcept
+            {
+                static const WindowPersistentState DefaultState;
+
+                if(window == nullptr)
+                {
+                    return DefaultState;
+                }
+
+                return *window;
+            }
+
+            [[nodiscard]] ScrollPersistentState & scrollData()
+            {
+                if(scroll == nullptr)
+                {
+                    scroll = makeUnique<ScrollPersistentState>(*allocator);
+                }
+
+                return *scroll;
+            }
+
+            [[nodiscard]] const ScrollPersistentState & scrollData() const noexcept
+            {
+                static const ScrollPersistentState DefaultState;
+
+                if(scroll == nullptr)
+                {
+                    return DefaultState;
+                }
+
+                return *scroll;
+            }
         };
+
+        struct InteractionScrollTransform
+        {
+            Id id = InvalidId;
+            Vec2 position;
+            Rect clip;
+        };
+
+        struct InteractionSnapshotItem
+        {
+            ItemRef item;
+            Detail::NodeKind kind = Detail::NodeKind::Scope;
+            Id identityParent = InvalidId;
+            Id inputLayer = InvalidId;
+            Id windowOwner = InvalidId;
+            uint64_t windowSubmission = 0;
+            Rect capturedBounds;
+            Rect capturedClip;
+            Rect capturedWindowBounds;
+            Rect bounds;
+            Rect clip;
+            Vec2 textSize;
+            ScrollOptions scrollOptions;
+            TableOptions tableOptions;
+            float textVisibleHeight = 0.f;
+            bool animationsEnabled = true;
+            size_t scrollTransformBegin = 0;
+            size_t scrollTransformCount = 0;
+            uint64_t windowZOrder = 0;
+            bool visible = false;
+            bool disabled = false;
+            bool inputBlocked = false;
+            bool navigationBlocked = false;
+            bool focusable = false;
+            bool windowPopup = false;
+            bool windowAcceptsPointerInput = true;
+        };
+
+        struct InteractionSnapshotIndexEntry
+        {
+            ItemRef item;
+            size_t index = 0;
+            uint64_t generation = 0;
+        };
+
+        struct WindowFrameInstance
+        {
+            ItemRef item;
+            size_t node = std::numeric_limits<size_t>::max();
+        };
+
+        using WindowFrameInstanceVector = Vector<WindowFrameInstance>;
 
         struct PopupState
         {
@@ -657,6 +1096,7 @@ namespace Mosaic
         struct ScopeState
         {
             uint64_t token = 0;
+            size_t node = 0;
             size_t previousParent = 0;
             bool previousDisabled = false;
             bool previousInputBlocked = false;
@@ -665,6 +1105,7 @@ namespace Mosaic
             bool previousLiveEditScalar = true;
             Id previousInputLayer = InvalidId;
             Id previousWindow = InvalidId;
+            uint64_t previousWindowSubmission = 0;
             const Theme * previousStyle = nullptr;
             SelectionModel * previousSelectionModel = nullptr;
             IdSpan previousSelectionOrder;
@@ -706,6 +1147,9 @@ namespace Mosaic
         };
 
         using FrameNodeIndexVector = Vector<FrameNodeIndexEntry>;
+        using InteractionSnapshotItemVector = Vector<InteractionSnapshotItem>;
+        using InteractionSnapshotIndexVector = Vector<InteractionSnapshotIndexEntry>;
+        using InteractionScrollTransformVector = Vector<InteractionScrollTransform>;
         using DockModelMap = UnorderedMap<uint32_t, DockModel>;
         using DockAreaMap = UnorderedMap<uint32_t, Rect>;
         using DockSpaceOptionsMap = UnorderedMap<uint32_t, DockSpaceOptions>;
@@ -724,6 +1168,7 @@ namespace Mosaic
                     return returnedValue;
                 };
                 size_t hash = std::hash<TextureHandle>{}(value.texture);
+                hash = combine(hash, std::hash<uint8_t>{}(static_cast<uint8_t>(value.sampler)));
                 hash = combine(hash, std::hash<float>{}(value.clip.x));
                 hash = combine(hash, std::hash<float>{}(value.clip.y));
                 hash = combine(hash, std::hash<float>{}(value.clip.width));
@@ -731,7 +1176,14 @@ namespace Mosaic
                 hash = combine(hash, std::hash<uint8_t>{}(static_cast<uint8_t>(value.blend)));
                 hash = combine(hash, std::hash<RenderTargetHandle>{}(value.renderTarget));
                 hash = combine(hash, std::hash<uint32_t>{}(value.variant));
-                auto returnedValue = combine(hash, std::hash<float>{}(value.clipRadius));
+                hash = combine(hash, std::hash<float>{}(value.clipRadius));
+                hash = combine(hash, std::hash<float>{}(value.linePenumbra));
+                hash = combine(hash, std::hash<float>{}(value.fillFeather));
+                hash = combine(hash, std::hash<float>{}(value.curveTessellationMaximumError));
+                hash = combine(hash, std::hash<float>{}(value.circleTessellationMaximumError));
+                hash = combine(hash, std::hash<uint8_t>{}(value.curveQuality));
+                hash = combine(hash, std::hash<uint8_t>{}(value.ellipseQuality));
+                auto returnedValue = combine(hash, std::hash<uint8_t>{}(value.rectangleQuality));
 
                 return returnedValue;
             }
@@ -821,9 +1273,16 @@ namespace Mosaic
                 hash = vector(hash, value.metrics.separatorTextPadding);
                 hash = combine(hash, std::hash<float>{}(value.metrics.tableAngledHeadersAngleDegrees));
                 hash = combine(hash, std::hash<float>{}(value.metrics.tableAngledHeadersTextAlignment));
+                hash = combine(hash, std::hash<uint8_t>{}(static_cast<uint8_t>(value.metrics.treeLineMode)));
                 hash = combine(hash, std::hash<float>{}(value.metrics.treeLinesSize));
+                hash = combine(hash, std::hash<float>{}(value.metrics.treeLinesRounding));
+                hash = combine(hash, std::hash<float>{}(value.metrics.imageRounding));
+                hash = combine(hash, std::hash<float>{}(value.metrics.imageBorderSize));
+                hash = vector(hash, value.metrics.displayWindowPadding);
+                hash = vector(hash, value.metrics.displaySafeAreaPadding);
                 hash = combine(hash, std::hash<float>{}(value.metrics.logarithmicSliderDeadzone));
                 hash = combine(hash, std::hash<uint8_t>{}(static_cast<uint8_t>(value.metrics.colorButtonPosition)));
+                hash = combine(hash, std::hash<uint8_t>{}(static_cast<uint8_t>(value.metrics.windowMenuButtonPosition)));
                 hash = combine(hash, std::hash<float>{}(value.behavior.alpha));
                 hash = combine(hash, std::hash<float>{}(value.behavior.disabledAlpha));
                 hash = color(hash, value.colors.background);
@@ -850,7 +1309,9 @@ namespace Mosaic
         using NumericStateVector = Vector<Detail::NumericState>;
         using NodeIndexSpan = Span<const size_t>;
 
+        Detail::AllocationTrackerPtr allocationTracker;
         Allocator * allocator = nullptr;
+        Allocator * previousFrameAllocator = nullptr;
         NullPlatformAdapter nullPlatform;
         PlatformAdapter * platform = &nullPlatform;
         FontProvider * fontProvider = nullptr;
@@ -861,17 +1322,37 @@ namespace Mosaic
         Viewport viewport;
         Configuration configuration;
         bool navigationCursorVisible = true;
+        bool itemPickerEnabled = false;
+        Id itemPickerHovered = InvalidId;
+        Id itemPickerSelected = InvalidId;
+        Rect itemPickerHoveredBounds;
+        Rect itemPickerSelectedBounds;
         InputCaptureOverride inputCaptureOverride;
         FrameCaptureOptions frameCaptureOptions;
         NextWindowData nextWindow;
+        bool mainMenuBarSubmitted = false;
         Theme theme = Theme::dark();
         Theme frameTheme = theme;
+        ColorEditOptions defaultColorEditOptions;
+        ColorPickerOptions defaultColorPickerOptions;
+        float mainFontScale = 1.f;
         const Theme * currentStyle = &frameTheme;
         ThemePtrVector frameStyles;
         ThemeIndexVector frameStyleIndices;
         size_t frameStyleCount = 0;
         Frame frame;
         DrawList drawList;
+        DrawCommandStorage drawCommandStorage;
+        Detail::FrameArena frameArena;
+        ScrollNodePayload fallbackScrollNodePayload;
+        TableNodePayload fallbackTableNodePayload;
+        TableItemNodePayload fallbackTableItemNodePayload;
+        WindowNodePayload fallbackWindowNodePayload;
+        ImageNodePayload fallbackImageNodePayload;
+        TreeNodePayload fallbackTreeNodePayload;
+        TextEditNodePayload fallbackTextEditNodePayload;
+        NodeDebugPayload fallbackNodeDebugPayload;
+        ValueNodePayload fallbackValueNodePayload;
         NodeVector nodes;
         RecycledNodeStorageVector recycledNodeStorage;
         ColorTextDataVector frameColorTextData;
@@ -889,7 +1370,13 @@ namespace Mosaic
         NumericStateVector numericStates;
         SizeVector freeNumericStateIndices;
         FrameNodeIndexVector frameNodeIndices;
+        InteractionSnapshotItemVector interactionSnapshot;
+        InteractionSnapshotIndexVector interactionSnapshotIndices;
+        InteractionScrollTransformVector interactionScrollTransforms;
+        uint64_t interactionSnapshotGeneration = 0;
+        WindowFrameInstanceVector windowFrameInstances;
         ScopeStateVector scopes;
+        UInt64Vector fontScopeTokens;
         IdVector previousFocusOrder;
         IdVector menuBarItems;
         IdVector previousMenuBarItems;
@@ -905,11 +1392,14 @@ namespace Mosaic
         Id currentSelectionScope = InvalidId;
         DrawCommandVectorVector frameCanvasCommands;
         size_t frameCanvasCommandCount = 0;
+        Detail::FrameRenderDataPtrVector frameRenderData;
+        size_t frameRenderDataCount = 0;
         FrameNodeStringVector frameNodeStrings;
         size_t frameNodeStringCount = 0;
         Id activeBoxSelection = InvalidId;
         SelectionModel * boxSelectionModel = nullptr;
         IdVector boxSelectionOriginal;
+        Rect boxSelectionBounds;
         ShortcutRegistry shortcuts;
         Shortcut nextItemShortcut;
         ShortcutOptions nextItemShortcutOptions;
@@ -936,6 +1426,7 @@ namespace Mosaic
         TransientTextIndexVector transientTextIndices;
         size_t transientTextIndexCount = 0;
         TextUseHistoryArray textUseHistory;
+        mutable TextMeasureCache textMeasureCache;
         const FontProvider * textCacheProvider = nullptr;
         uint64_t textCacheProviderRevision = 0;
         size_t textCacheEntryCount = 0;
@@ -944,6 +1435,8 @@ namespace Mosaic
         size_t frameTextCacheHits = 0;
         size_t frameTextCacheMisses = 0;
         size_t frameTextCacheEvictions = 0;
+        mutable size_t frameTextMeasureCacheHits = 0;
+        mutable size_t frameTextMeasureCacheMisses = 0;
         RenderState lastRenderState;
         uint64_t lastRenderStateKey = 0;
         RenderStateIndexVector renderStateIndices;
@@ -972,15 +1465,20 @@ namespace Mosaic
         int32_t focusNextOffset = 0;
         bool focusNextPending = false;
         Id active = InvalidId;
+        ItemRef activeItem;
         Id captured = InvalidId;
+        ItemRef capturedItem;
         PointerId capturedPointer = 0;
         Id wheelOwner = InvalidId;
+        ItemRef wheelOwnerItem;
         double wheelOwnerTimestamp = 0.0;
         Modifiers previousModifiers;
         bool menuKeyboardMode = false;
         Id currentInputLayer = InvalidId;
         Id currentWindow = InvalidId;
+        uint64_t currentWindowSubmission = 0;
         Id pointerWindow = InvalidId;
+        uint64_t pointerWindowSubmission = 0;
         CursorShape currentCursor = CursorShape::Arrow;
         Id blockingInputLayer = InvalidId;
         Id previousBlockingInputLayer = InvalidId;
@@ -1006,11 +1504,15 @@ namespace Mosaic
         bool activeFrame = false;
         uint64_t nextScopeToken = 1;
         uint64_t anonymousCounter = 1;
+        uint64_t nextWindowSubmission = 1;
         uint64_t nextWindowZOrder = 1;
+        uint32_t debugBeginCall = 0;
+        bool debugBeginOnceConsumed = false;
         double frameStarted = 0.0;
 
         [[nodiscard]] Persistent & state(Id id);
         [[nodiscard]] Persistent & state(Node & node);
+        [[nodiscard]] Persistent * findState(Id id) noexcept;
         [[nodiscard]] const Persistent * findState(Id id) const noexcept;
         [[nodiscard]] Detail::TextEditorState & textEditorState(Id id);
         [[nodiscard]] const Detail::TextEditorState * findTextEditorState(Id id) const noexcept;
@@ -1022,7 +1524,17 @@ namespace Mosaic
         [[nodiscard]] const ColorTextData * findColorTextData(const Node & node) const noexcept;
         [[nodiscard]] Node * findFrameNode(Id id) noexcept;
         [[nodiscard]] const Node * findFrameNode(Id id) const noexcept;
+        [[nodiscard]] Node * findFrameNode(const ItemRef & item) noexcept;
+        [[nodiscard]] const Node * findFrameNode(const ItemRef & item) const noexcept;
         [[nodiscard]] size_t findFrameNodeIndex(Id id) const noexcept;
+        [[nodiscard]] size_t findFrameNodeIndex(const ItemRef & item) const noexcept;
+        [[nodiscard]] const InteractionSnapshotItem * findInteractionSnapshot(const ItemRef & item) const noexcept;
+        [[nodiscard]] ItemRef addWindowFrameInstance(size_t node, uint64_t submission);
+        [[nodiscard]] bool windowHasMultipleFrameInstances(Id id) const noexcept;
+        void captureInteractionSnapshot();
+        void prepareInteractionSnapshot();
+        void updateInteractionScrollAnimations();
+        void routeInteractionWheel();
         [[nodiscard]] DrawCommandVector & canvasCommands(Node & node);
         [[nodiscard]] FrameNodeStrings & ensureNodeStrings(Node & node);
         [[nodiscard]] String & nodeSemanticValue(Node & node);
@@ -1071,7 +1583,7 @@ namespace Mosaic
         [[nodiscard]] uint64_t internRenderState(const RenderState & value);
         void emitText(DrawList & drawList, const Node & node, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey);
         void emitValueText(DrawList & drawList, const Node & node, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey);
-        void emitPreparedText(DrawList & drawList, const PreparedTextBatchVector & batches, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey, const Vec2 & axisX = {1.f, 0.f}, const Vec2 & axisY = {0.f, 1.f});
+        void emitPreparedText(DrawList & drawList, const CachedText & text, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey, const Vec2 & axisX = {1.f, 0.f}, const Vec2 & axisY = {0.f, 1.f});
         void emitNode(size_t index, DrawList & drawList, CanvasLayer canvasPass = CanvasLayer::Local);
         void updateShortcuts();
     };

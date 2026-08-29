@@ -26,6 +26,8 @@ namespace Mosaic
     using IdSet = UnorderedSet<Id>;
     using SizeVector = Vector<size_t>;
     using UInt32Vector = Vector<uint32_t>;
+    using UInt32Span = Span<const uint32_t>;
+    using UInt64Vector = Vector<uint64_t>;
     using BoolSpan = Span<bool>;
     using SemanticNodeSpan = Span<const SemanticNode>;
 
@@ -33,6 +35,23 @@ namespace Mosaic
     inline constexpr Id RootId = 0xcbf29ce484222325ULL;
     inline constexpr FontHandle DefaultFont = 0;
     inline constexpr FontHandle MonospaceFont = 1;
+
+    struct ItemRef
+    {
+        Id id = InvalidId;
+        uint64_t submission = 0;
+        uint32_t occurrence = 0;
+
+        [[nodiscard]] constexpr bool valid() const noexcept
+        {
+            return id != InvalidId;
+        }
+
+        [[nodiscard]] constexpr bool operator==(const ItemRef &) const noexcept = default;
+    };
+
+    using ItemRefVector = Vector<ItemRef>;
+    using ItemRefSpan = Span<const ItemRef>;
 
     [[nodiscard]] constexpr Id hashBytes(StringView value) noexcept
     {
@@ -65,12 +84,16 @@ namespace Mosaic
     public:
         constexpr Key() noexcept = default;
 
-        constexpr Key(StringView value) noexcept : m_value(hashBytes(value)), m_debug(value), m_explicit(true)
+        explicit constexpr Key(StringView value) noexcept : m_value(hashBytes(value)), m_explicit(true)
+        {
+        }
+
+        template<size_t Size> explicit constexpr Key(const char (&value)[Size]) noexcept : m_value(hashBytes(StringView(value, Size - 1))), m_debug(value, Size - 1), m_explicit(true)
         {
         }
 
         template<class T> requires std::is_integral_v<T>
-        constexpr Key(T value) noexcept : m_value(hashIntegral(value)), m_integral(static_cast<uint64_t>(value)), m_hasIntegral(true), m_explicit(true)
+        explicit constexpr Key(T value) noexcept : m_value(hashIntegral(value)), m_integral(static_cast<uint64_t>(value)), m_hasIntegral(true), m_explicit(true)
         {
         }
 
@@ -301,6 +324,11 @@ namespace Mosaic
             return {SizeRule::Percent, value};
         }
 
+        [[nodiscard]] static constexpr Dimension fill(float offset = 0.f) noexcept
+        {
+            return {SizeRule::Fill, offset};
+        }
+
     private:
         constexpr Dimension(SizeRule sizeRule, float sizeValue) noexcept : rule(sizeRule), value(sizeValue)
         {
@@ -341,6 +369,12 @@ namespace Mosaic
         Additive,
         Multiply,
         Opaque
+    };
+
+    enum class SamplerFilter : uint8_t
+    {
+        Linear,
+        Nearest
     };
 
     enum class Validation : uint8_t

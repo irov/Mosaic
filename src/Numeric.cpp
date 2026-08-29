@@ -190,6 +190,56 @@ namespace Mosaic
             return successful;
         }
         //////////////////////////////////////////////////////////////////////////
+        template<class T> requires std::is_arithmetic_v<T>
+        void storeNumericValue(NumericState & state, T value) noexcept
+        {
+            if constexpr(std::is_floating_point_v<T>)
+            {
+                state.lastFloatingValue = static_cast<long double>(value);
+                state.lastValueKind = NumericState::ValueKind::Floating;
+            }
+            else if constexpr(std::is_signed_v<T>)
+            {
+                state.lastSignedValue = static_cast<int64_t>(value);
+                state.lastValueKind = NumericState::ValueKind::Signed;
+            }
+            else
+            {
+                state.lastUnsignedValue = static_cast<uint64_t>(value);
+                state.lastValueKind = NumericState::ValueKind::Unsigned;
+            }
+        }
+        //////////////////////////////////////////////////////////////////////////
+        template<class T> requires std::is_arithmetic_v<T>
+        [[nodiscard]] bool numericValueMatches(const NumericState & state, T value) noexcept
+        {
+            if constexpr(std::is_floating_point_v<T>)
+            {
+                return state.lastValueKind == NumericState::ValueKind::Floating && state.lastFloatingValue == static_cast<long double>(value);
+            }
+            else if constexpr(std::is_signed_v<T>)
+            {
+                return state.lastValueKind == NumericState::ValueKind::Signed && state.lastSignedValue == static_cast<int64_t>(value);
+            }
+            else
+            {
+                return state.lastValueKind == NumericState::ValueKind::Unsigned && state.lastUnsignedValue == static_cast<uint64_t>(value);
+            }
+        }
+        //////////////////////////////////////////////////////////////////////////
+        template<class T> requires std::is_arithmetic_v<T>
+        [[nodiscard]] bool numericStepNegative(T value) noexcept
+        {
+            if constexpr(std::is_unsigned_v<T>)
+            {
+                return false;
+            }
+
+            bool result = value < T{};
+
+            return result;
+        }
+        //////////////////////////////////////////////////////////////////////////
         void fillLastNode(Context * ui, Id id)
         {
             for(auto node = ui->nodes.rbegin(); node != ui->nodes.rend(); ++node)
@@ -226,7 +276,7 @@ namespace Mosaic
                     state.temporaryText = "?";
                 }
 
-                state.lastValue = static_cast<long double>(current);
+                Detail::storeNumericValue(state, current);
                 state.initialized = true;
             }
 
@@ -293,13 +343,32 @@ namespace Mosaic
                 valueChanged = true;
             }
 
-            if(step != T{})
+            bool negativeStep = Detail::numericStepNegative(step);
+
+            if(negativeStep == true)
+            {
+                ui->frame.diagnostics.emplace_back("Numeric input step must not be negative");
+            }
+
+            bool negativeFastStep = Detail::numericStepNegative(fastStep);
+
+            if(negativeFastStep == true)
+            {
+                ui->frame.diagnostics.emplace_back("Numeric input fast step must not be negative");
+            }
+
+            if(step > T{})
             {
                 auto readOnlyScope = Mosaic::disabledScope(ui, options.readOnly, location);
                 ButtonOptions buttonOptions;
                 buttonOptions.width = Dimension::fixed(ui->currentStyle->metrics.controlHeight);
                 buttonOptions.repeat = true;
-                T increment = ui->input.modifiers.shift && fastStep != T{} ? fastStep : step;
+                T increment = step;
+
+                if(ui->input.modifiers.shift == true && fastStep > T{})
+                {
+                    increment = fastStep;
+                }
 
                 if(Mosaic::button(ui, Key("Decrease"), "-", buttonOptions, location).clicked() == true && value != nullptr)
                 {
@@ -343,7 +412,7 @@ namespace Mosaic
                     state.temporaryText = "?";
                 }
 
-                state.lastValue = static_cast<long double>(*value);
+                Detail::storeNumericValue(state, *value);
                 Detail::setFlag(response, 6);
                 Detail::setFlag(response, 8);
             }
@@ -359,10 +428,10 @@ namespace Mosaic
                     }
                 }
 
-                if(state.lastValue != static_cast<long double>(*value) || state.temporaryText != synchronizedText)
+                if(Detail::numericValueMatches(state, *value) == false || state.temporaryText != synchronizedText)
                 {
                     state.temporaryText = synchronizedText;
-                    state.lastValue = static_cast<long double>(*value);
+                    Detail::storeNumericValue(state, *value);
                 }
             }
 
@@ -413,8 +482,19 @@ namespace Mosaic
                 return T{};
             }
 
-            long double clamped = std::clamp(static_cast<long double>(value), static_cast<long double>(std::numeric_limits<T>::lowest()), static_cast<long double>(std::numeric_limits<T>::max()));
-            auto returnedValue = static_cast<T>(clamped);
+            if(value <= 0.0)
+            {
+                return T{};
+            }
+
+            double maximum = static_cast<double>(std::numeric_limits<T>::max());
+
+            if(value >= maximum)
+            {
+                return std::numeric_limits<T>::max();
+            }
+
+            T returnedValue = static_cast<T>(value);
 
             return returnedValue;
         }

@@ -19,6 +19,19 @@ namespace Mosaic
 {
     struct Context;
 
+#if !defined(MOSAIC_VERSION_STRING)
+#define MOSAIC_VERSION_STRING "0.1.0"
+#endif
+
+    inline constexpr StringView Version = MOSAIC_VERSION_STRING;
+
+    struct ContextOptions
+    {
+        Allocator * allocator = nullptr;
+        PlatformAdapter * platform = nullptr;
+        FontProvider * fontProvider = nullptr;
+    };
+
     enum class LabelPlacement : uint8_t
     {
         Before,
@@ -28,6 +41,7 @@ namespace Mosaic
 
     enum class WindowCollapsePlacement : uint8_t
     {
+        Style,
         Left,
         Right
     };
@@ -36,7 +50,8 @@ namespace Mosaic
     {
         Always,
         Once,
-        FirstUseEver,
+        FirstUse,
+        FirstUseEver = FirstUse,
         Appearing
     };
 
@@ -53,6 +68,7 @@ namespace Mosaic
     struct Response
     {
         Id id = InvalidId;
+        ItemRef item;
         uint32_t flags = 0;
 
         [[nodiscard]] constexpr bool hovered() const noexcept
@@ -199,6 +215,7 @@ namespace Mosaic
 
     struct ItemQueryOptions
     {
+        bool rectOnly = false;
         bool allowWhenBlockedByPopup = false;
         bool allowWhenBlockedByActiveItem = false;
         bool allowWhenOverlappedByItem = false;
@@ -269,6 +286,8 @@ namespace Mosaic
         bool currentWindowOnly = true;
     };
 
+    using DebugBreakCallback = void (*)(void * userData);
+
     struct Configuration
     {
         bool pointerInput = true;
@@ -281,6 +300,8 @@ namespace Mosaic
         bool escapeClearsWindowFocus = false;
         bool dockingEnabled = true;
         bool dockingNoSplit = false;
+        bool dockingNoDockingOver = false;
+        // Compatibility alias for applications built against the original name.
         bool dockingNoMerge = false;
         bool dockingNoResize = false;
         bool dockingNoUndocking = false;
@@ -293,6 +314,19 @@ namespace Mosaic
         bool inputTextEnterKeepActive = false;
         bool dragClickToInputText = false;
         bool windowCopyContentsWithPrimaryC = false;
+        bool dockingAlwaysTabBar = false;
+        bool dockingTransparentPayload = false;
+        bool settingsSaveLastUsedDate = false;
+        bool errorRecovery = true;
+        bool errorRecoveryEnableAssert = true;
+        bool errorRecoveryEnableDebugLog = true;
+        bool errorRecoveryEnableTooltip = true;
+        bool debugHighlightIdConflicts = true;
+        bool debugBeginReturnValueOnce = false;
+        bool debugBeginReturnValueLoop = false;
+        bool debugIniSettings = false;
+        DebugBreakCallback debugBreakCallback = nullptr;
+        void * debugBreakUserData = nullptr;
     };
 
     struct SliderOptions
@@ -307,13 +341,36 @@ namespace Mosaic
         bool showValuePopup = false;
         bool showValueOnTrack = true;
         bool showValueTooltip = false;
-        float valueTooltipDelay = 0.25f;
+        // A negative value uses Theme::behavior.tooltipHoverDelay.
+        float valueTooltipDelay = -1.f;
         bool logarithmic = false;
         bool temporaryInput = true;
         bool wrapAround = false;
         bool clampInput = false;
         bool clampZeroRange = false;
         bool roundToFormat = true;
+        bool speedTweaks = true;
+        bool colorMarkers = false;
+        LabelPlacement labelPlacement = LabelPlacement::Before;
+        StringView format;
+        Validation validation = Validation::Normal;
+        StringView validationMessage;
+    };
+
+    template<class T> requires std::is_integral_v<T>
+    struct IntegralSliderOptions
+    {
+        Dimension width = Dimension::fixed(200.f);
+        T step = T{1};
+        float dragSpeed = 0.f;
+        bool showValuePopup = false;
+        bool showValueOnTrack = true;
+        bool showValueTooltip = false;
+        float valueTooltipDelay = -1.f;
+        bool temporaryInput = true;
+        bool wrapAround = false;
+        bool clampInput = false;
+        bool clampZeroRange = false;
         bool speedTweaks = true;
         bool colorMarkers = false;
         LabelPlacement labelPlacement = LabelPlacement::Before;
@@ -351,6 +408,7 @@ namespace Mosaic
     {
         Dimension width = SizeRule::Fill;
         Dimension height = SizeRule::Content;
+        Rect absoluteRect = {};
         PointerButton pointerButton = PointerButton::Primary;
         ButtonPressPolicy pressPolicy = ButtonPressPolicy::Release;
         bool keyboardActivation = true;
@@ -402,6 +460,8 @@ namespace Mosaic
         ScrollAxes axes = ScrollAxes::Vertical;
         Orientation contentOrientation = Orientation::Vertical;
         ScrollbarVisibility visibility = ScrollbarVisibility::Automatic;
+        ScrollbarVisibility horizontalScrollbar = ScrollbarVisibility::Automatic;
+        ScrollbarVisibility verticalScrollbar = ScrollbarVisibility::Automatic;
         float wheelStep = 1.f;
         float smoothDuration = 0.14f;
         bool keyboard = true;
@@ -410,7 +470,12 @@ namespace Mosaic
         bool background = false;
         bool framed = false;
         bool frameStyle = false;
+        bool autoResizeX = false;
         bool autoResizeY = false;
+        bool alwaysAutoResize = false;
+        bool navigationFlattened = false;
+        bool alwaysHorizontalScrollbar = false;
+        bool alwaysVerticalScrollbar = false;
         bool resizeX = false;
         bool resizeY = false;
         Vec2 minimumSize = {64.f, 48.f};
@@ -427,7 +492,10 @@ namespace Mosaic
         bool resizeHorizontal = true;
         bool resizeVertical = true;
         bool navigation = true;
+        bool navigationInputs = true;
+        bool navigationFocus = true;
         bool input = true;
+        bool pointerInput = true;
         bool bringToFront = true;
         bool focusOnAppearing = false;
         bool saveSettings = true;
@@ -437,15 +505,17 @@ namespace Mosaic
         // may dock together; windows from different groups never become targets.
         uint32_t dockGroup = 1;
         bool titleBar = true;
+        bool menuBar = false;
         bool background = true;
         float backgroundAlpha = 1.f;
         bool unsavedDocument = false;
         bool padding = true;
+        bool alwaysAutoResize = false;
         bool fitContentWidth = false;
         bool fitContentHeight = false;
         bool scrollable = false;
         ScrollOptions scroll;
-        WindowCollapsePlacement collapsePlacement = WindowCollapsePlacement::Right;
+        WindowCollapsePlacement collapsePlacement = WindowCollapsePlacement::Style;
         Vec2 minimumSize = {120.f, 72.f};
         Vec2 maximumSize = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
         WindowSizeConstraintCallback sizeConstraint = nullptr;
@@ -474,13 +544,6 @@ namespace Mosaic
         size_t overscan = 2;
     };
 
-    enum class TreeLineMode : uint8_t
-    {
-        None,
-        Full,
-        ToNodes
-    };
-
     struct TreeNodeOptions
     {
         bool defaultExpanded = false;
@@ -500,7 +563,7 @@ namespace Mosaic
         bool framePadding = false;
         bool alignLabelWithCurrentX = false;
         bool navigationLeftJumpsToParent = false;
-        TreeLineMode lines = TreeLineMode::None;
+        TreeLineMode lines = TreeLineMode::Style;
         ButtonPressPolicy pressPolicy = ButtonPressPolicy::Release;
     };
 
@@ -509,6 +572,7 @@ namespace Mosaic
         Rect uv = {0.f, 0.f, 1.f, 1.f};
         Color tint = {1.f, 1.f, 1.f, 1.f};
         Color background = {0.f, 0.f, 0.f, 1.f};
+        SamplerFilter sampler = SamplerFilter::Linear;
         float padding = 2.f;
         bool backgroundEnabled = false;
     };
@@ -518,7 +582,11 @@ namespace Mosaic
         Rect uv = {0.f, 0.f, 1.f, 1.f};
         Color tint = {1.f, 1.f, 1.f, 1.f};
         Color background = {0.f, 0.f, 0.f, 0.f};
+        SamplerFilter sampler = SamplerFilter::Linear;
         float padding = 0.f;
+        float rounding = -1.f;
+        float borderSize = -1.f;
+        Color borderColor;
         bool backgroundEnabled = false;
     };
 
@@ -551,6 +619,9 @@ namespace Mosaic
         bool closeOnClickOutside = true;
         bool closeOnSelection = true;
         bool allowSiblingOwners = false;
+        bool reopen = true;
+        bool openOverExisting = true;
+        bool openOverItems = true;
         bool modal = false;
         bool titleBar = false;
         bool movable = false;
@@ -675,18 +746,21 @@ namespace Mosaic
     struct HelpMarkerOptions
     {
         StringView marker = "(?)";
+        Vec2 tooltipMinimumSize = {};
         // A non-positive component uses the corresponding viewport extent.
         Vec2 tooltipSize = {320.f, 0.f};
-        // A negative value uses Theme::behavior.tooltipHoverDelay.
+        // A negative value uses the default tooltip activation policy.
         float tooltipDelay = -1.f;
     };
 
     struct ItemTooltipOptions
     {
+        Vec2 minimumSize = {};
         // A non-positive component uses the corresponding viewport extent.
-        Vec2 maximumSize = {240.f, 0.f};
-        // A negative value uses the normal or stationary delay from the theme.
+        Vec2 maximumSize = {420.f, 0.f};
+        // A negative value uses the selected delay policy from the theme.
         float delay = -1.f;
+        TooltipDelay delayPolicy = TooltipDelay::Default;
         bool stationary = false;
         bool allowWhenDisabled = true;
         // Reuse a recently opened tooltip delay while moving between nearby items.
@@ -768,6 +842,7 @@ namespace Mosaic
 
     struct TableColumnOptions
     {
+        Id userId = InvalidId;
         TableSizing sizing = TableSizing::Stretch;
         float widthOrWeight = 1.f;
         // Per-column width for item widgets. Zero uses the normal item-width
@@ -803,6 +878,7 @@ namespace Mosaic
         uint32_t column = 0;
         SortDirection direction = SortDirection::None;
         uint32_t order = 0;
+        Id userId = InvalidId;
     };
 
     using TableSortSpecVector = Vector<TableSortSpec>;
@@ -823,6 +899,365 @@ namespace Mosaic
         SortDirection sortDirection = SortDirection::None;
         uint32_t displayOrder = 0;
         float width = 0.f;
+    };
+
+    struct TableColumnDebugSnapshot
+    {
+        String label;
+        Id userId = InvalidId;
+        Rect headerBounds;
+        Rect bodyBounds;
+        Rect workBounds;
+        Rect clipBounds;
+        Rect contentBounds;
+        float width = 0.f;
+        uint32_t displayOrder = 0;
+        SortDirection sortDirection = SortDirection::None;
+        bool enabled = false;
+        bool visible = false;
+        bool sorted = false;
+    };
+
+    using TableColumnDebugSnapshotVector = Vector<TableColumnDebugSnapshot>;
+
+    struct TableInstanceDebugSnapshot
+    {
+        uint64_t submission = 0;
+        Rect bounds;
+        Rect contentBounds;
+        Rect clipBounds;
+        bool visible = false;
+    };
+
+    using TableInstanceDebugSnapshotVector = Vector<TableInstanceDebugSnapshot>;
+
+    struct TableDebugSnapshot
+    {
+        Id table = InvalidId;
+        Id settings = InvalidId;
+        Rect bounds;
+        Rect contentBounds;
+        Rect clipBounds;
+        Rect outerClipBounds;
+        Rect innerClipBounds;
+        Rect hostClipBounds;
+        Rect backgroundClipBounds;
+        Rect verticalScrollbarTrack;
+        Rect verticalScrollbarThumb;
+        Rect horizontalScrollbarTrack;
+        Rect horizontalScrollbarThumb;
+        Vec2 scrollOffset;
+        Vec2 scrollRange;
+        Vec2 contentSize;
+        uint64_t lastFrame = 0;
+        uint32_t columnCount = 0;
+        uint32_t rowCount = 0;
+        uint32_t headerRowCount = 0;
+        uint32_t currentRow = 0;
+        uint32_t currentColumn = 0;
+        uint32_t virtualFirstRow = 0;
+        uint32_t draggingColumn = std::numeric_limits<uint32_t>::max();
+        uint32_t contextColumn = std::numeric_limits<uint32_t>::max();
+        uint32_t frozenRows = 0;
+        uint32_t frozenColumns = 0;
+        uint32_t instanceCount = 0;
+        size_t virtualRowCount = 0;
+        float virtualRowHeight = 0.f;
+        bool active = false;
+        bool noClip = false;
+        bool legacyColumns = false;
+        bool displayOrderDirty = false;
+        bool rowsVirtualized = false;
+        bool headersSubmitted = false;
+        bool angledHeadersSubmitted = false;
+        bool sortSpecsDirty = false;
+        FloatVector rowHeights;
+        FloatVector rowPositions;
+        FloatVector columnPositions;
+        SizeVector displayOrder;
+        TableColumnDebugSnapshotVector columns;
+        TableInstanceDebugSnapshotVector instances;
+        TableSortSpecVector sortSpecifications;
+    };
+
+    using TableDebugSnapshotVector = Vector<TableDebugSnapshot>;
+
+    struct WindowDebugSnapshot
+    {
+        Id id = InvalidId;
+        Id parent = InvalidId;
+        Id owner = InvalidId;
+        String label;
+        Rect bounds;
+        Rect innerBounds;
+        Rect workBounds;
+        Rect content;
+        Rect contentIdeal;
+        Rect clip;
+        Rect outerRectClipped;
+        Rect innerClipRect;
+        Rect contentRegionRect;
+        Rect titleBarRect;
+        Rect verticalScrollbar;
+        Rect horizontalScrollbar;
+        Vec2 scrollOffset;
+        Vec2 scrollRange;
+        uint64_t lastFrameActive = 0;
+        uint64_t submission = 0;
+        uint64_t zOrder = 0;
+        uint32_t beginOrder = 0;
+        uint32_t focusOrder = 0;
+        uint32_t childCount = 0;
+        uint32_t dockGroup = 0;
+        DockNodeId dockNode = 0;
+        bool active = false;
+        bool writeAccessed = false;
+        bool hidden = false;
+        bool skipped = false;
+        bool scrollbarHorizontal = false;
+        bool scrollbarVertical = false;
+        bool acceptsInput = false;
+        bool visible = false;
+        bool focused = false;
+        bool hovered = false;
+        bool collapsed = false;
+        bool docked = false;
+        bool popup = false;
+    };
+
+    using WindowDebugSnapshotVector = Vector<WindowDebugSnapshot>;
+
+    struct DrawListDebugSnapshot
+    {
+        uint64_t viewport = 0;
+        String owner;
+        Rect bounds;
+        size_t commandCount = 0;
+        size_t stateCount = 0;
+        size_t vertexCount = 0;
+        size_t indexCount = 0;
+        size_t triangleCount = 0;
+        uint32_t channelCount = 0;
+    };
+
+    using DrawListDebugSnapshotVector = Vector<DrawListDebugSnapshot>;
+
+    struct DrawCommandDebugSnapshot
+    {
+        uint64_t viewport = 0;
+        size_t index = 0;
+        StringView type;
+        uint64_t renderKey = 0;
+        uint32_t channel = 0;
+        TextureHandle texture = 0;
+        Rect bounds;
+        Rect clip;
+        size_t vertexOffset = 0;
+        size_t indexOffset = 0;
+        size_t elementCount = 0;
+        size_t vertexCount = 0;
+        size_t indexCount = 0;
+        size_t triangleCount = 0;
+    };
+
+    using DrawCommandDebugSnapshotVector = Vector<DrawCommandDebugSnapshot>;
+
+    struct PopupDebugSnapshot
+    {
+        Id id = InvalidId;
+        Id owner = InvalidId;
+        Id parent = InvalidId;
+        Id restoreFocus = InvalidId;
+        Id window = InvalidId;
+        Rect bounds;
+        uint32_t level = 0;
+        bool open = false;
+        bool modal = false;
+        bool focused = false;
+        bool closeOnClickOutside = false;
+        bool closeOnSelection = false;
+    };
+
+    using PopupDebugSnapshotVector = Vector<PopupDebugSnapshot>;
+
+    struct TabItemDebugSnapshot
+    {
+        Id id = InvalidId;
+        Rect bounds;
+        float offset = 0.f;
+        float width = 0.f;
+        uint32_t order = 0;
+        bool visible = false;
+        bool selected = false;
+    };
+
+    using TabItemDebugSnapshotVector = Vector<TabItemDebugSnapshot>;
+
+    struct TabBarDebugSnapshot
+    {
+        Id id = InvalidId;
+        Id selected = InvalidId;
+        Id scrollArea = InvalidId;
+        Rect bounds;
+        Vec2 scrollOffset;
+        Vec2 scrollRange;
+        size_t itemCount = 0;
+        size_t visibleCount = 0;
+        size_t draggingIndex = std::numeric_limits<size_t>::max();
+        bool reorderable = false;
+        bool autoSelectNewTabs = false;
+        bool fittingScroll = false;
+        bool noCloseWithMiddleButton = false;
+        IdVector order;
+        TabItemDebugSnapshotVector items;
+    };
+
+    using TabBarDebugSnapshotVector = Vector<TabBarDebugSnapshot>;
+
+    struct SelectionDebugSnapshot
+    {
+        Id item = InvalidId;
+        Id node = InvalidId;
+        Id scope = InvalidId;
+        Rect bounds;
+        Rect boxBounds;
+        bool selected = false;
+        bool boxSelecting = false;
+    };
+
+    using SelectionDebugSnapshotVector = Vector<SelectionDebugSnapshot>;
+
+    struct DockDebugSnapshot
+    {
+        uint32_t group = 0;
+        Rect area;
+        DockNodeId root = 0;
+        DockNodeId central = 0;
+        size_t windowCount = 0;
+        DockNodeVector nodes;
+    };
+
+    using DockDebugSnapshotVector = Vector<DockDebugSnapshot>;
+
+    struct GroupDebugSnapshot
+    {
+        Id id = InvalidId;
+        Id parent = InvalidId;
+        StringView type;
+        Rect bounds;
+        Rect clip;
+        Rect contentBounds;
+        Rect contentIdealBounds;
+        Rect childrenClip;
+        Response response;
+        uint32_t childCount = 0;
+        bool visible = false;
+    };
+
+    using GroupDebugSnapshotVector = Vector<GroupDebugSnapshot>;
+
+    enum class IdentityValueKind : uint8_t
+    {
+        Callsite,
+        String,
+        Integral,
+        Hash
+    };
+
+    struct IdentityDebugEntry
+    {
+        Id id = InvalidId;
+        Id parent = InvalidId;
+        Id local = InvalidId;
+        String path;
+        String value;
+        StringView file;
+        uint32_t line = 0;
+        IdentityValueKind valueKind = IdentityValueKind::Callsite;
+        bool anonymous = false;
+        bool conflict = false;
+    };
+
+    using IdentityDebugEntryVector = Vector<IdentityDebugEntry>;
+
+    struct ItemDebugSnapshot
+    {
+        ItemRef item;
+        Id id = InvalidId;
+        Id parent = InvalidId;
+        Id identityScope = InvalidId;
+        Id window = InvalidId;
+        String label;
+        String path;
+        StringView type;
+        StringView file;
+        uint32_t line = 0;
+        Rect bounds;
+        Rect clip;
+        Response response;
+        SemanticRole role = SemanticRole::None;
+        uint64_t submission = 0;
+        bool visible = false;
+        bool disabled = false;
+        bool readOnly = false;
+        bool anonymous = false;
+        bool conflict = false;
+    };
+
+    using ItemDebugSnapshotVector = Vector<ItemDebugSnapshot>;
+
+    struct SettingDebugSnapshot
+    {
+        Id id = InvalidId;
+        StringView type;
+        Rect bounds;
+        uint64_t lastFrame = 0;
+        size_t memory = 0;
+        bool active = false;
+    };
+
+    using SettingDebugSnapshotVector = Vector<SettingDebugSnapshot>;
+
+    struct ContextDebugSnapshot
+    {
+        uint64_t frameNumber = 0;
+        FrameMetrics metrics;
+        Configuration configuration;
+        Id activeItem = InvalidId;
+        Id pointerFocusedItem = InvalidId;
+        Id keyboardFocusedItem = InvalidId;
+        Id navigationFocusedItem = InvalidId;
+        Id capturedItem = InvalidId;
+        Id hoveredWindow = InvalidId;
+        Id movingWindow = InvalidId;
+        Id resizingWindow = InvalidId;
+        Id dockingDragWindow = InvalidId;
+        Id wheelOwner = InvalidId;
+        Id dragDropSource = InvalidId;
+        Id dragDropTarget = InvalidId;
+        DragPhase dragDropPhase = DragPhase::None;
+        size_t persistentEntryCount = 0;
+        size_t windowSettingCount = 0;
+        size_t tableSettingCount = 0;
+        size_t dockModelCount = 0;
+        size_t tabBarStateCount = 0;
+        size_t textEditorStateCount = 0;
+        size_t colorEditorStateCount = 0;
+        size_t selectionItemCount = 0;
+        size_t frameStyleCount = 0;
+        size_t textCacheEntryCount = 0;
+        size_t textCacheMemory = 0;
+        size_t settingsMemory = 0;
+        SettingDebugSnapshotVector settings;
+    };
+
+    struct ItemPickerState
+    {
+        Id hovered = InvalidId;
+        Id selected = InvalidId;
+        Rect hoveredBounds;
+        Rect selectedBounds;
+        bool enabled = false;
     };
 
     struct ColumnsOptions
@@ -926,6 +1361,13 @@ namespace Mosaic
         bool wordWrap = false;
     };
 
+    struct TextFilter
+    {
+        String expression;
+        StringVector includes;
+        StringVector excludes;
+    };
+
     using TabBarContentCallback = void (*)(Context * ui, void * userData);
 
     struct TabItemOptions
@@ -938,6 +1380,8 @@ namespace Mosaic
         bool closeWithMiddleMouse = true;
         bool unsavedDocument = false;
         bool noTooltip = false;
+        bool noPushId = false;
+        bool noAssumedClosure = false;
         bool disabled = false;
     };
 
@@ -1051,6 +1495,25 @@ namespace Mosaic
         uint32_t snapIndex = 1;
     };
 
+    struct LineOptions
+    {
+        float offset = 0.f;
+        float spacing = -1.f;
+        CrossAxisAlignment alignment = CrossAxisAlignment::Baseline;
+        Dimension width = SizeRule::Content;
+        Dimension height = SizeRule::Content;
+    };
+
+    struct SameLineOptions
+    {
+        // Zero continues after the preceding item. A positive value places the
+        // next item at an absolute offset from the content area's left edge.
+        float offset = 0.f;
+        // A negative value uses the current style spacing. Zero joins items.
+        float spacing = -1.f;
+    };
+
+    [[nodiscard]] Context * newContext(const ContextOptions & options);
     [[nodiscard]] Context * newContext(PlatformAdapter * platform = nullptr, FontProvider * fontProvider = nullptr);
     void deleteContext(Context * ui) noexcept;
 
@@ -1058,17 +1521,28 @@ namespace Mosaic
     void setFrameCaptureOptions(Context * ui, const FrameCaptureOptions & options) noexcept;
     void setConfiguration(Context * ui, const Configuration & configuration) noexcept;
     [[nodiscard]] bool getConfiguration(const Context * ui, Configuration * const _out) noexcept;
+    [[nodiscard]] bool debugBreakAvailable(const Context * ui) noexcept;
+    [[nodiscard]] bool requestDebugBreak(Context * ui) noexcept;
     [[nodiscard]] const Frame & endFrame(Context * ui);
     [[nodiscard]] const Frame & getFrame(const Context * ui) noexcept;
     [[nodiscard]] bool frameActive(const Context * ui) noexcept;
     void beginTextLog(Context * ui, TextLogTarget target, StringView filename = "mosaic_log.txt");
     void beginTextLog(Context * ui, TextLogTarget target, const TextLogOptions & options, StringView filename = "mosaic_log.txt");
     void logText(Context * ui, StringView text);
+    void finishTextLog(Context * ui);
     [[nodiscard]] bool textLogActive(const Context * ui) noexcept;
     void setInputCaptureOverride(Context * ui, const InputCaptureOverride & overrideValue) noexcept;
 
     void setTheme(Context * ui, const Theme & theme);
     [[nodiscard]] const Theme & getTheme(const Context * ui) noexcept;
+    void setColorEditDefaults(Context * ui, const ColorEditOptions & options) noexcept;
+    [[nodiscard]] bool colorEditDefaults(const Context * ui, ColorEditOptions * const _out) noexcept;
+    void setColorPickerDefaults(Context * ui, const ColorPickerOptions & options) noexcept;
+    [[nodiscard]] bool colorPickerDefaults(const Context * ui, ColorPickerOptions * const _out) noexcept;
+    void setFontScale(Context * ui, float scale) noexcept;
+    [[nodiscard]] float fontScale(const Context * ui) noexcept;
+    void pushFont(Context * ui, FontHandle font, float size = 0.f, const SourceLocation & location = SourceLocation::current());
+    void popFont(Context * ui) noexcept;
     void setPlatformAdapter(Context * ui, PlatformAdapter * platform) noexcept;
     void setFontProvider(Context * ui, FontProvider * fontProvider) noexcept;
     void setNextWindowPosition(Context * ui, const Vec2 & position, Condition condition = Condition::Always) noexcept;
@@ -1081,15 +1555,27 @@ namespace Mosaic
     [[nodiscard]] WindowScope window(Context * ui, StringView label, const WindowOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] WindowScope window(Context * ui, const Key & key, StringView label, const WindowOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope row(Context * ui, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope row(Context * ui, const Key & key, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope line(Context * ui, const LineOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope line(Context * ui, const Key & key, const LineOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    void sameLine(Context * ui, const SameLineOptions & options = {}) noexcept;
+    void alignTextToFramePadding(Context * ui) noexcept;
     [[nodiscard]] Scope column(Context * ui, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope column(Context * ui, const Key & key, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope grid(Context * ui, uint32_t columns, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope grid(Context * ui, const Key & key, uint32_t columns, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope overlay(Context * ui, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope overlay(Context * ui, const Key & key, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope scrollArea(Context * ui, StringView label, Orientation orientation = Orientation::Vertical, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope scrollArea(Context * ui, const Key & key, StringView label, Orientation orientation = Orientation::Vertical, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope scrollArea(Context * ui, StringView label, const ScrollOptions & scrollOptions, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope scrollArea(Context * ui, const Key & key, StringView label, const ScrollOptions & scrollOptions, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Canvas dockSpace(Context * ui, const Key & key, StringView label, const DockSpaceOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Canvas dockSpace(Context * ui, StringView label, const DockSpaceOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope split(Context * ui, StringView label, Orientation orientation, float ratio = 0.5f, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope split(Context * ui, const Key & key, StringView label, Orientation orientation, float ratio = 0.5f, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope split(Context * ui, StringView label, Orientation orientation, float * ratio, const SplitOptions & splitOptions = {}, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope split(Context * ui, const Key & key, StringView label, Orientation orientation, float * ratio, const SplitOptions & splitOptions = {}, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope absolute(Context * ui, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope clip(Context * ui, const Rect & rect, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope disabledScope(Context * ui, bool disabled = true, const SourceLocation & location = SourceLocation::current());
@@ -1107,6 +1593,11 @@ namespace Mosaic
 
     Response text(Context * ui, StringView value, const SourceLocation & location = SourceLocation::current());
     Response text(Context * ui, StringView value, const TextOptions & options, const SourceLocation & location = SourceLocation::current());
+    void setTextFilter(TextFilter * filter, StringView expression);
+    void clearTextFilter(TextFilter * filter) noexcept;
+    [[nodiscard]] bool textFilterActive(const TextFilter & filter) noexcept;
+    [[nodiscard]] bool textFilterPasses(const TextFilter & filter, StringView value) noexcept;
+    [[nodiscard]] bool textFilterPasses(StringView value, StringView expression) noexcept;
     Response bullet(Context * ui, const SourceLocation & location = SourceLocation::current());
     Response bulletText(Context * ui, StringView value, const SourceLocation & location = SourceLocation::current());
     Response button(Context * ui, StringView label, const SourceLocation & location = SourceLocation::current());
@@ -1127,6 +1618,7 @@ namespace Mosaic
     Response selectable(Context * ui, const Key & key, StringView label, bool selected, const SelectableOptions & options, const SourceLocation & location = SourceLocation::current());
     Response selectable(Context * ui, const Key & key, StringView label, SelectionModel * selection, Id item, IdSpan orderedItems = {}, const SourceLocation & location = SourceLocation::current());
     Response selectable(Context * ui, const Key & key, StringView label, SelectionModel * selection, Id item, IdSpan orderedItems, const SelectionOptions & options, const SourceLocation & location = SourceLocation::current());
+    Response selectionItem(Context * ui, const Response & response, SelectionModel * selection, Id item, IdSpan orderedItems = {}, const SelectionOptions & options = {});
     [[nodiscard]] Scope multiSelect(Context * ui, const Key & key, SelectionModel * selection, IdSpan orderedItems, const SelectionOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] SelectionRequestSpan selectionRequests(const Context * ui) noexcept;
     void applySelectionRequests(SelectionModel * selection, IdSpan orderedItems, SelectionRequestSpan requests, Id scope = InvalidId);
@@ -1189,6 +1681,14 @@ namespace Mosaic
     Response dragValue(Context * ui, StringView label, uint32_t * value, uint32_t minimum, uint32_t maximum, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragValue(Context * ui, StringView label, int64_t * value, int64_t minimum, int64_t maximum, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragValue(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, int8_t * value, int8_t minimum, int8_t maximum, const IntegralSliderOptions<int8_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, uint8_t * value, uint8_t minimum, uint8_t maximum, const IntegralSliderOptions<uint8_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, int16_t * value, int16_t minimum, int16_t maximum, const IntegralSliderOptions<int16_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, uint16_t * value, uint16_t minimum, uint16_t maximum, const IntegralSliderOptions<uint16_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, int32_t * value, int32_t minimum, int32_t maximum, const IntegralSliderOptions<int32_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, uint32_t * value, uint32_t minimum, uint32_t maximum, const IntegralSliderOptions<uint32_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, int64_t * value, int64_t minimum, int64_t maximum, const IntegralSliderOptions<int64_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response dragValue(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const IntegralSliderOptions<uint64_t> & options, const SourceLocation & location = SourceLocation::current());
     Response dragFloatVector(Context * ui, StringView label, FloatSpan values, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragIntVector(Context * ui, StringView label, Int32Span values, int32_t minimum, int32_t maximum, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response sliderFloatVector(Context * ui, StringView label, FloatSpan values, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
@@ -1225,18 +1725,27 @@ namespace Mosaic
     Response colorEditorRgba(Context * ui, StringView label, Color * color, const SourceLocation & location = SourceLocation::current());
     Response colorEditorRgba(Context * ui, StringView label, Color * color, const ColorEditOptions & options, const SourceLocation & location = SourceLocation::current());
     Response colorButton(Context * ui, const Key & key, Color * color, bool includeAlpha = true, const ColorEditOptions & options = {}, const SourceLocation & location = SourceLocation::current());
-    Response colorPickerRgb(Context * ui, StringView label, Color * color, const ColorPickerOptions & options = {}, const SourceLocation & location = SourceLocation::current());
-    Response colorPickerRgba(Context * ui, StringView label, Color * color, const ColorPickerOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    Response colorPickerRgb(Context * ui, StringView label, Color * color, const SourceLocation & location = SourceLocation::current());
+    Response colorPickerRgb(Context * ui, StringView label, Color * color, const ColorPickerOptions & options, const SourceLocation & location = SourceLocation::current());
+    Response colorPickerRgba(Context * ui, StringView label, Color * color, const SourceLocation & location = SourceLocation::current());
+    Response colorPickerRgba(Context * ui, StringView label, Color * color, const ColorPickerOptions & options, const SourceLocation & location = SourceLocation::current());
     Response vectorEditor(Context * ui, StringView label, FloatSpan values, float minimum = 0.f, float maximum = 1.f, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope table(Context * ui, StringView label, uint32_t columns, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope table(Context * ui, const Key & key, StringView label, uint32_t columns, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope table(Context * ui, StringView label, uint32_t columns, const TableOptions & tableOptions, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope table(Context * ui, const Key & key, StringView label, uint32_t columns, const TableOptions & tableOptions, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     void tableSetupColumn(Context * ui, uint32_t column, StringView label, const TableColumnOptions & options = {});
     void tableHeadersRow(Context * ui);
     void tableAngledHeadersRow(Context * ui);
     Response tableHeader(Context * ui, uint32_t column, StringView label = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] bool tableColumnName(const Context * ui, Id table, uint32_t column, StringView * const _out) noexcept;
+    [[nodiscard]] uint32_t tableCurrentRow(const Context * ui) noexcept;
+    [[nodiscard]] uint32_t tableCurrentColumn(const Context * ui) noexcept;
+    [[nodiscard]] bool tableSetColumnVisible(Context * ui, Id table, uint32_t column, bool visible) noexcept;
     void tableNextRow(Context * ui);
     void tableNextRow(Context * ui, const TableRowOptions & options);
+    void tableNextRow(Context * ui, const Key & key, const SourceLocation & location = SourceLocation::current());
+    void tableNextRow(Context * ui, const Key & key, const TableRowOptions & options, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] bool tableNextColumn(Context * ui);
     void tableSetRowBackground(Context * ui, const Color & color);
     void tableSetRowBackground(Context * ui, TableBackgroundTarget target, const Color & color);
@@ -1249,8 +1758,11 @@ namespace Mosaic
     [[nodiscard]] bool tableSortState(const Context * ui, Id table, TableSortState * const _out) noexcept;
     void tableSortSpecsHandled(Context * ui, Id table) noexcept;
     [[nodiscard]] bool tableColumnStatus(const Context * ui, Id table, uint32_t column, TableColumnStatus * const _out) noexcept;
+    [[nodiscard]] bool tableDebugSnapshot(const Context * ui, Id table, TableDebugSnapshot * const _out) noexcept;
+    [[nodiscard]] bool tableDebugSnapshots(const Context * ui, TableDebugSnapshotVector * const _out);
     void resetTableSettings(Context * ui, Id table) noexcept;
     [[nodiscard]] Scope columns(Context * ui, StringView label, uint32_t count = 1, const ColumnsOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope columns(Context * ui, const Key & key, StringView label, uint32_t count = 1, const ColumnsOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] bool nextColumn(Context * ui);
     [[nodiscard]] uint32_t columnIndex(const Context * ui) noexcept;
     [[nodiscard]] uint32_t columnCount(const Context * ui) noexcept;
@@ -1264,6 +1776,7 @@ namespace Mosaic
     [[nodiscard]] bool propertyGridLabel(Context * ui);
     [[nodiscard]] Scope menuBar(Context * ui, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope menuBar(Context * ui, const MenuBarOptions & options, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] MainMenuBarScope mainMenuBar(Context * ui, const MenuBarOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] TreeScope menu(Context * ui, StringView label, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] TreeScope menu(Context * ui, StringView label, const MenuOptions & options, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] TreeScope menu(Context * ui, const Key & key, StringView label, const MenuOptions & options = {}, const SourceLocation & location = SourceLocation::current());
@@ -1275,15 +1788,21 @@ namespace Mosaic
     void openPopup(Context * ui, const Key & key, const PopupOptions & options = {});
     [[nodiscard]] WindowScope popup(Context * ui, const Key & key, const PopupOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] WindowScope popup(Context * ui, const Key & key, StringView label, const PopupOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] WindowScope contextPopup(Context * ui, const Key & key, StringView label, const Response & item, const PopupOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] WindowScope contextWindowPopup(Context * ui, const Key & key, StringView label, const PopupOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     void closeCurrentPopup(Context * ui) noexcept;
     void closePopup(Context * ui, const Key & key, Id owner = InvalidId) noexcept;
     [[nodiscard]] bool isPopupOpen(const Context * ui, const Key & key) noexcept;
     [[nodiscard]] bool isPopupOpen(const Context * ui, const Key & key, Id owner) noexcept;
+    [[nodiscard]] bool isAnyPopupOpen(const Context * ui) noexcept;
+    [[nodiscard]] uint32_t popupLevel(const Context * ui) noexcept;
     [[nodiscard]] WindowScope modal(Context * ui, StringView label, bool * open, const Vec2 & size = {420.f, 240.f}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] WindowScope modal(Context * ui, const Key & key, StringView label, bool * open, const Vec2 & size = {420.f, 240.f}, const SourceLocation & location = SourceLocation::current());
-    [[nodiscard]] WindowScope tooltip(Context * ui, StringView label, const Vec2 & size = {240.f, 0.f}, const SourceLocation & location = SourceLocation::current());
-    [[nodiscard]] WindowScope tooltip(Context * ui, const Key & key, StringView label, const Vec2 & size = {240.f, 0.f}, const SourceLocation & location = SourceLocation::current());
-    void itemTooltip(Context * ui, const Response & item, StringView description, const Vec2 & size = {240.f, 0.f}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] WindowScope tooltip(Context * ui, StringView label, const Vec2 & size = {420.f, 0.f}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] WindowScope tooltip(Context * ui, const Key & key, StringView label, const Vec2 & size = {420.f, 0.f}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] WindowScope tooltip(Context * ui, StringView label, const Vec2 & minimumSize, const Vec2 & maximumSize, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] WindowScope tooltip(Context * ui, const Key & key, StringView label, const Vec2 & minimumSize, const Vec2 & maximumSize, const SourceLocation & location = SourceLocation::current());
+    void itemTooltip(Context * ui, const Response & item, StringView description, const Vec2 & size = {420.f, 0.f}, const SourceLocation & location = SourceLocation::current());
     void itemTooltip(Context * ui, const Response & item, StringView description, const Vec2 & size, float delay, const SourceLocation & location = SourceLocation::current());
     void itemTooltip(Context * ui, const Response & item, StringView description, const ItemTooltipOptions & options, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] WindowScope itemTooltip(Context * ui, const Response & item, const Key & key, const ItemTooltipOptions & options = {}, const SourceLocation & location = SourceLocation::current());
@@ -1315,6 +1834,14 @@ namespace Mosaic
     Response slider(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const SourceLocation & location = SourceLocation::current());
     Response slider(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, LabelPlacement labelPlacement, const SourceLocation & location = SourceLocation::current());
     Response slider(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const SliderOptions & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, int8_t * value, int8_t minimum, int8_t maximum, const IntegralSliderOptions<int8_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, uint8_t * value, uint8_t minimum, uint8_t maximum, const IntegralSliderOptions<uint8_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, int16_t * value, int16_t minimum, int16_t maximum, const IntegralSliderOptions<int16_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, uint16_t * value, uint16_t minimum, uint16_t maximum, const IntegralSliderOptions<uint16_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, int32_t * value, int32_t minimum, int32_t maximum, const IntegralSliderOptions<int32_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, uint32_t * value, uint32_t minimum, uint32_t maximum, const IntegralSliderOptions<uint32_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, int64_t * value, int64_t minimum, int64_t maximum, const IntegralSliderOptions<int64_t> & options, const SourceLocation & location = SourceLocation::current());
+    Response slider(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const IntegralSliderOptions<uint64_t> & options, const SourceLocation & location = SourceLocation::current());
     Response slider(Context * ui, StringView label, float * value, float minimum, float maximum, const SourceLocation & location = SourceLocation::current());
     Response slider(Context * ui, StringView label, double * value, double minimum, double maximum, const SourceLocation & location = SourceLocation::current());
 
@@ -1383,8 +1910,12 @@ namespace Mosaic
     [[nodiscard]] bool pointerDragging(const Context * ui, PointerButton button = PointerButton::Primary, float threshold = -1.f) noexcept;
     [[nodiscard]] bool fontCacheMetrics(const Context * ui, FontCacheMetrics * const _out) noexcept;
     [[nodiscard]] bool fontAtlasPage(const Context * ui, size_t index, FontAtlasPage * const _out) noexcept;
+    [[nodiscard]] bool fontAtlasConfiguration(const Context * ui, FontAtlasConfiguration * const _out) noexcept;
+    [[nodiscard]] bool availableFonts(const Context * ui, FontInfoVector * const _out);
     [[nodiscard]] bool fontCacheEntries(const Context * ui, FontCacheEntryVector * const _out);
     [[nodiscard]] bool glyphCacheEntries(const Context * ui, GlyphCacheEntryVector * const _out);
+    [[nodiscard]] bool fontAtlasRects(const Context * ui, FontAtlasRectInfoVector * const _out);
+    [[nodiscard]] bool fontCacheAction(Context * ui, FontCacheAction action);
     [[nodiscard]] DockModel & docking(Context * ui) noexcept;
     [[nodiscard]] const DockModel & docking(const Context * ui) noexcept;
     [[nodiscard]] DockModel & docking(Context * ui, uint32_t group) noexcept;
@@ -1413,10 +1944,33 @@ namespace Mosaic
     void resetPersistentSection(Context * ui, StringView section);
 
     [[nodiscard]] bool debugBounds(const Context * ui, Id id, Rect * const _out) noexcept;
+    [[nodiscard]] bool debugBounds(const Context * ui, const ItemRef & item, Rect * const _out) noexcept;
+    [[nodiscard]] bool windowDebugSnapshots(Context * ui, WindowDebugSnapshotVector * const _out);
+    [[nodiscard]] bool drawListDebugSnapshots(const Context * ui, DrawListDebugSnapshotVector * const _out);
+    [[nodiscard]] bool drawCommandDebugSnapshots(const Context * ui, DrawCommandDebugSnapshotVector * const _out);
+    [[nodiscard]] bool popupDebugSnapshots(const Context * ui, PopupDebugSnapshotVector * const _out);
+    [[nodiscard]] bool tabBarDebugSnapshots(const Context * ui, TabBarDebugSnapshotVector * const _out);
+    [[nodiscard]] bool selectionDebugSnapshots(const Context * ui, SelectionDebugSnapshotVector * const _out);
+    [[nodiscard]] bool dockDebugSnapshots(const Context * ui, DockDebugSnapshotVector * const _out);
+    [[nodiscard]] bool groupDebugSnapshots(const Context * ui, GroupDebugSnapshotVector * const _out);
+    [[nodiscard]] bool identityDebugEntries(Context * ui, IdentityDebugEntryVector * const _out);
+    [[nodiscard]] bool itemDebugSnapshots(Context * ui, ItemDebugSnapshotVector * const _out);
+    [[nodiscard]] bool itemDebugSnapshot(Context * ui, Id id, ItemDebugSnapshot * const _out);
+    [[nodiscard]] bool itemDebugSnapshot(Context * ui, const ItemRef & item, ItemDebugSnapshot * const _out);
+    [[nodiscard]] bool contextDebugSnapshot(const Context * ui, ContextDebugSnapshot * const _out) noexcept;
+    void setItemPickerEnabled(Context * ui, bool enabled) noexcept;
+    void setItemPickerTarget(Context * ui, Id id) noexcept;
+    [[nodiscard]] bool itemPickerState(const Context * ui, ItemPickerState * const _out) noexcept;
+    void clearItemPicker(Context * ui) noexcept;
+    [[nodiscard]] bool contentRegionAvailable(const Context * ui, Vec2 * const _out) noexcept;
     [[nodiscard]] bool debugClip(const Context * ui, Id id, Rect * const _out) noexcept;
+    [[nodiscard]] bool debugClip(const Context * ui, const ItemRef & item, Rect * const _out) noexcept;
     [[nodiscard]] bool itemResponse(const Context * ui, Id id, Response * const _out) noexcept;
+    [[nodiscard]] bool itemResponse(const Context * ui, const ItemRef & item, Response * const _out) noexcept;
     [[nodiscard]] bool itemVisible(const Context * ui, Id id) noexcept;
+    [[nodiscard]] bool itemVisible(const Context * ui, const ItemRef & item) noexcept;
     [[nodiscard]] bool itemHovered(const Context * ui, Id id, const ItemQueryOptions & options = {}) noexcept;
+    [[nodiscard]] bool itemHovered(const Context * ui, const ItemRef & item, const ItemQueryOptions & options = {}) noexcept;
     [[nodiscard]] bool scopeFocused(const Context * ui, Id id, bool includeDescendants = true) noexcept;
     [[nodiscard]] bool scopeFocused(const Context * ui, Id id, const ScopeQueryOptions & options) noexcept;
     [[nodiscard]] bool scopeHovered(const Context * ui, Id id) noexcept;
@@ -1432,33 +1986,38 @@ namespace Mosaic
     [[nodiscard]] Fill radialFill(const Vec2 & center, float radius, FillStopSpan stops, FillSpread spread = FillSpread::Clamp) noexcept;
     [[nodiscard]] Fill conicFill(const Vec2 & center, float startAngle, FillStopSpan stops, FillSpread spread = FillSpread::Repeat) noexcept;
 
-    void canvasRect(Context * ui, Id canvas, const Rect & bounds, const Color & color);
-    void canvasRects(Context * ui, Id canvas, RectInstanceSpan instances);
-    void canvasQuads(Context * ui, Id canvas, QuadInstanceSpan instances);
-    void canvasBox(Context * ui, Id canvas, const Rect & bounds, const BoxStyle & style);
-    void canvasRoundedRect(Context * ui, Id canvas, const Rect & bounds, float radius, const Color & color);
-    void canvasGradient(Context * ui, Id canvas, const Rect & bounds, const Color & topLeft, const Color & topRight, const Color & bottomRight, const Color & bottomLeft);
-    void canvasLine(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, float thickness, const Color & color);
-    void canvasPolyline(Context * ui, Id canvas, Vec2Span points, float thickness, const Color & color, bool closed);
-    void canvasCircle(Context * ui, Id canvas, const Vec2 & center, float radius, float thickness, const Color & color, uint32_t segments = 0);
-    void canvasCircleFilled(Context * ui, Id canvas, const Vec2 & center, float radius, const Color & color, uint32_t segments = 0);
-    void canvasEllipse(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, float thickness, const Color & color, uint32_t segments = 0);
-    void canvasEllipseFilled(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, const Color & color, uint32_t segments = 0);
-    void canvasRegularPolygon(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, float thickness, const Color & color);
-    void canvasRegularPolygonFilled(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, const Color & color);
-    void canvasGradientRing(Context * ui, Id canvas, const Vec2 & center, float innerRadius, float outerRadius, float startAngle, ColorSpan colors);
-    void canvasTriangle(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, float thickness, const Color & color);
-    void canvasTriangleFilled(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, const Color & color);
-    void canvasConvexPolygon(Context * ui, Id canvas, Vec2Span points, const Color & color);
-    void canvasGradientPolygon(Context * ui, Id canvas, ColoredPointSpan points);
-    void canvasConcavePolygon(Context * ui, Id canvas, Vec2Span points, const Color & color);
-    void canvasBezierQuadratic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & control, const Vec2 & second, float thickness, const Color & color, uint32_t segments = 0);
-    void canvasBezierCubic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & firstControl, const Vec2 & secondControl, const Vec2 & second, float thickness, const Color & color, uint32_t segments = 0);
+    bool canvasRect(Context * ui, Id canvas, const Rect & bounds, const Color & color);
+    bool canvasRects(Context * ui, Id canvas, RectInstanceSpan instances);
+    bool canvasQuads(Context * ui, Id canvas, QuadInstanceSpan instances);
+    bool canvasBox(Context * ui, Id canvas, const Rect & bounds, const BoxStyle & style);
+    bool canvasRoundedRect(Context * ui, Id canvas, const Rect & bounds, float radius, const Color & color);
+    bool canvasGradient(Context * ui, Id canvas, const Rect & bounds, const Color & topLeft, const Color & topRight, const Color & bottomRight, const Color & bottomLeft);
+    bool canvasLine(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, float thickness, const Color & color);
+    bool canvasPolyline(Context * ui, Id canvas, Vec2Span points, float thickness, const Color & color, bool closed);
+    bool canvasCircle(Context * ui, Id canvas, const Vec2 & center, float radius, float thickness, const Color & color, uint32_t segments = 0);
+    bool canvasCircleFilled(Context * ui, Id canvas, const Vec2 & center, float radius, const Color & color, uint32_t segments = 0);
+    bool canvasArc(Context * ui, Id canvas, const Vec2 & center, float radius, float startAngle, float endAngle, float thickness, const Color & color, uint32_t segments = 0);
+    bool canvasArcFilled(Context * ui, Id canvas, const Vec2 & center, float radius, float startAngle, float endAngle, const Color & color, uint32_t segments = 0);
+    bool canvasEllipse(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, float thickness, const Color & color, uint32_t segments = 0);
+    bool canvasEllipseFilled(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, const Color & color, uint32_t segments = 0);
+    bool canvasRegularPolygon(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, float thickness, const Color & color);
+    bool canvasRegularPolygonFilled(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, const Color & color);
+    bool canvasGradientRing(Context * ui, Id canvas, const Vec2 & center, float innerRadius, float outerRadius, float startAngle, ColorSpan colors);
+    bool canvasTriangle(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, float thickness, const Color & color);
+    bool canvasTriangleFilled(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, const Color & color);
+    bool canvasConvexPolygon(Context * ui, Id canvas, Vec2Span points, const Color & color);
+    bool canvasGradientPolygon(Context * ui, Id canvas, ColoredPointSpan points);
+    bool canvasConcavePolygon(Context * ui, Id canvas, Vec2Span points, const Color & color);
+    bool canvasBezierQuadratic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & control, const Vec2 & second, float thickness, const Color & color, uint32_t segments = 0);
+    bool canvasBezierQuadraticFilled(Context * ui, Id canvas, const Vec2 & first, const Vec2 & control, const Vec2 & second, const Color & color, uint32_t segments = 0);
+    bool canvasBezierCubic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & firstControl, const Vec2 & secondControl, const Vec2 & second, float thickness, const Color & color, uint32_t segments = 0);
     [[nodiscard]] bool canvasText(Context * ui, Id canvas, const Vec2 & position, StringView value, const Color & color, Vec2 * const _out);
-    void canvasPushClip(Context * ui, Id canvas, const Rect & bounds);
-    void canvasPopClip(Context * ui, Id canvas);
-    void canvasImage(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint);
-    void canvasCustom(Context * ui, Id canvas, VertexSpan vertices, IndexSpan indices, const RenderState & state);
-    void canvasSetChannel(Context * ui, Id canvas, uint32_t channel) noexcept;
-    void canvasSetLayer(Context * ui, Id canvas, CanvasLayer layer) noexcept;
+    bool canvasPushClip(Context * ui, Id canvas, const Rect & bounds);
+    bool canvasPopClip(Context * ui, Id canvas);
+    bool canvasImage(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint, SamplerFilter sampler = SamplerFilter::Linear);
+    bool canvasCustom(Context * ui, Id canvas, VertexSpan vertices, IndexSpan indices, const RenderState & state);
+    bool canvasSplitChannels(Context * ui, Id canvas, uint32_t count) noexcept;
+    bool canvasSetChannel(Context * ui, Id canvas, uint32_t channel) noexcept;
+    bool canvasMergeChannels(Context * ui, Id canvas, UInt32Span order = {}) noexcept;
+    bool canvasSetLayer(Context * ui, Id canvas, CanvasLayer layer) noexcept;
 } // namespace Mosaic

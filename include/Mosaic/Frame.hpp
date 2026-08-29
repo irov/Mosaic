@@ -5,14 +5,31 @@
 
 namespace Mosaic
 {
-    struct FrameViewport
+    namespace Detail
     {
+        struct FrameRenderData;
+        struct FrameViewportAccess;
+    }
+
+    class FrameViewport
+    {
+    public:
         uint64_t id = 0;
         Rect bounds;
         float dpiScale = 1.f;
         void * nativeHandle = nullptr;
         RenderTargetHandle renderTarget = 0;
-        DrawCommandVector drawCommands;
+
+        [[nodiscard]] size_t drawCommandCount() const noexcept
+        {
+            return m_drawCommandCount;
+        }
+
+    private:
+        Detail::FrameRenderData * m_renderData = nullptr;
+        size_t m_drawCommandCount = 0;
+
+        friend struct Detail::FrameViewportAccess;
     };
 
     using FrameViewportVector = Vector<FrameViewport>;

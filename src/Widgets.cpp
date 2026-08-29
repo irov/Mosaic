@@ -8,6 +8,7 @@
 #include "Window.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -41,6 +42,16 @@ namespace Mosaic
             }
 
             return false;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] float valueTooltipDelay(const Context * ui, float requested) noexcept
+        {
+            if(requested >= 0.f)
+            {
+                return requested;
+            }
+
+            return std::max(0.f, ui->currentStyle->behavior.tooltipHoverDelay);
         }
         //////////////////////////////////////////////////////////////////////////
         void validationTooltip(Context * ui, const Response & response, Validation validation, StringView message, const SourceLocation & location)
@@ -179,10 +190,13 @@ namespace Mosaic
             }
 
             DrawCommand command(DrawCommandType::Polyline);
-            command.payload.polyline.points = std::move(points);
-            command.payload.polyline.thickness = thickness;
-            command.payload.polyline.color = color;
-            command.payload.polyline.closed = closed;
+            PolylineDrawCommand & polyline = command.payload.polyline;
+            polyline.points.offset = ui->drawCommandStorage.points.size();
+            polyline.points.count = points.size();
+            ui->drawCommandStorage.points.insert(ui->drawCommandStorage.points.end(), points.begin(), points.end());
+            polyline.thickness = thickness;
+            polyline.color = color;
+            polyline.closed = closed;
             ui->canvasCommands(*node).emplace_back(std::move(command));
         }
         //////////////////////////////////////////////////////////////////////////
@@ -732,8 +746,8 @@ namespace Mosaic
                     *value = updated;
                     Detail::setFlag(response, 6);
                     Detail::setFlag(response, 8);
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
-                    ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
                 }
             }
         }
@@ -775,8 +789,8 @@ namespace Mosaic
                     *value = updated;
                     Detail::setFlag(response, 6);
                     Detail::setFlag(response, 8);
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
-                    ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
                 }
             }
         }
@@ -811,8 +825,8 @@ namespace Mosaic
                 *value = pasted;
                 Detail::setFlag(response, 6);
                 Detail::setFlag(response, 8);
-                ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
-                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
         }
         //////////////////////////////////////////////////////////////////////////
@@ -954,6 +968,393 @@ namespace Mosaic
             return returnedValue;
         }
 
+        template<class T> requires std::is_integral_v<T>
+        using IntegralUnsigned = std::make_unsigned_t<T>;
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] IntegralUnsigned<T> integralOrdered(T value) noexcept
+        {
+            using U = IntegralUnsigned<T>;
+            U ordered = static_cast<U>(value);
+
+            if constexpr(std::is_signed_v<T>)
+            {
+                constexpr U sign = U{1} << (std::numeric_limits<U>::digits - 1);
+                ordered ^= sign;
+            }
+
+            return ordered;
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] T integralFromOrdered(IntegralUnsigned<T> ordered) noexcept
+        {
+            using U = IntegralUnsigned<T>;
+
+            if constexpr(std::is_signed_v<T>)
+            {
+                constexpr U sign = U{1} << (std::numeric_limits<U>::digits - 1);
+                U bits = ordered ^ sign;
+                auto returnedValue = std::bit_cast<T>(bits);
+
+                return returnedValue;
+            }
+            else
+            {
+                return static_cast<T>(ordered);
+            }
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] IntegralUnsigned<T> integralStep(const SliderOptions & options) noexcept
+        {
+            using U = IntegralUnsigned<T>;
+
+            if(options.step <= 1.0)
+            {
+                return U{1};
+            }
+
+            double maximum = static_cast<double>(std::numeric_limits<U>::max());
+
+            if(options.step >= maximum)
+            {
+                return std::numeric_limits<U>::max();
+            }
+
+            auto returnedValue = static_cast<U>(std::round(options.step));
+
+            return std::max(U{1}, returnedValue);
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] bool integralStepValid(T step) noexcept
+        {
+            if constexpr(std::is_signed_v<T>)
+            {
+                return step > T{};
+            }
+            else
+            {
+                return step != T{};
+            }
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] SliderOptions commonIntegralOptions(const IntegralSliderOptions<T> & source)
+        {
+            SliderOptions options;
+            options.width = source.width;
+            options.dragSpeed = source.dragSpeed;
+            options.showValuePopup = source.showValuePopup;
+            options.showValueOnTrack = source.showValueOnTrack;
+            options.showValueTooltip = source.showValueTooltip;
+            options.valueTooltipDelay = source.valueTooltipDelay;
+            options.temporaryInput = source.temporaryInput;
+            options.wrapAround = source.wrapAround;
+            options.clampInput = source.clampInput;
+            options.clampZeroRange = source.clampZeroRange;
+            options.speedTweaks = source.speedTweaks;
+            options.colorMarkers = source.colorMarkers;
+            options.labelPlacement = source.labelPlacement;
+            options.format = source.format;
+            options.validation = source.validation;
+            options.validationMessage = source.validationMessage;
+
+            return options;
+        }
+
+        struct IntegralDragRate
+        {
+            uint64_t whole = 0;
+            uint64_t remainder = 0;
+            uint64_t denominator = 1;
+        };
+
+        constexpr uint64_t IntegralDragRateDenominator = uint64_t{1} << 20U;
+        constexpr int64_t IntegralDragPointerDenominator = int64_t{1} << 12U;
+
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] uint64_t multiplyDivideSaturated(uint64_t first, uint64_t second, uint64_t denominator, uint64_t * const _outRemainder) noexcept
+        {
+            if(_outRemainder != nullptr)
+            {
+                *_outRemainder = 0;
+            }
+
+            if(denominator == 0)
+            {
+                return std::numeric_limits<uint64_t>::max();
+            }
+
+            uint64_t result = 0;
+            uint64_t remainder = 0;
+            uint64_t quotient = first / denominator;
+            uint64_t termRemainder = first % denominator;
+            uint64_t multiplier = second;
+
+            while(multiplier != 0)
+            {
+                if((multiplier & uint64_t{1}) != 0)
+                {
+                    if(result > std::numeric_limits<uint64_t>::max() - quotient)
+                    {
+                        return std::numeric_limits<uint64_t>::max();
+                    }
+
+                    result += quotient;
+
+                    if(remainder >= denominator - termRemainder)
+                    {
+                        if(result == std::numeric_limits<uint64_t>::max())
+                        {
+                            return result;
+                        }
+
+                        ++result;
+                        remainder -= denominator - termRemainder;
+                    }
+                    else
+                    {
+                        remainder += termRemainder;
+                    }
+                }
+
+                multiplier >>= 1U;
+
+                if(multiplier == 0)
+                {
+                    break;
+                }
+
+                bool remainderCarry = termRemainder >= denominator - termRemainder;
+
+                if(quotient > std::numeric_limits<uint64_t>::max() - quotient)
+                {
+                    quotient = std::numeric_limits<uint64_t>::max();
+                }
+                else
+                {
+                    quotient += quotient;
+
+                    if(remainderCarry == true)
+                    {
+                        if(quotient == std::numeric_limits<uint64_t>::max())
+                        {
+                            return quotient;
+                        }
+
+                        ++quotient;
+                    }
+                }
+
+                if(remainderCarry == true)
+                {
+                    termRemainder -= denominator - termRemainder;
+                }
+                else
+                {
+                    termRemainder += termRemainder;
+                }
+            }
+
+            if(_outRemainder != nullptr)
+            {
+                *_outRemainder = remainder;
+            }
+
+            return result;
+        }
+
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] IntegralDragRate scaledIntegralDragRate(uint64_t magnitude, float ratio) noexcept
+        {
+            IntegralDragRate rate;
+            rate.denominator = IntegralDragRateDenominator;
+
+            if(std::isfinite(ratio) == false || ratio <= 0.f || magnitude == 0)
+            {
+                return rate;
+            }
+
+            double scaledRatio = std::round(static_cast<double>(ratio) * static_cast<double>(rate.denominator));
+            uint64_t ratioNumerator = scaledRatio >= static_cast<double>(std::numeric_limits<uint64_t>::max()) ? std::numeric_limits<uint64_t>::max() : static_cast<uint64_t>(std::max(1.0, scaledRatio));
+            rate.whole = Detail::multiplyDivideSaturated(magnitude, ratioNumerator, rate.denominator, &rate.remainder);
+
+            return rate;
+        }
+
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] bool integralDragRateLess(const IntegralDragRate & first, const IntegralDragRate & second) noexcept
+        {
+            if(first.whole != second.whole)
+            {
+                return first.whole < second.whole;
+            }
+
+            uint64_t firstRemainder = first.remainder;
+            uint64_t secondRemainder = second.remainder;
+
+            if(first.denominator != second.denominator)
+            {
+                firstRemainder = Detail::multiplyDivideSaturated(first.remainder, IntegralDragRateDenominator, first.denominator, nullptr);
+                secondRemainder = Detail::multiplyDivideSaturated(second.remainder, IntegralDragRateDenominator, second.denominator, nullptr);
+            }
+
+            return firstRemainder < secondRemainder;
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] IntegralDragRate automaticIntegralDragRate(const Context::Node & node, const SliderOptions & options, T minimum, T maximum, IntegralUnsigned<T> step) noexcept
+        {
+            IntegralDragRate rate;
+            rate.denominator = IntegralDragRateDenominator;
+
+            if(options.dragSpeed > 0.0)
+            {
+                double maximumSpeed = static_cast<double>(std::numeric_limits<uint64_t>::max());
+
+                if(options.dragSpeed >= maximumSpeed)
+                {
+                    rate.whole = std::numeric_limits<uint64_t>::max();
+
+                    return rate;
+                }
+
+                double boundedSpeed = options.dragSpeed;
+                double whole = std::floor(boundedSpeed);
+                rate.whole = static_cast<uint64_t>(whole);
+                rate.remainder = static_cast<uint64_t>(std::round((boundedSpeed - whole) * static_cast<double>(rate.denominator)));
+
+                if(rate.remainder >= rate.denominator)
+                {
+                    rate.remainder = 0;
+
+                    if(rate.whole != std::numeric_limits<uint64_t>::max())
+                    {
+                        ++rate.whole;
+                    }
+                }
+
+                return rate;
+            }
+
+            using U = IntegralUnsigned<T>;
+            U first = Detail::integralOrdered(minimum);
+            U last = Detail::integralOrdered(maximum);
+            U range = last >= first ? static_cast<U>(last - first) : std::numeric_limits<U>::max();
+            IntegralDragRate rangeRate = Detail::scaledIntegralDragRate(static_cast<uint64_t>(range), node.style->behavior.dragSpeedDefaultRatio);
+            IntegralDragRate stepRate = Detail::scaledIntegralDragRate(static_cast<uint64_t>(step), node.style->behavior.dragSpeedMinimumStepRatio);
+
+            if(Detail::integralDragRateLess(rangeRate, stepRate) == true)
+            {
+                return stepRate;
+            }
+
+            return rangeRate;
+        }
+
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] uint64_t integralDragAmount(const IntegralDragRate & rate, int64_t motion, uint64_t step) noexcept
+        {
+            uint64_t ticks = motion < 0 ? static_cast<uint64_t>(-(motion + 1)) + 1 : static_cast<uint64_t>(motion);
+            uint64_t pointerDenominator = static_cast<uint64_t>(IntegralDragPointerDenominator);
+            uint64_t wholeRemainder = 0;
+            uint64_t amount = Detail::multiplyDivideSaturated(ticks, rate.whole, pointerDenominator, &wholeRemainder);
+
+            if(amount == std::numeric_limits<uint64_t>::max())
+            {
+                return amount - amount % step;
+            }
+
+            uint64_t commonDenominator = pointerDenominator * rate.denominator;
+            uint64_t fractionalRemainder = 0;
+            uint64_t fractionalAmount = Detail::multiplyDivideSaturated(ticks, rate.remainder, commonDenominator, &fractionalRemainder);
+
+            if(amount > std::numeric_limits<uint64_t>::max() - fractionalAmount)
+            {
+                amount = std::numeric_limits<uint64_t>::max();
+            }
+            else
+            {
+                amount += fractionalAmount;
+                uint64_t carriedRemainder = wholeRemainder * rate.denominator;
+
+                if(carriedRemainder >= commonDenominator - fractionalRemainder && amount != std::numeric_limits<uint64_t>::max())
+                {
+                    ++amount;
+                }
+            }
+
+            amount -= amount % step;
+
+            return amount;
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        [[nodiscard]] T applyIntegralDrag(T value, T minimum, T maximum, IntegralUnsigned<T> amount, bool positive, bool wrapAround) noexcept
+        {
+            using U = IntegralUnsigned<T>;
+            U current = Detail::integralOrdered(value);
+            U first = Detail::integralOrdered(minimum);
+            U last = Detail::integralOrdered(maximum);
+
+            if(last < first)
+            {
+                first = std::numeric_limits<U>::min();
+                last = std::numeric_limits<U>::max();
+                wrapAround = true;
+            }
+
+            U distance = last - first;
+
+            if(wrapAround == false)
+            {
+                if(positive == true)
+                {
+                    U available = last - current;
+                    current += std::min(amount, available);
+                }
+                else
+                {
+                    U available = current - first;
+                    current -= std::min(amount, available);
+                }
+
+                return Detail::integralFromOrdered<T>(current);
+            }
+
+            if(distance == std::numeric_limits<U>::max())
+            {
+                current = positive == true ? static_cast<U>(current + amount) : static_cast<U>(current - amount);
+
+                return Detail::integralFromOrdered<T>(current);
+            }
+
+            U span = distance + U{1};
+            U offset = current - first;
+            amount %= span;
+
+            if(positive == true)
+            {
+                U remaining = span - offset;
+                offset = amount < remaining ? static_cast<U>(offset + amount) : static_cast<U>(amount - remaining);
+            }
+            else if(amount <= offset)
+            {
+                offset -= amount;
+            }
+            else
+            {
+                U remaining = static_cast<U>(amount - offset);
+                offset = remaining == 0 ? 0 : static_cast<U>(span - remaining);
+            }
+
+            current = first + offset;
+
+            return Detail::integralFromOrdered<T>(current);
+        }
+
         template<class T> requires std::is_arithmetic_v<T>
         //////////////////////////////////////////////////////////////////////////
         void temporaryNumberInput(Context * ui, size_t node, Response & response, T * value, T minimum, T maximum, StringView formattedValue, bool clampInput, bool clampZeroRange)
@@ -961,6 +1362,7 @@ namespace Mosaic
             Context::Node & inputNode = ui->nodes[node];
             Context::Persistent & state = ui->state(inputNode);
             Detail::NumericState & numericState = ui->numericState(state);
+            Detail::TextEditorState & editorState = ui->textEditorState(inputNode.id);
             const PointerState * pointer = ui->input.primaryPointer();
 
             if(response.pressed() == true && pointer != nullptr && pointer->buttonClickCount() <= 1)
@@ -996,12 +1398,18 @@ namespace Mosaic
             if(beginTemporaryInput == true)
             {
                 numericState.temporaryInput = true;
-                numericState.temporaryReplace = true;
-                numericState.temporaryText.assign(formattedValue);
+                editorState.editOriginal.assign(formattedValue);
+                editorState.editValue.assign(formattedValue);
+                editorState.cursor = editorState.editValue.size();
+                editorState.anchor = 0;
+                editorState.selectingText = false;
+                Detail::clearUndo(editorState, editorState.editValue, ui->input.timestamp);
                 state.editing = true;
                 ui->captured = InvalidId;
+                ui->capturedItem = {};
                 ui->capturedPointer = 0;
                 ui->active = InvalidId;
+                ui->activeItem = {};
             }
 
             if(numericState.temporaryInput == false)
@@ -1011,21 +1419,80 @@ namespace Mosaic
 
             bool commit = false;
             bool cancel = false;
+            bool changed = false;
+            auto insertText = [&editorState, &changed](StringView inserted)
+            {
+                if(Detail::numericText(inserted) == false)
+                {
+                    return;
+                }
+
+                Detail::replaceSelection(editorState.editValue, editorState.cursor, editorState.anchor, inserted, 128);
+                changed = true;
+            };
+
+            if(pointer != nullptr && ui->capturedItem == response.item)
+            {
+                inputNode.label = editorState.editValue;
+                ui->prepareText(inputNode, editorState.editValue);
+
+                if(response.pressed() == true && response.doubleClicked() == false)
+                {
+                    size_t position = Detail::inputPositionAtPointer(ui, inputNode, editorState.editValue, false, pointer->pressPosition());
+                    editorState.cursor = position;
+
+                    if(ui->input.modifiers.shift == false)
+                    {
+                        editorState.anchor = position;
+                    }
+
+                    editorState.selectingText = true;
+                }
+                else if(editorState.selectingText == true && pointer->isDown() == true)
+                {
+                    editorState.cursor = Detail::inputPositionAtPointer(ui, inputNode, editorState.editValue, false, pointer->position);
+                }
+
+                if(response.released() == true)
+                {
+                    editorState.selectingText = false;
+                }
+            }
+
             for(const String & text : ui->input.text)
             {
-                if(Detail::numericText(text) == false)
-                {
-                    continue;
-                }
-
-                if(numericState.temporaryReplace == true)
-                {
-                    numericState.temporaryText.clear();
-                    numericState.temporaryReplace = false;
-                }
-
-                numericState.temporaryText += text;
+                insertText(text);
             }
+
+            for(const ImeEvent & event : ui->input.ime)
+            {
+                switch(event.type)
+                {
+                case ImeEventType::Start:
+                    editorState.composition.clear();
+                    editorState.compositionBegin = std::min(editorState.cursor, editorState.anchor);
+                    editorState.compositionEnd = editorState.compositionBegin;
+                    break;
+                case ImeEventType::Update:
+                    editorState.composition = event.text;
+                    editorState.compositionBegin = std::min(editorState.cursor, editorState.anchor);
+                    editorState.compositionEnd = editorState.compositionBegin + event.text.size();
+                    editorState.compositionSelectionBegin = std::min(event.selectionBegin, event.text.size());
+                    editorState.compositionSelectionEnd = std::min(event.selectionEnd, event.text.size());
+                    break;
+                case ImeEventType::Commit:
+                    insertText(event.text);
+                    editorState.composition.clear();
+                    editorState.compositionBegin = editorState.cursor;
+                    editorState.compositionEnd = editorState.cursor;
+                    break;
+                case ImeEventType::Cancel:
+                    editorState.composition.clear();
+                    editorState.compositionEnd = editorState.compositionBegin;
+                    break;
+                }
+            }
+
             for(const KeyEvent & event : ui->input.keyboard)
             {
                 if(event.pressed == false)
@@ -1034,45 +1501,111 @@ namespace Mosaic
                 }
 
                 bool primary = event.modifiers.primary || event.modifiers.control == true || event.modifiers.super;
+                size_t selectionBegin = std::min(editorState.cursor, editorState.anchor);
+                size_t selectionEnd = std::max(editorState.cursor, editorState.anchor);
 
                 if(primary == true && event.key == KeyCode::A)
                 {
-                    numericState.temporaryReplace = true;
+                    editorState.anchor = 0;
+                    editorState.cursor = editorState.editValue.size();
                 }
                 else if(primary == true && event.key == KeyCode::C)
                 {
-                    ui->platform->setClipboardText(numericState.temporaryText);
+                    if(selectionBegin != selectionEnd)
+                    {
+                        ui->platform->setClipboardText(StringView(editorState.editValue).substr(selectionBegin, selectionEnd - selectionBegin));
+                    }
                 }
                 else if(primary == true && event.key == KeyCode::X)
                 {
-                    ui->platform->setClipboardText(numericState.temporaryText);
-                    numericState.temporaryText.clear();
-                    numericState.temporaryReplace = false;
+                    if(selectionBegin != selectionEnd)
+                    {
+                        ui->platform->setClipboardText(StringView(editorState.editValue).substr(selectionBegin, selectionEnd - selectionBegin));
+                        Detail::replaceSelection(editorState.editValue, editorState.cursor, editorState.anchor, {}, 128);
+                        changed = true;
+                    }
                 }
                 else if(primary == true && event.key == KeyCode::V)
                 {
                     String clipboard;
+
                     if(ui->platform->getClipboardText(&clipboard) == true && Detail::numericText(clipboard) == true)
                     {
-                        if(numericState.temporaryReplace == true)
-                        {
-                            numericState.temporaryText.clear();
-                        }
+                        insertText(clipboard);
+                    }
+                }
+                else if(primary == true && event.key == KeyCode::Z && event.modifiers.shift == false)
+                {
+                    changed = Detail::applyUndo(editorState, editorState.editValue) || changed;
+                }
+                else if((primary == true && event.key == KeyCode::Y) || (primary == true && event.key == KeyCode::Z && event.modifiers.shift == true))
+                {
+                    changed = Detail::applyRedo(editorState, editorState.editValue) || changed;
+                }
+                else if(event.key == KeyCode::Left)
+                {
+                    editorState.cursor = event.modifiers.shift == false && selectionBegin != selectionEnd ? selectionBegin : (primary == true ? Detail::previousWord(editorState.editValue, editorState.cursor) : Detail::previousUtf8(editorState.editValue, editorState.cursor));
 
-                        numericState.temporaryText += clipboard;
-                        numericState.temporaryReplace = false;
+                    if(event.modifiers.shift == false)
+                    {
+                        editorState.anchor = editorState.cursor;
+                    }
+                }
+                else if(event.key == KeyCode::Right)
+                {
+                    editorState.cursor = event.modifiers.shift == false && selectionBegin != selectionEnd ? selectionEnd : (primary == true ? Detail::nextWord(editorState.editValue, editorState.cursor) : Detail::nextUtf8(editorState.editValue, editorState.cursor));
+
+                    if(event.modifiers.shift == false)
+                    {
+                        editorState.anchor = editorState.cursor;
+                    }
+                }
+                else if(event.key == KeyCode::Home)
+                {
+                    editorState.cursor = 0;
+
+                    if(event.modifiers.shift == false)
+                    {
+                        editorState.anchor = editorState.cursor;
+                    }
+                }
+                else if(event.key == KeyCode::End)
+                {
+                    editorState.cursor = editorState.editValue.size();
+
+                    if(event.modifiers.shift == false)
+                    {
+                        editorState.anchor = editorState.cursor;
                     }
                 }
                 else if(event.key == KeyCode::Backspace)
                 {
-                    if(numericState.temporaryReplace == true)
+                    if(selectionBegin != selectionEnd)
                     {
-                        numericState.temporaryText.clear();
-                        numericState.temporaryReplace = false;
+                        Detail::replaceSelection(editorState.editValue, editorState.cursor, editorState.anchor, {}, 128);
+                        changed = true;
                     }
-                    else if(numericState.temporaryText.empty() == false)
+                    else if(editorState.cursor > 0)
                     {
-                        numericState.temporaryText.erase(Detail::previousUtf8(numericState.temporaryText, numericState.temporaryText.size()));
+                        size_t previous = primary == true ? Detail::previousWord(editorState.editValue, editorState.cursor) : Detail::previousUtf8(editorState.editValue, editorState.cursor);
+                        editorState.editValue.erase(previous, editorState.cursor - previous);
+                        editorState.cursor = previous;
+                        editorState.anchor = previous;
+                        changed = true;
+                    }
+                }
+                else if(event.key == KeyCode::Delete)
+                {
+                    if(selectionBegin != selectionEnd)
+                    {
+                        Detail::replaceSelection(editorState.editValue, editorState.cursor, editorState.anchor, {}, 128);
+                        changed = true;
+                    }
+                    else if(editorState.cursor < editorState.editValue.size())
+                    {
+                        size_t next = primary == true ? Detail::nextWord(editorState.editValue, editorState.cursor) : Detail::nextUtf8(editorState.editValue, editorState.cursor);
+                        editorState.editValue.erase(editorState.cursor, next - editorState.cursor);
+                        changed = true;
                     }
                 }
                 else if(event.key == KeyCode::Enter)
@@ -1085,6 +1618,11 @@ namespace Mosaic
                 }
             }
 
+            if(changed == true)
+            {
+                Detail::recordUndo(editorState, editorState.editValue, ui->input.timestamp);
+            }
+
             if(ui->focused != response.id)
             {
                 commit = true;
@@ -1092,8 +1630,9 @@ namespace Mosaic
 
             if(commit == true && value != nullptr)
             {
-            T parsed{};
-            if(Detail::parseNumber<T>(numericState.temporaryText, &parsed) == true)
+                T parsed{};
+
+                if(Detail::parseNumber<T>(editorState.editValue, &parsed) == true)
                 {
                     if(clampInput == true && (maximum > minimum || (clampZeroRange == true && maximum == minimum)))
                     {
@@ -1104,7 +1643,7 @@ namespace Mosaic
                     {
                         *value = parsed;
                         Detail::setFlag(response, 6);
-                        ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(inputNode), inputNode.file, inputNode.line, ui->input.timestamp});
+                        ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(inputNode), inputNode.debugData().file, inputNode.debugData().line, ui->input.timestamp});
                     }
 
                     Detail::setFlag(response, 8);
@@ -1122,9 +1661,16 @@ namespace Mosaic
 
             if(numericState.temporaryInput == true)
             {
-                inputNode.numericInput = true;
-                ui->nodeSemanticValue(inputNode) = numericState.temporaryText;
-                ui->prepareValueText(inputNode, numericState.temporaryText);
+                inputNode.textEditData().temporaryNumeric = true;
+                inputNode.label = editorState.editValue;
+                inputNode.textEditData().cursor = editorState.cursor;
+                inputNode.textEditData().anchor = editorState.anchor;
+                inputNode.textEditData().scrollX = editorState.textScrollX;
+                inputNode.textEditData().compositionBegin = editorState.compositionBegin;
+                inputNode.textEditData().compositionEnd = editorState.compositionEnd;
+                ui->nodeSemanticValue(inputNode) = editorState.editValue;
+                ui->prepareText(inputNode, editorState.editValue);
+                Detail::updateTextScroll(inputNode, editorState, state.lastBounds, true);
                 Detail::setFlag(response, 7);
             }
         }
@@ -1205,7 +1751,7 @@ namespace Mosaic
 
         template<class T> requires std::is_integral_v<T>
         //////////////////////////////////////////////////////////////////////////
-        Response sliderIntegralBehavior(Context * ui, StringView label, T * value, T minimum, T maximum, const SliderOptions & options, const SourceLocation & location)
+        Response sliderIntegralBehavior(Context * ui, StringView label, T * value, T minimum, T maximum, T step, const SliderOptions & options, const SourceLocation & location)
         {
             using Unsigned = std::make_unsigned_t<T>;
             constexpr uint32_t ratioScale = 1U << 24U;
@@ -1215,7 +1761,7 @@ namespace Mosaic
             ui->nodes[node].showValuePopup = false;
             ui->nodes[node].showValueOnTrack = true;
             ui->nodes[node].showValueTooltip = false;
-            ui->nodes[node].tooltipDelay = 0.25f;
+            ui->nodes[node].tooltipDelay = Detail::valueTooltipDelay(ui, options.valueTooltipDelay);
             Context::Persistent & persistentState = ui->state(ui->nodes[node]);
             Detail::NumericState & numericState = ui->numericState(persistentState);
             Detail::SliderGeometry interactionGeometry = Detail::sliderGeometry(ui->nodes[node], persistentState.lastBounds);
@@ -1225,8 +1771,15 @@ namespace Mosaic
             Unsigned maximumOrdinal = Detail::integralOrdinal(maximum);
             bool descending = maximumOrdinal < minimumOrdinal;
             Unsigned range = descending ? minimumOrdinal - maximumOrdinal : maximumOrdinal - minimumOrdinal;
+            bool validStep = Detail::integralStepValid(step);
+            Unsigned stepValue = validStep == true ? static_cast<Unsigned>(step) : Unsigned{1};
             String formattedValue = "?";
             (void)Detail::formatIntegral(value == nullptr ? T{} : *value, options.format, &formattedValue);
+
+            if(validStep == false)
+            {
+                ui->frame.diagnostics.emplace_back("Integral slider step must be greater than zero");
+            }
 
             if(options.temporaryInput == true)
             {
@@ -1249,7 +1802,7 @@ namespace Mosaic
                 }
 
                 Detail::setFlag(response, 7);
-                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             bool updateSlider = numericState.temporaryInput == false;
@@ -1274,12 +1827,30 @@ namespace Mosaic
                 updateSlider = false;
             }
 
+            if(validStep == false)
+            {
+                updateSlider = false;
+            }
+
             if(updateSlider == true)
             {
                 Detail::SliderGeometry geometry = Detail::sliderGeometry(ui->nodes[node], persistentState.lastBounds);
                 float ratio = geometry.track.width <= 0.f ? 0.f : std::clamp((pointer->position.x - numericState.sliderGrabOffset - geometry.track.x) / geometry.track.width, 0.f, 1.f);
                 uint32_t numerator = static_cast<uint32_t>(ratio * static_cast<float>(ratioScale) + 0.5f);
                 Unsigned offset = Detail::scaleIntegralRange(range, numerator, ratioScale);
+                Unsigned remainder = offset % stepValue;
+                Unsigned lower = offset - remainder;
+                Unsigned half = stepValue / Unsigned{2} + stepValue % Unsigned{2};
+
+                if(remainder >= half && stepValue <= range - lower)
+                {
+                    offset = lower + stepValue;
+                }
+                else
+                {
+                    offset = lower;
+                }
+
                 T updated = Detail::integralValue<T>(descending ? minimumOrdinal - offset : minimumOrdinal + offset);
 
                 if(updated != *value)
@@ -1287,7 +1858,7 @@ namespace Mosaic
                     *value = updated;
                     Detail::setFlag(response, 6);
                     Detail::setFlag(response, 7);
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
                 }
             }
 
@@ -1295,7 +1866,7 @@ namespace Mosaic
             {
                 persistentState.editing = false;
                 Detail::setFlag(response, 8);
-                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             Detail::numberContextMenu(ui, node, response, value, minimum, maximum, location);
@@ -1304,7 +1875,7 @@ namespace Mosaic
             Unsigned distance = descending ? (valueOrdinal >= minimumOrdinal ? Unsigned{0} : static_cast<Unsigned>(minimumOrdinal - valueOrdinal)) : (valueOrdinal <= minimumOrdinal ? Unsigned{0} : static_cast<Unsigned>(valueOrdinal - minimumOrdinal));
             Unsigned valueOffset = std::min(distance, range);
             float scalar = range == 0 ? 0.f : static_cast<float>(valueOffset) / static_cast<float>(range);
-            ui->nodes[node].scalar = std::clamp(scalar, 0.f, 1.f);
+            ui->nodes[node].valueData().scalar = std::clamp(scalar, 0.f, 1.f);
             ui->nodeSemanticValue(ui->nodes[node]) = formattedValue;
 
             if(numericState.temporaryInput == false)
@@ -1324,7 +1895,7 @@ namespace Mosaic
             SliderOptions options;
             options.labelPlacement = labelPlacement;
             options.format = format;
-            auto returnedValue = Detail::sliderIntegralBehavior(ui, label, value, minimum, maximum, options, location);
+            auto returnedValue = Detail::sliderIntegralBehavior(ui, label, value, minimum, maximum, T{1}, options, location);
 
             return returnedValue;
         }
@@ -1333,7 +1904,8 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         Response sliderIntegral(Context * ui, StringView label, T * value, T minimum, T maximum, const SliderOptions & options, const SourceLocation & location)
         {
-            Response response = Detail::sliderIntegralBehavior(ui, label, value, minimum, maximum, options, location);
+            T step = static_cast<T>(Detail::integralStep<T>(options));
+            Response response = Detail::sliderIntegralBehavior(ui, label, value, minimum, maximum, step, options, location);
             for(auto node = ui->nodes.rbegin(); node != ui->nodes.rend(); ++node)
             {
                 if(node->id != response.id)
@@ -1344,10 +1916,31 @@ namespace Mosaic
                 node->showValuePopup = options.showValuePopup;
                 node->showValueOnTrack = options.showValueOnTrack;
                 node->showValueTooltip = options.showValueTooltip;
-                node->tooltipDelay = std::max(0.f, options.valueTooltipDelay);
+                node->tooltipDelay = Detail::valueTooltipDelay(ui, options.valueTooltipDelay);
                 node->layout.width = options.width;
                 break;
             }
+            Detail::validationTooltip(ui, response, options.validation, options.validationMessage, location);
+
+            return response;
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        Response sliderIntegral(Context * ui, StringView label, T * value, T minimum, T maximum, const IntegralSliderOptions<T> & options, const SourceLocation & location)
+        {
+            SliderOptions common = Detail::commonIntegralOptions(options);
+            Response response = Detail::sliderIntegralBehavior(ui, label, value, minimum, maximum, options.step, common, location);
+            Context::Node * node = ui->findFrameNode(response.item);
+
+            if(node != nullptr)
+            {
+                node->showValuePopup = options.showValuePopup;
+                node->showValueOnTrack = options.showValueOnTrack;
+                node->showValueTooltip = options.showValueTooltip;
+                node->tooltipDelay = Detail::valueTooltipDelay(ui, options.valueTooltipDelay);
+                node->layout.width = options.width;
+            }
+
             Detail::validationTooltip(ui, response, options.validation, options.validationMessage, location);
 
             return response;
@@ -1474,7 +2067,7 @@ namespace Mosaic
             ui->nodes[node].showValuePopup = showValuePopup;
             ui->nodes[node].showValueOnTrack = showValueOnTrack;
             ui->nodes[node].showValueTooltip = showValueTooltip;
-            ui->nodes[node].tooltipDelay = std::max(0.f, tooltipDelay);
+            ui->nodes[node].tooltipDelay = Detail::valueTooltipDelay(ui, tooltipDelay);
             Context::Persistent & persistentState = ui->state(ui->nodes[node]);
             Detail::NumericState & numericState = ui->numericState(persistentState);
             Detail::SliderGeometry interactionGeometry = Detail::sliderGeometry(ui->nodes[node], persistentState.lastBounds);
@@ -1508,7 +2101,7 @@ namespace Mosaic
                 }
 
                 Detail::setFlag(response, 7);
-                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             bool updateSlider = numericState.temporaryInput == false;
@@ -1556,7 +2149,7 @@ namespace Mosaic
                     *value = updated;
                     Detail::setFlag(response, 6);
                     Detail::setFlag(response, 7);
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
                 }
             }
 
@@ -1564,13 +2157,13 @@ namespace Mosaic
             {
                 persistentState.editing = false;
                 Detail::setFlag(response, 8);
-                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             Detail::numberContextMenu(ui, node, response, value, minimum, maximum, precision, location);
 
             long double scalar = value == nullptr || range <= 0.L ? 0.L : Detail::floatingSliderRatio(static_cast<long double>(*value), minimumValue, maximumValue, logarithmic, logarithmicZeroDeadzone);
-            ui->nodes[node].scalar = static_cast<float>(std::clamp(scalar, 0.L, 1.L));
+            ui->nodes[node].valueData().scalar = static_cast<float>(std::clamp(scalar, 0.L, 1.L));
             ui->nodeSemanticValue(ui->nodes[node]) = formattedValue;
 
             if(numericState.temporaryInput == false)
@@ -1639,7 +2232,7 @@ namespace Mosaic
                 }
 
                 Detail::setFlag(response, 7);
-                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             if(numericState.temporaryInput == false && value != nullptr && pointer != nullptr && ui->captured == response.id && pointer->isDown() == true)
@@ -1704,7 +2297,7 @@ namespace Mosaic
                     numericState.dragLastApplied = static_cast<long double>(updated);
                     Detail::setFlag(response, 6);
                     Detail::setFlag(response, 7);
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
                 }
                 else
                 {
@@ -1742,7 +2335,7 @@ namespace Mosaic
             {
                 persistentState.editing = false;
                 Detail::setFlag(response, 8);
-                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             Detail::numberContextMenu(ui, node, response, value, static_cast<T>(options.minimum), static_cast<T>(options.maximum), options.precision, location);
@@ -1755,7 +2348,7 @@ namespace Mosaic
 
         template<class T> requires std::is_integral_v<T>
         //////////////////////////////////////////////////////////////////////////
-        Response dragValueIntegral(Context * ui, StringView label, T * value, T minimum, T maximum, const SliderOptions & options, const SourceLocation & location)
+        Response dragValueIntegral(Context * ui, StringView label, T * value, T minimum, T maximum, IntegralUnsigned<T> step, bool validStep, const SliderOptions & options, const SourceLocation & location)
         {
             String formattedValue = "?";
             (void)Detail::formatIntegral(value == nullptr ? T{} : *value, options.format, &formattedValue);
@@ -1784,6 +2377,11 @@ namespace Mosaic
             ui->nodes[node].validation = options.validation;
             ui->nodeSemanticValue(ui->nodes[node]) = formattedValue;
 
+            if(validStep == false)
+            {
+                ui->frame.diagnostics.emplace_back("Integral drag step must be greater than zero");
+            }
+
             if(options.temporaryInput == true)
             {
                 Detail::temporaryNumberInput(ui, node, response, value, minimum, maximum, formattedValue, options.clampInput, options.clampZeroRange);
@@ -1797,32 +2395,22 @@ namespace Mosaic
                 {
                     persistentState.dragStartPosition = pointer->position;
                     persistentState.dragLastPosition = pointer->position;
-                    numericState.dragStartValue = static_cast<long double>(*value);
-                    long double integralStep = std::max(1.L, std::round(static_cast<long double>(options.step)));
-                    numericState.dragValueSpeed = Detail::automaticDragSpeed(ui->nodes[node], options, static_cast<long double>(minimum), static_cast<long double>(maximum), integralStep);
-                    numericState.dragAccumulator = 0.L;
-                    numericState.dragLastApplied = static_cast<long double>(*value);
+                    Detail::IntegralDragRate rate = Detail::automaticIntegralDragRate(ui->nodes[node], options, minimum, maximum, step);
+                    numericState.integralDragStart = static_cast<uint64_t>(Detail::integralOrdered(*value));
+                    numericState.integralDragLastApplied = numericState.integralDragStart;
+                    numericState.integralDragRateWhole = rate.whole;
+                    numericState.integralDragRateRemainder = rate.remainder;
+                    numericState.integralDragRateDenominator = rate.denominator;
+                    numericState.integralDragMotion = 0;
                     numericState.dragThresholdPassed = false;
                 }
 
                 Detail::setFlag(response, 7);
-                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
-            if(numericState.temporaryInput == false && value != nullptr && pointer != nullptr && ui->captured == response.id && pointer->isDown() == true)
+            if(numericState.temporaryInput == false && validStep == true && value != nullptr && pointer != nullptr && ui->captured == response.id && pointer->isDown() == true)
             {
-                long double speed = numericState.dragValueSpeed;
-
-                if(options.speedTweaks == true && ui->input.modifiers.shift == true)
-                {
-                    speed *= 10.L;
-                }
-
-                if(options.speedTweaks == true && ui->input.modifiers.alt == true)
-                {
-                    speed *= 0.01L;
-                }
-
                 float adjustment = 0.f;
                 bool adjusted = Detail::dragAdjustment(ui->nodes[node], persistentState, numericState, *pointer, &adjustment);
 
@@ -1833,80 +2421,74 @@ namespace Mosaic
                     return response;
                 }
 
-                long double current = static_cast<long double>(*value);
+                auto current = Detail::integralOrdered(*value);
 
-                if(current != numericState.dragLastApplied)
+                if(static_cast<uint64_t>(current) != numericState.integralDragLastApplied)
                 {
-                    numericState.dragAccumulator = 0.L;
-                    numericState.dragLastApplied = current;
+                    numericState.integralDragStart = static_cast<uint64_t>(current);
+                    numericState.integralDragLastApplied = static_cast<uint64_t>(current);
+                    numericState.integralDragMotion = 0;
                 }
 
-                numericState.dragAccumulator += static_cast<long double>(adjustment) * speed;
-                long double previous = static_cast<long double>(*value);
-                long double integralStep = std::max(1.L, std::round(static_cast<long double>(options.step)));
-                long double calculated = previous + numericState.dragAccumulator;
-                calculated = std::round(calculated / integralStep) * integralStep;
+                double motion = static_cast<double>(adjustment) * static_cast<double>(Detail::IntegralDragPointerDenominator);
 
-                if(maximum >= minimum)
+                if(options.speedTweaks == true && ui->input.modifiers.shift == true)
                 {
-                    if(options.wrapAround == true)
-                    {
-                        long double first = static_cast<long double>(minimum);
-                        long double span = static_cast<long double>(maximum) - first + 1.L;
-                        calculated = first + std::fmod(std::fmod(calculated - first, span) + span, span);
-                    }
-                    else
-                    {
-                        calculated = std::clamp(calculated, static_cast<long double>(minimum), static_cast<long double>(maximum));
-                    }
+                    motion *= 10.0;
                 }
 
-                T updated = static_cast<T>(calculated);
-
-                if(updated != *value)
+                if(options.speedTweaks == true && ui->input.modifiers.alt == true)
                 {
-                    *value = updated;
-                    numericState.dragAccumulator -= static_cast<long double>(updated) - previous;
-                    numericState.dragLastApplied = static_cast<long double>(updated);
-                    Detail::setFlag(response, 6);
-                    Detail::setFlag(response, 7);
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                    motion *= 0.01;
+                }
+
+                int64_t motionDelta = 0;
+
+                if(motion >= static_cast<double>(std::numeric_limits<int64_t>::max()))
+                {
+                    motionDelta = std::numeric_limits<int64_t>::max();
+                }
+                else if(motion <= static_cast<double>(std::numeric_limits<int64_t>::min()))
+                {
+                    motionDelta = std::numeric_limits<int64_t>::min();
                 }
                 else
                 {
-                    bool clearAccumulator = options.wrapAround == false;
+                    motionDelta = static_cast<int64_t>(std::llround(motion));
+                }
 
-                    if(maximum < minimum)
-                    {
-                        clearAccumulator = false;
-                    }
+                if(motionDelta > 0 && numericState.integralDragMotion > std::numeric_limits<int64_t>::max() - motionDelta)
+                {
+                    numericState.integralDragMotion = std::numeric_limits<int64_t>::max();
+                }
+                else if(motionDelta < 0 && numericState.integralDragMotion < std::numeric_limits<int64_t>::min() - motionDelta)
+                {
+                    numericState.integralDragMotion = std::numeric_limits<int64_t>::min();
+                }
+                else
+                {
+                    numericState.integralDragMotion += motionDelta;
+                }
 
-                    bool clampedAtMinimum = calculated <= static_cast<long double>(minimum);
+                Detail::IntegralDragRate rate;
+                rate.whole = numericState.integralDragRateWhole;
+                rate.remainder = numericState.integralDragRateRemainder;
+                rate.denominator = numericState.integralDragRateDenominator;
+                using U = Detail::IntegralUnsigned<T>;
+                uint64_t amount64 = Detail::integralDragAmount(rate, numericState.integralDragMotion, static_cast<uint64_t>(step));
+                U amount = amount64 >= static_cast<uint64_t>(std::numeric_limits<U>::max()) ? std::numeric_limits<U>::max() : static_cast<U>(amount64);
+                bool positive = numericState.integralDragMotion >= 0;
+                T start = Detail::integralFromOrdered<T>(static_cast<Detail::IntegralUnsigned<T>>(numericState.integralDragStart));
+                T previous = *value;
+                T updated = Detail::applyIntegralDrag(start, minimum, maximum, amount, positive, options.wrapAround);
 
-                    if(numericState.dragAccumulator >= 0.L)
-                    {
-                        clampedAtMinimum = false;
-                    }
-
-                    bool clampedAtMaximum = calculated >= static_cast<long double>(maximum);
-
-                    if(numericState.dragAccumulator <= 0.L)
-                    {
-                        clampedAtMaximum = false;
-                    }
-
-                    if(clampedAtMinimum == false)
-                    {
-                        if(clampedAtMaximum == false)
-                        {
-                            clearAccumulator = false;
-                        }
-                    }
-
-                    if(clearAccumulator == true)
-                    {
-                        numericState.dragAccumulator = 0.L;
-                    }
+                if(updated != previous)
+                {
+                    *value = updated;
+                    numericState.integralDragLastApplied = static_cast<uint64_t>(Detail::integralOrdered(updated));
+                    Detail::setFlag(response, 6);
+                    Detail::setFlag(response, 7);
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
                 }
             }
 
@@ -1914,7 +2496,7 @@ namespace Mosaic
             {
                 persistentState.editing = false;
                 Detail::setFlag(response, 8);
-                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             Detail::numberContextMenu(ui, node, response, value, minimum, maximum, location);
@@ -1922,6 +2504,26 @@ namespace Mosaic
             Detail::validationTooltip(ui, response, options.validation, options.validationMessage, location);
 
             return response;
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        Response dragValueIntegral(Context * ui, StringView label, T * value, T minimum, T maximum, const SliderOptions & options, const SourceLocation & location)
+        {
+            IntegralUnsigned<T> step = Detail::integralStep<T>(options);
+            auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, step, true, options, location);
+
+            return returnedValue;
+        }
+
+        template<class T> requires std::is_integral_v<T>
+        Response dragValueIntegral(Context * ui, StringView label, T * value, T minimum, T maximum, const IntegralSliderOptions<T> & options, const SourceLocation & location)
+        {
+            SliderOptions common = Detail::commonIntegralOptions(options);
+            bool validStep = Detail::integralStepValid(options.step);
+            IntegralUnsigned<T> step = validStep == true ? static_cast<IntegralUnsigned<T>>(options.step) : IntegralUnsigned<T>{1};
+            auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, step, validStep, common, location);
+
+            return returnedValue;
         }
         //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] TreeScope treeNode(Context * ui, const Key & key, StringView label, const TreeNodeOptions & options, bool * open, const SourceLocation & location)
@@ -1939,17 +2541,17 @@ namespace Mosaic
             }
 
             size_t node = ui->addNode(Detail::NodeKind::Tree, key, label, layout, location, SemanticRole::TreeItem, true);
-            ui->nodes[node].treeFramed = options.framed;
-            ui->nodes[node].treeLeaf = options.leaf;
-            ui->nodes[node].treeBullet = options.bullet;
+            ui->nodes[node].mutableTreeData().framed = options.framed;
+            ui->nodes[node].mutableTreeData().leaf = options.leaf;
+            ui->nodes[node].mutableTreeData().bullet = options.bullet;
             ui->nodes[node].selected = options.selected;
-            ui->nodes[node].treeFramePadding = options.framePadding;
-            ui->nodes[node].treeSpanLabelWidth = options.spanLabelWidth;
-            ui->nodes[node].treeSpanAllColumns = options.spanAllColumns;
-            ui->nodes[node].treeLabelSpanAllColumns = options.labelSpanAllColumns;
-            ui->nodes[node].treeAlignLabelWithCurrentX = options.alignLabelWithCurrentX;
-            ui->nodes[node].treeNavigationLeftJumpsToParent = options.navigationLeftJumpsToParent;
-            ui->nodes[node].treeLines = options.lines;
+            ui->nodes[node].mutableTreeData().framePadding = options.framePadding;
+            ui->nodes[node].mutableTreeData().spanLabelWidth = options.spanLabelWidth;
+            ui->nodes[node].mutableTreeData().spanAllColumns = options.spanAllColumns;
+            ui->nodes[node].mutableTreeData().labelSpanAllColumns = options.labelSpanAllColumns;
+            ui->nodes[node].mutableTreeData().alignLabelWithCurrentX = options.alignLabelWithCurrentX;
+            ui->nodes[node].mutableTreeData().navigationLeftJumpsToParent = options.navigationLeftJumpsToParent;
+            ui->nodes[node].mutableTreeData().lines = options.lines == TreeLineMode::Style ? ui->nodes[node].style->metrics.treeLineMode : options.lines;
             Context::Persistent & persistentState = ui->state(ui->nodes[node]);
             Context::Persistent * parentPersistentState = nullptr;
 
@@ -1974,7 +2576,7 @@ namespace Mosaic
             }
 
             bool logExpanded = ui->textLogEnabled && ui->textLogAutoExpandTrees == true && node >= ui->textLogStartNode && Detail::textLogTreeDepth(ui, node, ui->textLogRootNode) < ui->textLogMaximumDepth;
-            ui->nodes[node].treeCloseVisible = open != nullptr;
+            ui->nodes[node].mutableTreeData().closeVisible = open != nullptr;
             Rect interactionBounds = persistentState.lastBounds;
 
             if(open != nullptr)
@@ -1991,9 +2593,9 @@ namespace Mosaic
             if(open != nullptr && pointer != nullptr)
             {
                 Rect closeBounds = {persistentState.lastBounds.right() - ui->currentStyle->metrics.controlHeight, persistentState.lastBounds.y, ui->currentStyle->metrics.controlHeight, persistentState.lastBounds.height};
-                ui->nodes[node].treeCloseHovered = closeBounds.contains(pointer->position);
+                ui->nodes[node].mutableTreeData().closeHovered = closeBounds.contains(pointer->position);
 
-                if(ui->nodes[node].treeCloseHovered && pointer->isPressed(PointerButton::Primary) == true)
+                if(ui->nodes[node].mutableTreeData().closeHovered && pointer->isPressed(PointerButton::Primary) == true)
                 {
                     *open = false;
                     Detail::setFlag(response, 6);
@@ -2034,7 +2636,7 @@ namespace Mosaic
 
             if(pointerToggle == true)
             {
-                persistentState.expanded = !persistentState.expanded;
+                persistentState.expanded = persistentState.expanded == false;
                 navigationToggle = true;
             }
 
@@ -2167,7 +2769,7 @@ namespace Mosaic
 
             if(result.visible() == true)
             {
-                ui->nodes[ui->currentParent].windowAttachedPopup = true;
+                ui->nodes[ui->currentParent].mutableWindowData().attachedPopup = true;
             }
 
             auto returnedValue = TreeScope(std::move(result));
@@ -2276,7 +2878,8 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         template<class Getter> Response comboItems(Context * ui, StringView label, int * selected, size_t itemCount, Getter && getter, const ComboOptions & options, const SourceLocation & location)
         {
-            Id owner = combineId(ui->nodes[ui->currentParent].id, ui->localId(Detail::NodeKind::Combo, {}, location, false));
+            Id identityParent = ui->nodes[ui->currentParent].identityScope;
+            Id owner = combineId(identityParent, ui->localId(Detail::NodeKind::Combo, {}, location, false));
             bool wasOpen = Mosaic::isComboOpen(ui, owner);
             StringView preview = selected != nullptr && *selected >= 0 && static_cast<size_t>(*selected) < itemCount ? getter(static_cast<size_t>(*selected)) : StringView{};
             Response response;
@@ -2302,10 +2905,10 @@ namespace Mosaic
             {
                 Context::Persistent & listState = ui->state(list.id());
                 float stride = itemExtent + ui->gap(ui->nodes[ui->currentParent]);
-                listState.scrollPosition.y = std::max(0.f, static_cast<float>(*selected) * stride);
-                listState.scrollTarget = listState.scrollPosition;
-                listState.scrollVelocity = {};
-                listState.scrollTargetInitialized = true;
+                listState.scrollData().position.y = std::max(0.f, static_cast<float>(*selected) * stride);
+                listState.scrollData().target = listState.scrollData().position;
+                listState.scrollData().velocity = {};
+                listState.scrollData().targetInitialized = true;
             }
 
             VisibleRange range;
@@ -2351,7 +2954,7 @@ namespace Mosaic
                 return;
             }
 
-            node->colorMarkerEnabled = true;
+            node->valueData().colorMarkerEnabled = true;
             node->colorMarker = markers[std::min(component, markers.size() - 1)];
         }
         //////////////////////////////////////////////////////////////////////////
@@ -2503,7 +3106,7 @@ namespace Mosaic
     Response iconButton(Context * ui, const Key & key, TextureHandle texture, StringView description, const SourceLocation & location)
     {
         size_t node = ui->addNode(Detail::NodeKind::IconButton, key, description, {}, location, SemanticRole::Button, true);
-        ui->nodes[node].texture = texture;
+        ui->nodes[node].mutableImageData().texture = texture;
         auto returnedValue = ui->interact(node);
 
         return returnedValue;
@@ -2526,7 +3129,7 @@ namespace Mosaic
             *value = !*value;
             Detail::setFlag(response, 6);
             ui->nodes[node].response = response;
-            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         Detail::booleanContextMenu(ui, node, response, value, location);
@@ -2564,6 +3167,7 @@ namespace Mosaic
         LayoutOptions layout;
         layout.width = options.width;
         layout.height = options.height;
+        layout.absoluteRect = options.absoluteRect;
         size_t node = ui->addNode(Detail::NodeKind::Selectable, key, label, layout, location, SemanticRole::TreeItem, true);
         ui->nodes[node].selected = selected;
         ui->nodes[node].highlighted = options.highlight;
@@ -2817,6 +3421,13 @@ namespace Mosaic
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
+    Response selectionItem(Context * ui, const Response & response, SelectionModel * selection, Id item, IdSpan orderedItems, const SelectionOptions & options)
+    {
+        auto returnedValue = Detail::applySelection(ui, response, selection, item, orderedItems, options);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
     Scope multiSelect(Context * ui, const Key & key, SelectionModel * selection, IdSpan orderedItems, const SelectionOptions & options, const SourceLocation & location)
     {
         size_t node = ui->addNode(Detail::NodeKind::Scope, key, key.debug(), {}, location, SemanticRole::Group);
@@ -2948,11 +3559,14 @@ namespace Mosaic
             ui->activeBoxSelection = InvalidId;
             ui->boxSelectionModel = nullptr;
             ui->boxSelectionOriginal.clear();
+            ui->boxSelectionBounds = {};
 
             if(ui->captured == surface)
             {
                 ui->active = InvalidId;
+                ui->activeItem = {};
                 ui->captured = InvalidId;
+                ui->capturedItem = {};
                 ui->capturedPointer = 0;
             }
         };
@@ -2999,7 +3613,7 @@ namespace Mosaic
         }
 
         bool inside = state.lastBounds.contains(pointer->position) && state.lastClip.contains(pointer->position);
-        bool scrollbarHit = state.verticalScrollbarTrack.contains(pointer->position) || state.horizontalScrollbarTrack.contains(pointer->position);
+        bool scrollbarHit = state.scrollData().verticalTrack.contains(pointer->position) || state.scrollData().horizontalTrack.contains(pointer->position);
 
         if(options.enabled == false)
         {
@@ -3073,6 +3687,7 @@ namespace Mosaic
 
             state.dragStartPosition = pointer->position;
             state.dragLastPosition = pointer->position;
+            ui->boxSelectionBounds = {};
             ui->active = surface;
             ui->captured = surface;
             ui->capturedPointer = pointer->id;
@@ -3097,6 +3712,7 @@ namespace Mosaic
         float left = oneDimensional ? state.lastBounds.x : std::min(state.dragStartPosition.x, current.x);
         float top = std::min(state.dragStartPosition.y, current.y);
         Rect selectionBounds = {left, top, oneDimensional ? state.lastBounds.width : std::abs(current.x - state.dragStartPosition.x), std::abs(current.y - state.dragStartPosition.y)};
+        ui->boxSelectionBounds = selectionBounds;
 
         if(pointer->isDown() == true)
         {
@@ -3104,7 +3720,7 @@ namespace Mosaic
             {
                 constexpr float edge = 20.f;
                 float speed = 360.f * std::max(0.f, ui->input.deltaTime);
-                Vec2 target = state.scrollTargetInitialized ? state.scrollTarget : state.scrollPosition;
+                Vec2 target = state.scrollData().targetInitialized ? state.scrollData().target : state.scrollData().position;
 
                 if(pointer->position.y < state.lastBounds.y + edge)
                 {
@@ -3256,7 +3872,7 @@ namespace Mosaic
         sliderNode.showValuePopup = options.showValuePopup;
         sliderNode.showValueOnTrack = options.showValueOnTrack;
         sliderNode.showValueTooltip = options.showValueTooltip;
-        sliderNode.tooltipDelay = std::max(0.f, options.valueTooltipDelay);
+        sliderNode.tooltipDelay = Detail::valueTooltipDelay(ui, options.valueTooltipDelay);
         Context::Persistent & persistentState = ui->state(sliderNode);
         Response response = ui->interact(node, false);
         const PointerState * pointer = ui->input.primaryPointer();
@@ -3315,7 +3931,7 @@ namespace Mosaic
         }
 
         float scalar = value == nullptr || range == 0.f ? 0.f : (*value - minimum) / range;
-        sliderNode.scalar = std::clamp(scalar, 0.f, 1.f);
+        sliderNode.valueData().scalar = std::clamp(scalar, 0.f, 1.f);
         String formatted = "?";
         (void)Detail::formatFloating(value == nullptr ? 0.f : *value, options.precision, options.format, &formatted);
         ui->nodeSemanticValue(sliderNode) = formatted;
@@ -3339,13 +3955,16 @@ namespace Mosaic
         sliderNode.showValuePopup = options.showValuePopup;
         sliderNode.showValueOnTrack = options.showValueOnTrack;
         sliderNode.showValueTooltip = options.showValueTooltip;
-        sliderNode.tooltipDelay = std::max(0.f, options.valueTooltipDelay);
+        sliderNode.tooltipDelay = Detail::valueTooltipDelay(ui, options.valueTooltipDelay);
         Context::Persistent & persistentState = ui->state(sliderNode);
         Response response = ui->interact(node, false);
         const PointerState * pointer = ui->input.primaryPointer();
-        int64_t minimumValue = minimum;
-        int64_t maximumValue = maximum;
-        int64_t range = maximumValue - minimumValue;
+        using Unsigned = std::make_unsigned_t<int32_t>;
+        constexpr uint32_t ratioScale = 1U << 24U;
+        Unsigned minimumOrdinal = Detail::integralOrdinal(minimum);
+        Unsigned maximumOrdinal = Detail::integralOrdinal(maximum);
+        bool descending = maximumOrdinal < minimumOrdinal;
+        Unsigned range = descending == true ? minimumOrdinal - maximumOrdinal : maximumOrdinal - minimumOrdinal;
 
         if(response.pressed() == true)
         {
@@ -3375,10 +3994,9 @@ namespace Mosaic
             float grabLength = std::clamp(ui->currentStyle->metrics.grabMinimumSize, 1.f, persistentState.lastBounds.height);
             float usableLength = std::max(1.f, persistentState.lastBounds.height - grabLength);
             float ratio = std::clamp(1.f - (pointer->position.y - persistentState.lastBounds.y - grabLength * 0.5f) / usableLength, 0.f, 1.f);
-            int64_t distance = range > 0 ? range : -range;
-            int64_t offset = static_cast<int64_t>(std::llround(static_cast<double>(distance) * static_cast<double>(ratio)));
-            int64_t calculated = range > 0 ? minimumValue + offset : minimumValue - offset;
-            int32_t updated = static_cast<int32_t>(std::clamp(calculated, std::min(minimumValue, maximumValue), std::max(minimumValue, maximumValue)));
+            uint32_t numerator = static_cast<uint32_t>(ratio * static_cast<float>(ratioScale) + 0.5f);
+            Unsigned offset = Detail::scaleIntegralRange(range, numerator, ratioScale);
+            int32_t updated = Detail::integralValue<int32_t>(descending == true ? minimumOrdinal - offset : minimumOrdinal + offset);
 
             if(updated != *value)
             {
@@ -3394,8 +4012,10 @@ namespace Mosaic
             Detail::setFlag(response, 8);
         }
 
-        float scalar = value == nullptr || range == 0 ? 0.f : static_cast<float>(static_cast<int64_t>(*value) - minimumValue) / static_cast<float>(range);
-        sliderNode.scalar = std::clamp(scalar, 0.f, 1.f);
+        Unsigned valueOrdinal = value == nullptr ? minimumOrdinal : Detail::integralOrdinal(*value);
+        Unsigned distance = descending == true ? (valueOrdinal >= minimumOrdinal ? Unsigned{0} : static_cast<Unsigned>(minimumOrdinal - valueOrdinal)) : (valueOrdinal <= minimumOrdinal ? Unsigned{0} : static_cast<Unsigned>(valueOrdinal - minimumOrdinal));
+        float scalar = range == 0 ? 0.f : static_cast<float>(std::min(distance, range)) / static_cast<float>(range);
+        sliderNode.valueData().scalar = std::clamp(scalar, 0.f, 1.f);
         String formatted = "?";
         (void)Detail::formatIntegral(value == nullptr ? int32_t{} : *value, options.format, &formatted);
         ui->nodeSemanticValue(sliderNode) = formatted;
@@ -3575,6 +4195,62 @@ namespace Mosaic
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, int8_t * value, int8_t minimum, int8_t maximum, const IntegralSliderOptions<int8_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, uint8_t * value, uint8_t minimum, uint8_t maximum, const IntegralSliderOptions<uint8_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, int16_t * value, int16_t minimum, int16_t maximum, const IntegralSliderOptions<int16_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, uint16_t * value, uint16_t minimum, uint16_t maximum, const IntegralSliderOptions<uint16_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, int32_t * value, int32_t minimum, int32_t maximum, const IntegralSliderOptions<int32_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, uint32_t * value, uint32_t minimum, uint32_t maximum, const IntegralSliderOptions<uint32_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, int64_t * value, int64_t minimum, int64_t maximum, const IntegralSliderOptions<int64_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response slider(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const IntegralSliderOptions<uint64_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::sliderIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
     Response slider(Context * ui, StringView label, float * value, float minimum, float maximum, const SourceLocation & location)
     {
         auto returnedValue = Detail::sliderFloating(ui, label, value, minimum, maximum, 0.f, 3, false, true, false, 0.25f, false, true, false, false, true, Validation::Normal, LabelPlacement::Before, {}, location);
@@ -3602,8 +4278,8 @@ namespace Mosaic
 
         size_t node = ui->addNode(Detail::NodeKind::Progress, {}, overlay, {}, location);
         ui->nodes[node].selected = value < 0.f;
-        ui->nodes[node].scalar = value < 0.f ? 0.f : std::clamp(value, 0.f, 1.f);
-        ui->nodes[node].secondaryScalar = value < 0.f ? std::fmod(std::abs(value), 1.f) : 0.f;
+        ui->nodes[node].valueData().scalar = value < 0.f ? 0.f : std::clamp(value, 0.f, 1.f);
+        ui->nodes[node].valueData().secondaryScalar = value < 0.f ? std::fmod(std::abs(value), 1.f) : 0.f;
         Response response;
         response.id = ui->nodes[node].id;
         ui->nodes[node].response = response;
@@ -3740,7 +4416,7 @@ namespace Mosaic
     Response spacer(Context * ui, float size, const SourceLocation & location)
     {
         size_t node = ui->addNode(Detail::NodeKind::Spacer, {}, {}, {}, location, SemanticRole::None, false, true);
-        ui->nodes[node].scalar = std::max(0.f, size);
+        ui->nodes[node].valueData().scalar = std::max(0.f, size);
         Response response;
         response.id = ui->nodes[node].id;
         ui->nodes[node].response = response;
@@ -3751,9 +4427,9 @@ namespace Mosaic
     Response image(Context * ui, TextureHandle texture, const Vec2 & size, const Rect & uv, const Color & tint, const SourceLocation & location)
     {
         size_t node = ui->addNode(Detail::NodeKind::Image, {}, "image", {}, location, SemanticRole::Image, false, true);
-        ui->nodes[node].texture = texture;
+        ui->nodes[node].mutableImageData().texture = texture;
         ui->nodes[node].measured = size;
-        ui->nodes[node].uv = uv;
+        ui->nodes[node].mutableImageData().uv = uv;
         ui->nodes[node].tint = tint;
         Response response;
         response.id = ui->nodes[node].id;
@@ -3766,13 +4442,17 @@ namespace Mosaic
     {
         size_t node = ui->addNode(Detail::NodeKind::Image, {}, "image", {}, location, SemanticRole::Image, false, true);
         Context::Node & imageNode = ui->nodes[node];
-        imageNode.texture = texture;
-        imageNode.imagePadding = std::max(0.f, options.padding);
-        imageNode.measured = {size.x + imageNode.imagePadding * 2.f, size.y + imageNode.imagePadding * 2.f};
-        imageNode.uv = options.uv;
+        imageNode.mutableImageData().texture = texture;
+        imageNode.mutableImageData().sampler = options.sampler;
+        imageNode.mutableImageData().padding = std::max(0.f, options.padding);
+        imageNode.measured = {size.x + imageNode.mutableImageData().padding * 2.f, size.y + imageNode.mutableImageData().padding * 2.f};
+        imageNode.mutableImageData().uv = options.uv;
         imageNode.tint = options.tint;
-        imageNode.imageBackground = options.background;
-        imageNode.imageBackgroundEnabled = options.backgroundEnabled;
+        imageNode.mutableImageData().background = options.background;
+        imageNode.mutableImageData().borderColor = options.borderColor.a > 0.f ? options.borderColor : imageNode.style->colors.border;
+        imageNode.mutableImageData().rounding = options.rounding >= 0.f ? options.rounding : imageNode.style->metrics.imageRounding;
+        imageNode.mutableImageData().borderSize = options.borderSize >= 0.f ? options.borderSize : imageNode.style->metrics.imageBorderSize;
+        imageNode.mutableImageData().backgroundEnabled = options.backgroundEnabled;
         Response response;
         response.id = imageNode.id;
         imageNode.response = response;
@@ -3790,13 +4470,14 @@ namespace Mosaic
     Response imageButton(Context * ui, const Key & key, TextureHandle texture, const Vec2 & size, const ImageButtonOptions & options, const SourceLocation & location)
     {
         size_t node = ui->addNode(Detail::NodeKind::ImageButton, key, "image", {}, location, SemanticRole::Button, true);
-        ui->nodes[node].texture = texture;
+        ui->nodes[node].mutableImageData().texture = texture;
+        ui->nodes[node].mutableImageData().sampler = options.sampler;
         ui->nodes[node].measured = size;
-        ui->nodes[node].uv = options.uv;
+        ui->nodes[node].mutableImageData().uv = options.uv;
         ui->nodes[node].tint = options.tint;
-        ui->nodes[node].imageBackground = options.background;
-        ui->nodes[node].imagePadding = std::max(0.f, options.padding);
-        ui->nodes[node].imageBackgroundEnabled = options.backgroundEnabled;
+        ui->nodes[node].mutableImageData().background = options.background;
+        ui->nodes[node].mutableImageData().padding = std::max(0.f, options.padding);
+        ui->nodes[node].mutableImageData().backgroundEnabled = options.backgroundEnabled;
         auto returnedValue = ui->interact(node);
 
         return returnedValue;
@@ -3990,6 +4671,62 @@ namespace Mosaic
     }
     //////////////////////////////////////////////////////////////////////////
     Response dragValue(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const SliderOptions & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, int8_t * value, int8_t minimum, int8_t maximum, const IntegralSliderOptions<int8_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, uint8_t * value, uint8_t minimum, uint8_t maximum, const IntegralSliderOptions<uint8_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, int16_t * value, int16_t minimum, int16_t maximum, const IntegralSliderOptions<int16_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, uint16_t * value, uint16_t minimum, uint16_t maximum, const IntegralSliderOptions<uint16_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, int32_t * value, int32_t minimum, int32_t maximum, const IntegralSliderOptions<int32_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, uint32_t * value, uint32_t minimum, uint32_t maximum, const IntegralSliderOptions<uint32_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, int64_t * value, int64_t minimum, int64_t maximum, const IntegralSliderOptions<int64_t> & options, const SourceLocation & location)
+    {
+        auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response dragValue(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const IntegralSliderOptions<uint64_t> & options, const SourceLocation & location)
     {
         auto returnedValue = Detail::dragValueIntegral(ui, label, value, minimum, maximum, options, location);
 
@@ -4197,7 +4934,8 @@ namespace Mosaic
             return false;
         }
 
-        Id owner = combineId(ui->nodes[ui->currentParent].id, key.value());
+        Id identityParent = ui->nodes[ui->currentParent].identityScope;
+        Id owner = combineId(identityParent, key.value());
         auto returnedValue = Mosaic::isPopupOpen(ui, Detail::comboPopupKey(), owner);
 
         return returnedValue;
@@ -4224,7 +4962,7 @@ namespace Mosaic
         popupOptions.minimumSize.x = 0.f;
         popupOptions.maximumSize.x = std::numeric_limits<float>::max();
         popupOptions.maximumSize.y = Detail::comboPopupMaximumHeight(ui, options.popupHeight);
-        popupOptions.horizontalAlignment = options.popupAlignLeft ? PopupHorizontalAlignment::End : PopupHorizontalAlignment::Start;
+        popupOptions.horizontalAlignment = options.popupAlignLeft ? PopupHorizontalAlignment::Start : PopupHorizontalAlignment::End;
         auto returnedValue = Detail::comboPopup(ui, response, popupOptions, location);
 
         return returnedValue;
@@ -4370,7 +5108,7 @@ namespace Mosaic
                     break;
                 }
 
-                if(open[index - 1])
+                if(open[index - 1] == true)
                 {
                     *selected = static_cast<int>(index - 1);
                     break;
@@ -4395,7 +5133,7 @@ namespace Mosaic
                         break;
                     }
 
-                    if(open[index])
+                    if(open[index] == true)
                     {
                         *selected = static_cast<int>(index);
                         break;
@@ -4599,7 +5337,7 @@ namespace Mosaic
                             {
                                 for(size_t replacement : tabState.order)
                                 {
-                                    if(open[replacement])
+                                    if(open[replacement] == true)
                                     {
                                         *selected = static_cast<int>(replacement);
                                         break;
@@ -4644,7 +5382,7 @@ namespace Mosaic
                             {
                                 for(size_t replacement : tabState.order)
                                 {
-                                    if(open[replacement])
+                                    if(open[replacement] == true)
                                     {
                                         *selected = static_cast<int>(replacement);
                                         break;
@@ -5035,14 +5773,24 @@ namespace Mosaic
         {
             *open = false;
 
-            if(state.selectedItem == tabNode.id)
+            if(options.noAssumedClosure == true)
+            {
+                state.selectedItem = tabNode.id;
+                tabNode.checked = true;
+            }
+
+            if(options.noAssumedClosure == false && state.selectedItem == tabNode.id)
             {
                 state.selectedItem = InvalidId;
             }
 
-            state.submittedItems.erase(std::remove(state.submittedItems.begin(), state.submittedItems.end(), tabNode.id), state.submittedItems.end());
-            state.orderIds.erase(std::remove(state.orderIds.begin(), state.orderIds.end(), tabNode.id), state.orderIds.end());
-            tabNode.checked = false;
+            if(options.noAssumedClosure == false)
+            {
+                state.submittedItems.erase(std::remove(state.submittedItems.begin(), state.submittedItems.end(), tabNode.id), state.submittedItems.end());
+                state.orderIds.erase(std::remove(state.orderIds.begin(), state.orderIds.end(), tabNode.id), state.orderIds.end());
+                tabNode.checked = false;
+            }
+
             Detail::setFlag(response, 6);
         }
 
@@ -5066,17 +5814,24 @@ namespace Mosaic
 
         if(tabNode.checked == false)
         {
-            return {};
+            return {nullptr, 0, tabNode.id, false};
         }
 
         if((open != nullptr && *open == false))
         {
-            return {};
+            return {nullptr, 0, tabNode.id, false};
         }
 
+        Id barId = barNode.id;
         LayoutOptions contentLayout;
         contentLayout.width = SizeRule::Fill;
         size_t contentNode = ui->addNode(Detail::NodeKind::Column, Key(tabNode.id), {}, contentLayout, location, SemanticRole::Group);
+
+        if(options.noPushId == true)
+        {
+            ui->nodes[contentNode].identityScope = barId;
+        }
+
         uint64_t token = ui->pushScope(contentNode, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[contentNode].id, true};
@@ -5655,7 +6410,7 @@ namespace Mosaic
 
         if(options.picker == true && options.openPickerOnClick == true && response.clicked() == true && colorState.activeChannel == 0xffU)
         {
-            pickerOpen = !pickerOpen;
+            pickerOpen = pickerOpen == false;
 
             if(pickerOpen == true)
             {
@@ -5669,13 +6424,13 @@ namespace Mosaic
                 pickerOptions.closeOnSelection = false;
                 Mosaic::openPopup(ui, pickerPopupKey, pickerOptions);
                 Detail::setFlag(response, 7);
-                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
             else
             {
                 Mosaic::closePopup(ui, pickerPopupKey, response.id);
                 Detail::setFlag(response, 8);
-                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
         }
 
@@ -6064,19 +6819,19 @@ namespace Mosaic
         if(pickerWasOpen == true && pickerOpen == false && response.clicked() == false)
         {
             Detail::setFlag(response, 8);
-            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(changed == true)
         {
             Detail::setFlag(response, 6);
             Detail::setFlag(response, 7, pickerOpen);
-            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(contextChanged == true)
         {
-            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         colorState.pickerOpen = pickerOpen;
@@ -6141,7 +6896,7 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Response colorEditorRgb(Context * ui, StringView label, Color * color, const SourceLocation & location)
     {
-        auto returnedValue = Detail::colorEditor(ui, label, color, false, ColorEditOptions{}, location);
+        auto returnedValue = Mosaic::colorEditorRgb(ui, label, color, ui->defaultColorEditOptions, location);
 
         return returnedValue;
     }
@@ -6172,7 +6927,7 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Response colorEditorRgba(Context * ui, StringView label, Color * color, const SourceLocation & location)
     {
-        auto returnedValue = Detail::colorEditor(ui, label, color, true, ColorEditOptions{}, location);
+        auto returnedValue = Mosaic::colorEditorRgba(ui, label, color, ui->defaultColorEditOptions, location);
 
         return returnedValue;
     }
@@ -6501,6 +7256,13 @@ namespace Mosaic
         return aggregate;
     }
     //////////////////////////////////////////////////////////////////////////
+    Response colorPickerRgb(Context * ui, StringView label, Color * color, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::colorPickerRgb(ui, label, color, ui->defaultColorPickerOptions, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
     Response colorPickerRgb(Context * ui, StringView label, Color * color, const ColorPickerOptions & options, const SourceLocation & location)
     {
         if(options.inputIsHsv == true && color != nullptr)
@@ -6521,6 +7283,13 @@ namespace Mosaic
         }
 
         auto returnedValue = Detail::colorPicker(ui, label, color, false, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Response colorPickerRgba(Context * ui, StringView label, Color * color, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::colorPickerRgba(ui, label, color, ui->defaultColorPickerOptions, location);
 
         return returnedValue;
     }

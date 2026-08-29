@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <limits>
 
 namespace MosaicExample
 {
@@ -58,7 +59,7 @@ namespace MosaicExample
         {
             for(size_t row = firstRow; row != lastRow; ++row)
             {
-                Mosaic::tableNextRow(ui);
+                Mosaic::tableNextRow(ui, Mosaic::Key(row));
                 for(uint32_t column = 0; column != columnCount; ++column)
                 {
                     if(Mosaic::tableSetColumn(ui, column) == false)
@@ -189,7 +190,7 @@ namespace MosaicExample
 
             for(size_t row = rows.begin; row != rows.end; ++row)
             {
-                Mosaic::tableNextRow(ui);
+                Mosaic::tableNextRow(ui, Mosaic::Key(row));
                 for(uint32_t column = 0; column != headers.size(); ++column)
                 {
                     if(Mosaic::tableSetColumn(ui, column) == false && column != 0)
@@ -211,6 +212,50 @@ namespace MosaicExample
                     }
                 }
             }
+
+            Mosaic::spacer(ui, 2.f);
+            Mosaic::separatorText(ui, "Stretch + ScrollX");
+            Mosaic::helpMarker(ui, "Stretch columns can be combined with horizontal scrolling only when the table has an explicit inner width larger than its visible outer width.");
+            static bool stretchScrollHorizontal = true;
+            static float stretchInnerWidth = 1000.f;
+            Mosaic::checkbox(ui, Mosaic::Key("stretch scrolling flag"), "MosaicTableFlags_ScrollX", &stretchScrollHorizontal);
+            Mosaic::SliderOptions innerWidthOptions;
+            innerWidthOptions.minimum = 0.0;
+            innerWidthOptions.maximum = std::numeric_limits<float>::max();
+            innerWidthOptions.dragSpeed = 1.0;
+            Mosaic::dragValue(ui, "inner_width", &stretchInnerWidth, innerWidthOptions);
+            Mosaic::TableOptions stretchOptions = baseOptions;
+            stretchOptions.scrollHorizontal = stretchScrollHorizontal;
+            stretchOptions.scrollVertical = true;
+            stretchOptions.rowBackground = true;
+            stretchOptions.bordersOuterHorizontal = true;
+            stretchOptions.bordersOuterVertical = true;
+            stretchOptions.contextMenuInBody = true;
+            stretchOptions.innerWidth = stretchScrollHorizontal ? std::max(0.f, stretchInnerWidth) : 0.f;
+            {
+                auto table = Mosaic::table(ui, "Stretch horizontal scrolling table", 7, stretchOptions, layout);
+                for(uint32_t column = 0; column != 7; ++column)
+                {
+                    Mosaic::TableColumnOptions columnOptions;
+                    columnOptions.sizing = Mosaic::TableSizing::StretchSame;
+                    columnOptions.widthOrWeight = 1.f;
+                    Mosaic::tableSetupColumn(ui, column, headers[column], columnOptions);
+                }
+
+                for(size_t row = 0; row != 20; ++row)
+                {
+                    Mosaic::tableNextRow(ui, Mosaic::Key(row));
+                    for(uint32_t column = 0; column != 7; ++column)
+                    {
+                        if(Mosaic::tableSetColumn(ui, column) == false)
+                        {
+                            continue;
+                        }
+
+                        Mosaic::text(ui, Detail::tableDemoCell(column, row, "Hello world "));
+                    }
+                }
+            }
         }
         //////////////////////////////////////////////////////////////////////////
         void drawOuterSizeTableDemo(Mosaic::Context * ui, const Mosaic::TableOptions & baseOptions)
@@ -221,7 +266,6 @@ namespace MosaicExample
             Mosaic::checkbox(ui, "MosaicTableFlags_NoHostExtendX", &noHostExtendHorizontal);
             Mosaic::checkbox(ui, "MosaicTableFlags_NoHostExtendY", &noHostExtendVertical);
             {
-                auto firstRow = Mosaic::row(ui);
                 Mosaic::TableOptions options = baseOptions;
                 options.rowBackground = true;
                 options.resizable = true;
@@ -238,13 +282,18 @@ namespace MosaicExample
                 auto table = Mosaic::table(ui, "Outer size constrained table", 3, options, layout);
                 Detail::tableDemoSetupColumns(ui, 3, Mosaic::TableSizing::FixedFit, 0.f);
                 Detail::tableDemoRows(ui, 0, 10, 3);
+                Mosaic::sameLine(ui);
                 Mosaic::text(ui, "Hello!");
             }
 
             Mosaic::text(ui, "Using explicit size:");
-            auto explicitTables = Mosaic::row(ui);
             for(size_t instance = 0; instance != 2; ++instance)
             {
+                if(instance != 0)
+                {
+                    Mosaic::sameLine(ui);
+                }
+
                 auto instanceScope = Mosaic::scope(ui, Mosaic::Key(instance));
                 Mosaic::TableOptions options = baseOptions;
                 options.rowBackground = true;
@@ -263,7 +312,7 @@ namespace MosaicExample
                     {
                         Mosaic::TableRowOptions rowOptions;
                         rowOptions.minimumHeight = Mosaic::getTheme(ui).metrics.lineHeight * 1.5f;
-                        Mosaic::tableNextRow(ui, rowOptions);
+                        Mosaic::tableNextRow(ui, Mosaic::Key(row), rowOptions);
                         for(uint32_t column = 0; column != 3; ++column)
                         {
                             if(Mosaic::tableSetColumn(ui, column) == false)
@@ -308,7 +357,7 @@ namespace MosaicExample
             auto table = Mosaic::table(ui, "Background color table", 5, options);
             for(size_t row = 0; row != 6; ++row)
             {
-                Mosaic::tableNextRow(ui);
+                Mosaic::tableNextRow(ui, Mosaic::Key(row));
 
                 if(rowBackgroundType != 0)
                 {
@@ -384,7 +433,7 @@ namespace MosaicExample
             auto drawNode = [ui, &nodes](const auto & self, size_t index, size_t depth) -> void
             {
                 const TableDemoTreeNode & value = nodes[index];
-                Mosaic::tableNextRow(ui);
+                Mosaic::tableNextRow(ui, Mosaic::Key(index));
                 (void)Mosaic::tableSetColumn(ui, 0);
                 Mosaic::TreeNodeOptions nodeOptions;
                 nodeOptions.defaultExpanded = true;
@@ -394,13 +443,9 @@ namespace MosaicExample
                 nodeOptions.spanLabelWidth = spanLabelWidth;
                 nodeOptions.spanAllColumns = spanAllColumns && index == 0;
                 nodeOptions.labelSpanAllColumns = labelSpanAllColumns && index == 0;
-                Mosaic::String indentedName(depth * 2, ' ');
-                indentedName += value.name;
-                bool expanded = false;
-                {
-                    auto node = Mosaic::treeNode(ui, Mosaic::Key(index), indentedName, nodeOptions);
-                    expanded = node.expanded();
-                }
+                (void)depth;
+                auto node = Mosaic::treeNode(ui, Mosaic::Key(index), value.name, nodeOptions);
+                bool expanded = node.expanded();
 
                 if(nodeOptions.labelSpanAllColumns == false)
                 {
@@ -467,7 +512,7 @@ namespace MosaicExample
                 Mosaic::tableHeadersRow(ui);
                 for(size_t row = 0; row != 4; ++row)
                 {
-                    Mosaic::tableNextRow(ui);
+                    Mosaic::tableNextRow(ui, Mosaic::Key(row));
                     for(uint32_t column = 0; column != columnCount; ++column)
                     {
                         if(Mosaic::tableSetColumn(ui, column) == false)
@@ -491,29 +536,29 @@ namespace MosaicExample
                             Mosaic::PopupOptions popupOptions;
                             popupOptions.owner = cellPopupOwner;
                             popupOptions.placement = Mosaic::PopupPlacement::Cursor;
-                            popupOptions.minimumSize = {220.f, 0.f};
                             Mosaic::openPopup(ui, Mosaic::Key("Cell context"), popupOptions);
                         }
                     }
                 }
             }
-            Mosaic::PopupOptions cellOptions;
-            cellOptions.owner = cellPopupOwner;
-            cellOptions.placement = Mosaic::PopupPlacement::Cursor;
-            cellOptions.minimumSize = {220.f, 0.f};
-            auto cellPopup = Mosaic::popup(ui, Mosaic::Key("Cell context"), cellOptions);
-
-            if(cellPopup.visible() == true)
             {
-                Mosaic::String description = "This is the popup for Button(\"..\") in Cell ";
-                description += Detail::tableDemoNumber(popupColumn);
-                description += ",";
-                description += Detail::tableDemoNumber(popupRow);
-                Mosaic::text(ui, description);
+                Mosaic::PopupOptions cellOptions;
+                cellOptions.owner = cellPopupOwner;
+                cellOptions.placement = Mosaic::PopupPlacement::Cursor;
+                auto cellPopup = Mosaic::popup(ui, Mosaic::Key("Cell context"), cellOptions);
 
-                if(Mosaic::button(ui, "Close").clicked() == true)
+                if(cellPopup.visible() == true)
                 {
-                    Mosaic::closeCurrentPopup(ui);
+                    Mosaic::String description = "This is the popup for Button(\"..\") in Cell ";
+                    description += Detail::tableDemoNumber(popupColumn);
+                    description += ",";
+                    description += Detail::tableDemoNumber(popupRow);
+                    Mosaic::text(ui, description);
+
+                    if(Mosaic::button(ui, "Close").clicked() == true)
+                    {
+                        Mosaic::closeCurrentPopup(ui);
+                    }
                 }
             }
 
@@ -540,32 +585,32 @@ namespace MosaicExample
                 Mosaic::PopupOptions options;
                 options.owner = tableId;
                 options.placement = Mosaic::PopupPlacement::Cursor;
-                options.minimumSize = {240.f, 0.f};
                 Mosaic::openPopup(ui, Mosaic::Key("Custom column popup"), options);
             }
 
-            Mosaic::PopupOptions bodyOptions;
-            bodyOptions.owner = tableId;
-            bodyOptions.placement = Mosaic::PopupPlacement::Cursor;
-            bodyOptions.minimumSize = {240.f, 0.f};
-            auto bodyPopup = Mosaic::popup(ui, Mosaic::Key("Custom column popup"), bodyOptions);
-
-            if(bodyPopup.visible() == true)
             {
-                if(bodyPopupColumn == columnCount)
-                {
-                    Mosaic::text(ui, "This is a custom popup for unused space after the last column.");
-                }
-                else
-                {
-                    Mosaic::String description = "This is a custom popup for Column ";
-                    description += Detail::tableDemoNumber(bodyPopupColumn);
-                    Mosaic::text(ui, description);
-                }
+                Mosaic::PopupOptions bodyOptions;
+                bodyOptions.owner = tableId;
+                bodyOptions.placement = Mosaic::PopupPlacement::Cursor;
+                auto bodyPopup = Mosaic::popup(ui, Mosaic::Key("Custom column popup"), bodyOptions);
 
-                if(Mosaic::button(ui, Mosaic::Key("close custom column popup"), "Close").clicked() == true)
+                if(bodyPopup.visible() == true)
                 {
-                    Mosaic::closeCurrentPopup(ui);
+                    if(bodyPopupColumn == columnCount)
+                    {
+                        Mosaic::text(ui, "This is a custom popup for unused space after the last column.");
+                    }
+                    else
+                    {
+                        Mosaic::String description = "This is a custom popup for Column ";
+                        description += Detail::tableDemoNumber(bodyPopupColumn);
+                        Mosaic::text(ui, description);
+                    }
+
+                    if(Mosaic::button(ui, Mosaic::Key("close custom column popup"), "Close").clicked() == true)
+                    {
+                        Mosaic::closeCurrentPopup(ui);
+                    }
                 }
             }
 
@@ -596,7 +641,7 @@ namespace MosaicExample
             Mosaic::tableSetupColumn(ui, 0, "A0");
             Mosaic::tableSetupColumn(ui, 1, "A1");
             Mosaic::tableHeadersRow(ui);
-            Mosaic::tableNextRow(ui);
+            Mosaic::tableNextRow(ui, Mosaic::Key(0));
 
             if(Mosaic::tableSetColumn(ui, 0) == true)
             {
@@ -610,7 +655,7 @@ namespace MosaicExample
                 {
                     Mosaic::TableRowOptions rowOptions;
                     rowOptions.minimumHeight = Mosaic::getTheme(ui).metrics.lineHeight * 2.f + Mosaic::getTheme(ui).metrics.cellPadding.top * 2.f;
-                    Mosaic::tableNextRow(ui, rowOptions);
+                    Mosaic::tableNextRow(ui, Mosaic::Key(row), rowOptions);
                     for(uint32_t column = 0; column != 2; ++column)
                     {
                         if(Mosaic::tableSetColumn(ui, column) == false)
@@ -630,7 +675,7 @@ namespace MosaicExample
                 Mosaic::text(ui, "A1 Row 0");
             }
 
-            Mosaic::tableNextRow(ui);
+            Mosaic::tableNextRow(ui, Mosaic::Key(1));
 
             if(Mosaic::tableSetColumn(ui, 0) == true)
             {
@@ -657,7 +702,7 @@ namespace MosaicExample
                 {
                     Mosaic::TableRowOptions rowOptions;
                     rowOptions.minimumHeight = std::floor(Mosaic::getTheme(ui).metrics.lineHeight * 0.3f * static_cast<float>(row) + Mosaic::getTheme(ui).metrics.cellPadding.top * 2.f);
-                    Mosaic::tableNextRow(ui, rowOptions);
+                    Mosaic::tableNextRow(ui, Mosaic::Key(row), rowOptions);
 
                     if(Mosaic::tableSetColumn(ui, 0) == false)
                     {
@@ -674,7 +719,7 @@ namespace MosaicExample
                 auto table = Mosaic::table(ui, "Shared line height", 2, options);
                 for(size_t row = 0; row != 2; ++row)
                 {
-                    Mosaic::tableNextRow(ui);
+                    Mosaic::tableNextRow(ui, Mosaic::Key(row));
 
                     if(Mosaic::tableSetColumn(ui, 0) == true)
                     {
@@ -689,7 +734,19 @@ namespace MosaicExample
 
                     if(Mosaic::tableSetColumn(ui, 1) == true)
                     {
-                        Mosaic::text(ui, row == 0 ? "Line 1\nLine 2" : "Line 1, sharing the row height\nLine 2");
+                        if(row == 0)
+                        {
+                            Mosaic::text(ui, "Line 1");
+                            Mosaic::text(ui, "Line 2");
+                        }
+                        else
+                        {
+                            Mosaic::SameLineOptions sameLine;
+                            sameLine.spacing = 0.f;
+                            Mosaic::sameLine(ui, sameLine);
+                            Mosaic::text(ui, "Line 1, with SameLine(0,0)");
+                            Mosaic::text(ui, "Line 2");
+                        }
                     }
                 }
             }
@@ -700,7 +757,7 @@ namespace MosaicExample
                 {
                     Mosaic::TableRowOptions rowOptions;
                     rowOptions.cellPaddingY = row % 3 == 2 ? 20.f : Mosaic::getTheme(ui).metrics.cellPadding.top;
-                    Mosaic::tableNextRow(ui, rowOptions);
+                    Mosaic::tableNextRow(ui, Mosaic::Key(row), rowOptions);
 
                     if(Mosaic::tableSetColumn(ui, 0) == false)
                     {
@@ -736,7 +793,7 @@ namespace MosaicExample
             static float value = 0.f;
             for(size_t row = 0; row != 3; ++row)
             {
-                Mosaic::tableNextRow(ui);
+                Mosaic::tableNextRow(ui, Mosaic::Key(row));
                 for(uint32_t column = 0; column != 3; ++column)
                 {
                     if(Mosaic::tableSetColumn(ui, column) == false)
@@ -793,18 +850,22 @@ namespace MosaicExample
             layout.height = Mosaic::Dimension::fixed(Mosaic::getTheme(ui).metrics.lineHeight * 15.f);
             auto table = Mosaic::table(ui, "Sorting table", 4, options, layout);
             Mosaic::TableColumnOptions idColumn;
+            idColumn.userId = Mosaic::Key("sorting id").value();
             idColumn.sizing = Mosaic::TableSizing::FixedFit;
             idColumn.widthOrWeight = 0.f;
             idColumn.defaultSort = true;
             Mosaic::tableSetupColumn(ui, 0, "ID", idColumn);
             Mosaic::TableColumnOptions nameColumn = idColumn;
+            nameColumn.userId = Mosaic::Key("sorting name").value();
             nameColumn.defaultSort = false;
             Mosaic::tableSetupColumn(ui, 1, "Name", nameColumn);
             Mosaic::TableColumnOptions actionColumn = idColumn;
+            actionColumn.userId = Mosaic::Key("sorting action").value();
             actionColumn.defaultSort = false;
             actionColumn.sortable = false;
             Mosaic::tableSetupColumn(ui, 2, "Action", actionColumn);
             Mosaic::TableColumnOptions quantityColumn;
+            quantityColumn.userId = Mosaic::Key("sorting quantity").value();
             quantityColumn.sizing = Mosaic::TableSizing::Stretch;
             quantityColumn.widthOrWeight = 1.f;
             quantityColumn.preferredSort = Mosaic::SortDirection::Descending;
@@ -828,15 +889,15 @@ namespace MosaicExample
                                          const TableDemoSortItem & right = items[second];
                                          int comparison = 0;
 
-                                         if(spec.column == 0)
+                                         if(spec.userId == Mosaic::Key("sorting id").value())
                                          {
                                              comparison = left.id - right.id;
                                          }
-                                         else if(spec.column == 1)
+                                         else if(spec.userId == Mosaic::Key("sorting name").value())
                                          {
                                              comparison = left.name.compare(right.name);
                                          }
-                                         else if(spec.column == 3)
+                                         else if(spec.userId == Mosaic::Key("sorting quantity").value())
                                          {
                                              comparison = left.quantity - right.quantity;
                                          }
@@ -852,8 +913,7 @@ namespace MosaicExample
             for(size_t visibleRow = rows.begin; visibleRow != rows.end; ++visibleRow)
             {
                 const TableDemoSortItem & item = items[order[visibleRow]];
-                auto rowScope = Mosaic::scope(ui, Mosaic::Key(static_cast<Mosaic::Id>(item.id)));
-                Mosaic::tableNextRow(ui);
+                Mosaic::tableNextRow(ui, Mosaic::Key(static_cast<Mosaic::Id>(item.id)));
                 (void)Mosaic::tableSetColumn(ui, 0);
                 Mosaic::String id = Detail::tableDemoNumber(item.id);
                 while(id.size() < 4)

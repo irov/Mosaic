@@ -24,5 +24,10 @@ namespace Mosaic
         void updateTextScroll(Context::Node & node, TextEditorState & state, const Rect & bounds, bool focused);
         void autoScrollTextSelection(const Context::Node & node, TextEditorState & state, const Rect & bounds, const PointerState & pointer, float deltaTime);
         [[nodiscard]] bool numericText(StringView value) noexcept;
+        void replaceSelection(String & value, size_t & cursor, size_t & anchor, StringView replacement, size_t maximumBytes);
+        void clearUndo(TextEditorState & state, StringView value, double timestamp);
+        void recordUndo(TextEditorState & state, const String & value, double timestamp, bool coalesce = true);
+        [[nodiscard]] bool applyUndo(TextEditorState & state, String & value);
+        [[nodiscard]] bool applyRedo(TextEditorState & state, String & value);
     } // namespace Detail
 } // namespace Mosaic

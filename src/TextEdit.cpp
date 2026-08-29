@@ -432,7 +432,7 @@ namespace Mosaic
             state.lastEditTimestamp = timestamp;
         }
         //////////////////////////////////////////////////////////////////////////
-        void recordUndo(TextEditorState & state, const String & value, double timestamp, bool coalesce = true)
+        void recordUndo(TextEditorState & state, const String & value, double timestamp, bool coalesce)
         {
             if(state.undoValue == value)
             {
@@ -896,7 +896,7 @@ namespace Mosaic
             Detail::setFlag(response, 7);
             Detail::setFlag(response, 14);
             response.flags &= ~(1U << 15U);
-            ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(contextRequested == true)
@@ -1320,7 +1320,7 @@ namespace Mosaic
                 Detail::recordUndo(editorState, *value, ui->input.timestamp);
             }
 
-            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(committed == true)
@@ -1328,35 +1328,35 @@ namespace Mosaic
             Detail::setFlag(response, 8);
             Detail::setFlag(response, 15);
             Detail::setFlag(response, 16, *value != editorState.editOriginal);
-            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(canceled == true)
         {
             Detail::setFlag(response, 9);
             Detail::setFlag(response, 15);
-            ui->frame.events.push_back({EventType::Cancel, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Cancel, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         Context::Node & inputNode = ui->nodes[node];
-        inputNode.password = options.password;
-        inputNode.textHint = value->empty() && options.hint.empty() == false;
-        inputNode.label = inputNode.textHint ? String(options.hint) : Detail::inputDisplayText(*value, options.password);
+        inputNode.textEditData().password = options.password;
+        inputNode.textEditData().hint = value->empty() && options.hint.empty() == false;
+        inputNode.label = inputNode.textEditData().hint ? String(options.hint) : Detail::inputDisplayText(*value, options.password);
         size_t displayCursor = Detail::inputDisplayOffset(*value, editorState.cursor, options.password);
-        inputNode.textCursor = displayCursor;
-        inputNode.textAnchor = Detail::inputDisplayOffset(*value, editorState.anchor, options.password);
+        inputNode.textEditData().cursor = displayCursor;
+        inputNode.textEditData().anchor = Detail::inputDisplayOffset(*value, editorState.anchor, options.password);
 
-        if(options.password == false && editorState.composition.empty() == false && inputNode.textHint == false)
+        if(options.password == false && editorState.composition.empty() == false && inputNode.textEditData().hint == false)
         {
             size_t selectionBegin = std::min(editorState.cursor, editorState.anchor);
             size_t selectionEnd = std::max(editorState.cursor, editorState.anchor);
             size_t compositionBegin = Detail::inputDisplayOffset(*value, selectionBegin, false);
             size_t compositionReplaceEnd = Detail::inputDisplayOffset(*value, selectionEnd, false);
             inputNode.label.replace(compositionBegin, compositionReplaceEnd - compositionBegin, editorState.composition);
-            inputNode.compositionBegin = compositionBegin;
-            inputNode.compositionEnd = compositionBegin + editorState.composition.size();
-            inputNode.textCursor = inputNode.compositionBegin + editorState.compositionSelectionEnd;
-            inputNode.textAnchor = inputNode.compositionBegin + editorState.compositionSelectionBegin;
+            inputNode.textEditData().compositionBegin = compositionBegin;
+            inputNode.textEditData().compositionEnd = compositionBegin + editorState.composition.size();
+            inputNode.textEditData().cursor = inputNode.textEditData().compositionBegin + editorState.compositionSelectionEnd;
+            inputNode.textEditData().anchor = inputNode.textEditData().compositionBegin + editorState.compositionSelectionBegin;
         }
 
         if(ui->focused == response.id || ui->captured == response.id)
@@ -1373,7 +1373,7 @@ namespace Mosaic
         if(options.noHorizontalScroll == true)
         {
             editorState.textScrollX = 0.f;
-            inputNode.textScrollX = 0.f;
+            inputNode.textEditData().scrollX = 0.f;
         }
 
         if(persistentState.editing == true)
@@ -1393,7 +1393,7 @@ namespace Mosaic
             float visibleWidth = std::max(0.f, persistentState.lastBounds.width - inputNode.style->metrics.padding * 2.f - inputNode.style->metrics.frameBorderSize * 2.f);
             inputNode.label = Detail::elideTextLeft(ui, inputNode.label, *inputNode.style, visibleWidth);
             ui->estimateNodeText(inputNode, inputNode.label);
-            inputNode.textScrollX = 0.f;
+            inputNode.textEditData().scrollX = 0.f;
         }
 
         inputNode.response = response;
@@ -1416,13 +1416,13 @@ namespace Mosaic
         ui->nodeSemanticDescription(ui->nodes[node]).assign(options.validationMessage);
         ui->nodes[node].readOnly = options.readOnly;
         ui->nodes[node].validation = options.validation;
-        ui->nodes[node].multiline = true;
+        ui->nodes[node].textEditData().multiline = true;
         ui->nodes[node].wordWrap = options.wordWrap;
         Context::Persistent & persistentState = ui->state(ui->nodes[node]);
 
         if(options.wordWrap == true && persistentState.lastBounds.empty() == false)
         {
-            ui->nodes[node].textWrapWidth = std::max(0.f, persistentState.lastBounds.width - ui->nodes[node].style->metrics.padding * 2.f - ui->nodes[node].style->metrics.frameBorderSize * 2.f);
+            ui->nodes[node].valueData().textWrapWidth = std::max(0.f, persistentState.lastBounds.width - ui->nodes[node].style->metrics.padding * 2.f - ui->nodes[node].style->metrics.frameBorderSize * 2.f);
         }
 
         if(options.numeric == true)
@@ -1497,7 +1497,7 @@ namespace Mosaic
             Detail::setFlag(response, 7);
             Detail::setFlag(response, 14);
             response.flags &= ~(1U << 15U);
-            ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(contextRequested == true)
@@ -1950,7 +1950,7 @@ namespace Mosaic
                 Detail::recordUndo(editorState, *value, ui->input.timestamp);
             }
 
-            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(committed == true)
@@ -1958,35 +1958,35 @@ namespace Mosaic
             Detail::setFlag(response, 8);
             Detail::setFlag(response, 15);
             Detail::setFlag(response, 16, *value != editorState.editOriginal);
-            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Commit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         if(canceled == true)
         {
             Detail::setFlag(response, 9);
             Detail::setFlag(response, 15);
-            ui->frame.events.push_back({EventType::Cancel, response.id, ui->nodePath(node), ui->nodes[node].file, ui->nodes[node].line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Cancel, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
         }
 
         Context::Node & inputNode = ui->nodes[node];
-        inputNode.password = options.password;
-        inputNode.textHint = value->empty() && options.hint.empty() == false;
-        inputNode.label = inputNode.textHint ? String(options.hint) : Detail::inputDisplayText(*value, options.password);
+        inputNode.textEditData().password = options.password;
+        inputNode.textEditData().hint = value->empty() && options.hint.empty() == false;
+        inputNode.label = inputNode.textEditData().hint ? String(options.hint) : Detail::inputDisplayText(*value, options.password);
         size_t displayCursor = Detail::inputDisplayOffset(*value, editorState.cursor, options.password);
-        inputNode.textCursor = displayCursor;
-        inputNode.textAnchor = Detail::inputDisplayOffset(*value, editorState.anchor, options.password);
+        inputNode.textEditData().cursor = displayCursor;
+        inputNode.textEditData().anchor = Detail::inputDisplayOffset(*value, editorState.anchor, options.password);
 
-        if(options.password == false && editorState.composition.empty() == false && inputNode.textHint == false)
+        if(options.password == false && editorState.composition.empty() == false && inputNode.textEditData().hint == false)
         {
             size_t selectionBegin = std::min(editorState.cursor, editorState.anchor);
             size_t selectionEnd = std::max(editorState.cursor, editorState.anchor);
             size_t compositionBegin = Detail::inputDisplayOffset(*value, selectionBegin, false);
             size_t compositionReplaceEnd = Detail::inputDisplayOffset(*value, selectionEnd, false);
             inputNode.label.replace(compositionBegin, compositionReplaceEnd - compositionBegin, editorState.composition);
-            inputNode.compositionBegin = compositionBegin;
-            inputNode.compositionEnd = compositionBegin + editorState.composition.size();
-            inputNode.textCursor = inputNode.compositionBegin + editorState.compositionSelectionEnd;
-            inputNode.textAnchor = inputNode.compositionBegin + editorState.compositionSelectionBegin;
+            inputNode.textEditData().compositionBegin = compositionBegin;
+            inputNode.textEditData().compositionEnd = compositionBegin + editorState.composition.size();
+            inputNode.textEditData().cursor = inputNode.textEditData().compositionBegin + editorState.compositionSelectionEnd;
+            inputNode.textEditData().anchor = inputNode.textEditData().compositionBegin + editorState.compositionSelectionBegin;
         }
 
         if(ui->focused == response.id || ui->captured == response.id)
@@ -2003,7 +2003,7 @@ namespace Mosaic
         if(options.noHorizontalScroll == true)
         {
             editorState.textScrollX = 0.f;
-            inputNode.textScrollX = 0.f;
+            inputNode.textEditData().scrollX = 0.f;
         }
 
         if(persistentState.editing == true)

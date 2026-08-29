@@ -6,6 +6,25 @@
 namespace Mosaic
 {
     //////////////////////////////////////////////////////////////////////////
+    MainMenuBarScope::MainMenuBarScope(WindowScope && window, Scope && menuBar) noexcept : m_window(std::move(window)), m_menuBar(std::move(menuBar))
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Id MainMenuBarScope::id() const noexcept
+    {
+        return m_window.id();
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MainMenuBarScope::visible() const noexcept
+    {
+        return m_window.visible();
+    }
+    //////////////////////////////////////////////////////////////////////////
+    MainMenuBarScope::operator bool() const noexcept
+    {
+        return visible();
+    }
+    //////////////////////////////////////////////////////////////////////////
     TabBarScope::TabBarScope(TabBarScope && other) noexcept : Scope(std::move(other))
     {
     }

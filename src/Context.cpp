@@ -9,6 +9,7 @@
 #include "Window.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -18,6 +19,51 @@ namespace Mosaic
 {
     namespace Detail
     {
+        [[nodiscard]] StringView drawCommandName(DrawCommandType type) noexcept
+        {
+            switch(type)
+            {
+            case DrawCommandType::Rect:
+                return "Rect";
+            case DrawCommandType::RectBatch:
+                return "RectBatch";
+            case DrawCommandType::QuadBatch:
+                return "QuadBatch";
+            case DrawCommandType::Box:
+                return "Box";
+            case DrawCommandType::RoundedRect:
+                return "RoundedRect";
+            case DrawCommandType::Gradient:
+                return "Gradient";
+            case DrawCommandType::Line:
+                return "Line";
+            case DrawCommandType::Polyline:
+                return "Polyline";
+            case DrawCommandType::Path:
+                return "Path";
+            case DrawCommandType::Image:
+                return "Image";
+            case DrawCommandType::CustomGeometry:
+                return "CustomGeometry";
+            case DrawCommandType::TextGeometry:
+                return "TextGeometry";
+            case DrawCommandType::BeginChannels:
+                return "BeginChannels";
+            case DrawCommandType::SetChannel:
+                return "SetChannel";
+            case DrawCommandType::EndChannels:
+                return "EndChannels";
+            case DrawCommandType::PushClip:
+                return "PushClip";
+            case DrawCommandType::PopClip:
+                return "PopClip";
+            }
+
+            return "Unknown";
+        }
+        //////////////////////////////////////////////////////////////////////////
+        Allocator * setConstructionAllocator(Allocator * allocator) noexcept;
+
         inline constexpr size_t MaximumTextCacheEntries = 4096;
         inline constexpr size_t MaximumTextCacheMemory = 32 * 1024 * 1024;
         //////////////////////////////////////////////////////////////////////////
@@ -26,13 +72,76 @@ namespace Mosaic
             return kind == NodeKind::Combo || kind == NodeKind::Slider || kind == NodeKind::DragValue || kind == NodeKind::InputText || kind == NodeKind::InputMultiline || kind == NodeKind::ColorEdit || kind == NodeKind::Progress;
         }
         //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] Context::Node * findCanvasNode(Context * ui, Id canvas)
+        {
+            if(ui == nullptr)
+            {
+                return nullptr;
+            }
+
+            Context::Node * node = ui->findFrameNode(canvas);
+
+            if(node == nullptr)
+            {
+                ui->frame.diagnostics.emplace_back("Canvas command target was not submitted in this frame");
+
+                return nullptr;
+            }
+
+            if(node->kind != NodeKind::Canvas)
+            {
+                ui->frame.diagnostics.emplace_back("Canvas command target is not a canvas");
+
+                return nullptr;
+            }
+
+            return node;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] bool itemPickerStructuralNode(NodeKind kind) noexcept
+        {
+            switch(kind)
+            {
+            case NodeKind::Root:
+            case NodeKind::Scope:
+            case NodeKind::Row:
+            case NodeKind::Column:
+            case NodeKind::Grid:
+            case NodeKind::Overlay:
+            case NodeKind::Absolute:
+            case NodeKind::Clip:
+            case NodeKind::Disabled:
+            case NodeKind::Interaction:
+            case NodeKind::Style:
+            case NodeKind::Backdrop:
+            case NodeKind::Spacer:
+                return true;
+            default:
+                return false;
+            }
+        }
+        //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] size_t cachedTextMemory(const Context::CachedText & text) noexcept
         {
-            size_t result = sizeof(Context::CachedText) + text.text.capacity() * sizeof(char) + text.offsets.capacity() * sizeof(float) + text.clusters.capacity() * sizeof(size_t) + text.positions.capacity() * sizeof(Vec2) + text.lines.capacity() * sizeof(ShapedTextLine) + text.batches.capacity() * sizeof(Context::PreparedTextBatch);
-            for(const Context::PreparedTextBatch & batch : text.batches)
+            size_t result = sizeof(Context::CachedText) + text.text.capacity() * sizeof(char) + text.offsets.capacity() * sizeof(float) + text.clusters.capacity() * sizeof(size_t) + text.positions.capacity() * sizeof(Vec2) + text.lines.capacity() * sizeof(ShapedTextLine) + text.batches.capacity() * sizeof(Context::PreparedTextRunBatch);
+            for(const Context::PreparedTextRunBatch & batch : text.batches)
             {
-                result += batch.vertices.capacity() * sizeof(Vertex) + batch.indices.capacity() * sizeof(uint32_t);
+                result += batch.rectangles.capacity() * sizeof(TexturedRectInstance);
             }
+
+            return result;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] size_t drawCommandStorageMemory(const DrawCommandStorage & storage) noexcept
+        {
+            size_t result = 0;
+            result += storage.rectangles.capacity() * sizeof(RectInstance);
+            result += storage.quads.capacity() * sizeof(QuadInstance);
+            result += storage.points.capacity() * sizeof(Vec2);
+            result += storage.coloredPoints.capacity() * sizeof(ColoredPoint);
+            result += storage.colors.capacity() * sizeof(Color);
+            result += storage.vertices.capacity() * sizeof(Vertex);
+            result += storage.indices.capacity() * sizeof(uint32_t);
 
             return result;
         }
@@ -96,7 +205,7 @@ namespace Mosaic
             const Context::Node * firstWindow = ui->findFrameNode(Detail::nodeWindow(ui, first));
             const Context::Node * secondWindow = ui->findFrameNode(Detail::nodeWindow(ui, second));
 
-            return firstWindow != nullptr && secondWindow != nullptr && firstWindow->windowDockNode != 0 && firstWindow->windowDockNode == secondWindow->windowDockNode && firstWindow->windowDockGroup == secondWindow->windowDockGroup;
+            return firstWindow != nullptr && secondWindow != nullptr && firstWindow->windowData().dockNode != 0 && firstWindow->windowData().dockNode == secondWindow->windowData().dockNode && firstWindow->windowData().dockGroup == secondWindow->windowData().dockGroup;
         }
         //////////////////////////////////////////////////////////////////////////
         void appendTextLogNodes(Context * ui, size_t firstNode, size_t root, Id window, size_t maximumDepth, bool indent, String * output)
@@ -347,6 +456,27 @@ namespace Mosaic
             return returnedValue;
         }
         //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] Rect unionBounds(const Rect & left, const Rect & right) noexcept
+        {
+            if(left.empty() == true)
+            {
+                return right;
+            }
+
+            if(right.empty() == true)
+            {
+                return left;
+            }
+
+            float minimumX = std::min(left.x, right.x);
+            float minimumY = std::min(left.y, right.y);
+            float maximumX = std::max(left.right(), right.right());
+            float maximumY = std::max(left.bottom(), right.bottom());
+            Rect result = {minimumX, minimumY, maximumX - minimumX, maximumY - minimumY};
+
+            return result;
+        }
+        //////////////////////////////////////////////////////////////////////////
         void addListClipperSpacer(Context * ui, float extent, Orientation orientation, const SourceLocation & location)
         {
             LayoutOptions layout;
@@ -480,50 +610,6 @@ namespace Mosaic
                 return true;
             default:
                 return false;
-            }
-        }
-        //////////////////////////////////////////////////////////////////////////
-        [[nodiscard]] float estimatedAsciiAdvance(char character, float fontSize, bool monospace) noexcept
-        {
-            if(monospace == true)
-            {
-                return fontSize * 0.62f;
-            }
-
-            if(character == ' ')
-            {
-                return fontSize * 0.34f;
-            }
-
-            if(character == '\t')
-            {
-                return fontSize * 1.36f;
-            }
-
-            switch(character)
-            {
-            case 'i':
-            case 'l':
-            case 'I':
-            case '.':
-            case ',':
-            case ':':
-            case ';':
-            case '!':
-            case '\'':
-            case '|':
-                return fontSize * 0.34f;
-            case 'm':
-            case 'w':
-            case 'M':
-            case 'W':
-            case '@':
-            case '#':
-            case '%':
-            case '&':
-                return fontSize * 0.86f;
-            default:
-                return fontSize * 0.58f;
             }
         }
         //////////////////////////////////////////////////////////////////////////
@@ -879,9 +965,9 @@ namespace Mosaic
         [[nodiscard]] float scrollbarScrollAtPointer(const Context::Persistent & state, Orientation orientation, const Vec2 & position) noexcept
         {
             bool vertical = orientation == Orientation::Vertical;
-            float trackStart = vertical ? state.scrollbarTrackBounds.y : state.scrollbarTrackBounds.x;
-            float trackExtent = vertical ? state.scrollbarTrackBounds.height : state.scrollbarTrackBounds.width;
-            float thumbExtent = vertical ? state.scrollbarThumbBounds.height : state.scrollbarThumbBounds.width;
+            float trackStart = vertical ? state.scrollData().trackBounds.y : state.scrollData().trackBounds.x;
+            float trackExtent = vertical ? state.scrollData().trackBounds.height : state.scrollData().trackBounds.width;
+            float thumbExtent = vertical ? state.scrollData().thumbBounds.height : state.scrollData().thumbBounds.width;
             float pointerPosition = vertical ? position.y : position.x;
             float travel = std::max(0.f, trackExtent - thumbExtent);
 
@@ -890,14 +976,14 @@ namespace Mosaic
                 return 0.f;
             }
 
-            if(state.scrollExtent <= 0.f)
+            if(state.scrollData().extent <= 0.f)
             {
                 return 0.f;
             }
 
-            float ratio = std::clamp((pointerPosition - trackStart - state.scrollbarDragOffset) / travel, 0.f, 1.f);
+            float ratio = std::clamp((pointerPosition - trackStart - state.scrollData().dragOffset) / travel, 0.f, 1.f);
 
-            return ratio * state.scrollExtent;
+            return ratio * state.scrollData().extent;
         }
         //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] float scrollbarScrollAtPointer(const Rect & track, const Rect & thumb, float scrollExtent, bool vertical, float dragOffset, const Vec2 & position) noexcept
@@ -1018,12 +1104,12 @@ namespace Mosaic
                     continue;
                 }
 
-                if(candidate.windowDockGroup == 0)
+                if(candidate.mutableWindowData().dockGroup == 0)
                 {
                     continue;
                 }
 
-                DockModel * model = Detail::dockModel(ui, candidate.windowDockGroup, false);
+                DockModel * model = Detail::dockModel(ui, candidate.mutableWindowData().dockGroup, false);
 
                 if(model == nullptr)
                 {
@@ -1035,16 +1121,16 @@ namespace Mosaic
                     continue;
                 }
 
-                candidate.windowDocked = true;
-                candidate.windowDockNode = model->nodeForWindow(candidate.id);
+                candidate.mutableWindowData().docked = true;
+                candidate.mutableWindowData().dockNode = model->nodeForWindow(candidate.id);
 
                 if(candidate.visible == true)
                 {
-                    ui->visibleDockWindowsScratch[candidate.windowDockGroup].push_back(candidate.id);
+                    ui->visibleDockWindowsScratch[candidate.mutableWindowData().dockGroup].push_back(candidate.id);
 
-                    if(candidate.windowCollapsed == true)
+                    if(candidate.mutableWindowData().collapsed == true)
                     {
-                        ui->collapsedDockWindowsScratch[candidate.windowDockGroup].push_back(candidate.id);
+                        ui->collapsedDockWindowsScratch[candidate.mutableWindowData().dockGroup].push_back(candidate.id);
                     }
                 }
             }
@@ -1091,12 +1177,12 @@ namespace Mosaic
                         continue;
                     }
 
-                    if(candidate.windowDockNode == 0)
+                    if(candidate.mutableWindowData().dockNode == 0)
                     {
                         continue;
                     }
 
-                    if(candidate.windowDockGroup != group)
+                    if(candidate.mutableWindowData().dockGroup != group)
                     {
                         continue;
                     }
@@ -1128,7 +1214,7 @@ namespace Mosaic
                 size_t index = static_cast<size_t>(window - ui->nodes.data());
                 Rect dockedBounds = entry.bounds;
 
-                if(window->windowCollapsed == true)
+                if(window->windowData().collapsed == true)
                 {
                     dockedBounds.height = window->style->metrics.windowTitleHeight;
                 }
@@ -1139,39 +1225,46 @@ namespace Mosaic
             {
                 Context::Node & node = ui->nodes[child];
 
-                if(node.kind == Detail::NodeKind::Window && node.windowDockNode == 0)
+                if(node.kind == Detail::NodeKind::Window && node.windowData().dockNode == 0)
                 {
                     Context::Persistent & persistentState = ui->state(node);
 
-                    if(persistentState.windowInitialized == false)
+                    if(persistentState.windowData().initialized == false)
                     {
-                        persistentState.windowBounds = node.bounds;
-                        persistentState.windowInitialized = true;
+                        persistentState.windowData().bounds = node.bounds;
+                        persistentState.windowData().initialized = true;
                     }
 
-                    Rect windowBounds = persistentState.windowBounds;
+                    Rect windowBounds = persistentState.windowData().bounds;
 
-                    if(node.windowAutoSize == true)
+                    if(node.windowData().autoSize == true)
                     {
-                        Vec2 popupSize = {std::clamp(node.measured.x, node.windowMinimumSize.x, node.windowMaximumSize.x), std::clamp(node.measured.y, node.windowMinimumSize.y, node.windowMaximumSize.y)};
-                        windowBounds = Detail::placePopup(node, popupSize, ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea);
-                        persistentState.windowBounds = windowBounds;
+                        Vec2 popupSize = {std::clamp(node.measured.x, node.windowData().minimumSize.x, node.windowData().maximumSize.x), std::clamp(node.measured.y, node.windowData().minimumSize.y, node.windowData().maximumSize.y)};
+                        Rect popupArea = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
+                        float horizontalPadding = std::clamp(node.style->metrics.displaySafeAreaPadding.x, 0.f, popupArea.width * 0.5f);
+                        float verticalPadding = std::clamp(node.style->metrics.displaySafeAreaPadding.y, 0.f, popupArea.height * 0.5f);
+                        popupArea.x += horizontalPadding;
+                        popupArea.y += verticalPadding;
+                        popupArea.width = std::max(0.f, popupArea.width - horizontalPadding * 2.f);
+                        popupArea.height = std::max(0.f, popupArea.height - verticalPadding * 2.f);
+                        windowBounds = Detail::placePopup(node, popupSize, popupArea);
+                        persistentState.windowData().bounds = windowBounds;
                     }
                     else
                     {
-                        bool fitContent = false;
+                        bool fitContent = node.windowData().alwaysAutoResize;
 
-                        if(node.windowFitContentWidth == true)
+                        if(node.windowData().alwaysAutoResize == false && node.windowData().fitContentWidth == true)
                         {
-                            if(persistentState.windowContentWidthFitted == false)
+                            if(persistentState.windowData().contentWidthFitted == false)
                             {
                                 fitContent = true;
                             }
                         }
 
-                        if(node.windowFitContentHeight == true)
+                        if(node.windowData().alwaysAutoResize == false && node.windowData().fitContentHeight == true)
                         {
-                            if(persistentState.windowContentHeightFitted == false)
+                            if(persistentState.windowData().contentHeightFitted == false)
                             {
                                 fitContent = true;
                             }
@@ -1179,24 +1272,30 @@ namespace Mosaic
 
                         if(fitContent == true)
                         {
-                            if(node.windowFitContentWidth == true && persistentState.windowContentWidthFitted == false)
+                            bool resizeWidth = node.windowData().fitContentWidth == true && (node.windowData().alwaysAutoResize == true || persistentState.windowData().contentWidthFitted == false);
+
+                            if(resizeWidth == true)
                             {
-                                windowBounds.width = std::max(windowBounds.width, std::clamp(node.measured.x, node.windowMinimumSize.x, node.windowMaximumSize.x));
-                                persistentState.windowContentWidthFitted = true;
+                                float measuredWidth = std::clamp(node.measured.x, node.windowData().minimumSize.x, node.windowData().maximumSize.x);
+                                windowBounds.width = node.windowData().alwaysAutoResize == true ? measuredWidth : std::max(windowBounds.width, measuredWidth);
+                                persistentState.windowData().contentWidthFitted = true;
                             }
 
-                            if(node.windowFitContentHeight == true && persistentState.windowContentHeightFitted == false)
+                            bool resizeHeight = node.windowData().fitContentHeight == true && (node.windowData().alwaysAutoResize == true || persistentState.windowData().contentHeightFitted == false);
+
+                            if(resizeHeight == true)
                             {
-                                windowBounds.height = std::max(windowBounds.height, std::clamp(node.measured.y, node.windowMinimumSize.y, node.windowMaximumSize.y));
-                                persistentState.windowContentHeightFitted = true;
+                                float measuredHeight = std::clamp(node.measured.y, node.windowData().minimumSize.y, node.windowData().maximumSize.y);
+                                windowBounds.height = node.windowData().alwaysAutoResize == true ? measuredHeight : std::max(windowBounds.height, measuredHeight);
+                                persistentState.windowData().contentHeightFitted = true;
                             }
 
                             windowBounds = Detail::constrainWindowBounds(windowBounds, ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea);
-                            persistentState.windowBounds = windowBounds;
+                            persistentState.windowData().bounds = windowBounds;
                         }
                     }
 
-                    if(node.windowCollapsed == true)
+                    if(node.windowData().collapsed == true)
                     {
                         windowBounds.height = node.style->metrics.windowTitleHeight;
                     }
@@ -1292,7 +1391,7 @@ namespace Mosaic
                 Context::Node & node = ui->nodes[nodeIndex];
                 bool multilineText = node.kind == Detail::NodeKind::InputMultiline;
                 bool scrollContainer = Detail::scrollsContent(node);
-                bool scrollTable = node.kind == Detail::NodeKind::Table && (node.tableOptions.scrollHorizontal || node.tableOptions.scrollVertical == true);
+                bool scrollTable = node.kind == Detail::NodeKind::Table && (node.tableOptions().scrollHorizontal || node.tableOptions().scrollVertical == true);
 
                 if(multilineText == false && scrollContainer == false && scrollTable == false)
                 {
@@ -1358,8 +1457,8 @@ namespace Mosaic
                     if(updated != editorState.textScrollY)
                     {
                         editorState.textScrollY = updated;
-                        node.textScrollY = updated;
-                        ui->frame.events.push_back({EventType::Change, node.id, ui->nodePath(node), node.file, node.line, ui->input.timestamp});
+                        node.textEditData().scrollY = updated;
+                        ui->frame.events.push_back({EventType::Change, node.id, ui->nodePath(node), node.debugData().file, node.debugData().line, ui->input.timestamp});
                     }
 
                     // Multiline text is an independent scroll surface. Reaching an
@@ -1367,14 +1466,14 @@ namespace Mosaic
                     return true;
                 }
 
-                bool horizontal = scrollTable ? node.tableOptions.scrollHorizontal : node.scrollOptions.axes == ScrollAxes::Horizontal || node.scrollOptions.axes == ScrollAxes::Both;
-                bool vertical = scrollTable ? node.tableOptions.scrollVertical : node.scrollOptions.axes == ScrollAxes::Vertical || node.scrollOptions.axes == ScrollAxes::Both;
-                float deltaX = horizontal ? ui->input.wheel.x * node.scrollOptions.wheelStep : 0.f;
-                float deltaY = vertical ? ui->input.wheel.y * node.scrollOptions.wheelStep : 0.f;
+                bool horizontal = scrollTable ? node.tableOptions().scrollHorizontal : node.scrollOptions().axes == ScrollAxes::Horizontal || node.scrollOptions().axes == ScrollAxes::Both;
+                bool vertical = scrollTable ? node.tableOptions().scrollVertical : node.scrollOptions().axes == ScrollAxes::Vertical || node.scrollOptions().axes == ScrollAxes::Both;
+                float deltaX = horizontal ? ui->input.wheel.x * node.scrollOptions().wheelStep : 0.f;
+                float deltaY = vertical ? ui->input.wheel.y * node.scrollOptions().wheelStep : 0.f;
 
                 if(horizontal == true && deltaX == 0.f && (vertical == false || ui->input.modifiers.shift == true))
                 {
-                    deltaX = ui->input.wheel.y * node.scrollOptions.wheelStep;
+                    deltaX = ui->input.wheel.y * node.scrollOptions().wheelStep;
 
                     if(ui->input.modifiers.shift == true)
                     {
@@ -1382,24 +1481,24 @@ namespace Mosaic
                     }
                 }
 
-                if(persistentState.scrollTargetInitialized == false)
+                if(persistentState.scrollData().targetInitialized == false)
                 {
-                    persistentState.scrollTarget = persistentState.scrollPosition;
-                    persistentState.scrollTargetInitialized = true;
+                    persistentState.scrollData().target = persistentState.scrollData().position;
+                    persistentState.scrollData().targetInitialized = true;
                 }
 
-                Vec2 updated = {std::clamp(persistentState.scrollTarget.x - deltaX, 0.f, persistentState.scrollRange.x), std::clamp(persistentState.scrollTarget.y - deltaY, 0.f, persistentState.scrollRange.y)};
+                Vec2 updated = {std::clamp(persistentState.scrollData().target.x - deltaX, 0.f, persistentState.scrollData().range.x), std::clamp(persistentState.scrollData().target.y - deltaY, 0.f, persistentState.scrollData().range.y)};
                 bool wheelHasNoEffect = deltaX == 0.f && deltaY == 0.f;
                 bool targetUnchanged = wheelHasNoEffect;
 
-                if(updated == persistentState.scrollTarget)
+                if(updated == persistentState.scrollData().target)
                 {
                     targetUnchanged = true;
                 }
 
                 if(targetUnchanged == true)
                 {
-                    if(node.scrollOptions.nested == false)
+                    if(node.scrollOptions().nested == false)
                     {
                         return true;
                     }
@@ -1407,17 +1506,17 @@ namespace Mosaic
                     return false;
                 }
 
-                persistentState.scrollTarget = updated;
+                persistentState.scrollData().target = updated;
 
-                if(node.scrollOptions.smooth == false || node.scrollOptions.smoothDuration <= 0.f || node.style->behavior.animationsEnabled == false)
+                if(node.scrollOptions().smooth == false || node.scrollOptions().smoothDuration <= 0.f || node.style->behavior.animationsEnabled == false)
                 {
-                    persistentState.scrollPosition = updated;
-                    persistentState.scrollVelocity = {};
-                    persistentState.scroll = node.layout.orientation == Orientation::Vertical ? updated.y : updated.x;
+                    persistentState.scrollData().position = updated;
+                    persistentState.scrollData().velocity = {};
+                    persistentState.scrollData().value = node.layout.orientation == Orientation::Vertical ? updated.y : updated.x;
                     Detail::markScrollLayout(ui, nodeIndex);
                 }
 
-                ui->frame.events.push_back({EventType::Change, node.id, ui->nodePath(node), node.file, node.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Change, node.id, ui->nodePath(node), node.debugData().file, node.debugData().line, ui->input.timestamp});
 
                 return true;
             };
@@ -1435,6 +1534,7 @@ namespace Mosaic
             }
 
             ui->wheelOwner = InvalidId;
+            ui->wheelOwnerItem = {};
             for(size_t index = ui->nodes.size(); index > 1; --index)
             {
                 if(applyToNode(index - 1))
@@ -1472,7 +1572,7 @@ namespace Mosaic
             if(dismissOnClick == true && open != nullptr && response.clicked() == true)
             {
                 *open = false;
-                ui->frame.events.push_back({EventType::PopupClose, backdrop.id, ui->nodePath(backdrop), backdrop.file, backdrop.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::PopupClose, backdrop.id, ui->nodePath(backdrop), backdrop.debugData().file, backdrop.debugData().line, ui->input.timestamp});
             }
         }
         //////////////////////////////////////////////////////////////////////////
@@ -1540,7 +1640,7 @@ namespace Mosaic
             {
                 Context::Node & node = ui->nodes[index];
                 bool scrollContainer = Detail::scrollsContent(node);
-                bool scrollTable = node.kind == Detail::NodeKind::Table && (node.tableOptions.scrollHorizontal || node.tableOptions.scrollVertical == true);
+                bool scrollTable = node.kind == Detail::NodeKind::Table && (node.tableOptions().scrollHorizontal || node.tableOptions().scrollVertical == true);
 
                 if(scrollContainer == false && scrollTable == false)
                 {
@@ -1549,41 +1649,41 @@ namespace Mosaic
 
                 Context::Persistent & state = ui->state(node);
 
-                if(state.scrollTargetInitialized == false)
+                if(state.scrollData().targetInitialized == false)
                 {
-                    state.scrollTarget = state.scrollPosition;
-                    state.scrollTargetInitialized = true;
+                    state.scrollData().target = state.scrollData().position;
+                    state.scrollData().targetInitialized = true;
                 }
 
-                state.scrollTarget = {std::clamp(state.scrollTarget.x, 0.f, state.scrollRange.x), std::clamp(state.scrollTarget.y, 0.f, state.scrollRange.y)};
+                state.scrollData().target = {std::clamp(state.scrollData().target.x, 0.f, state.scrollData().range.x), std::clamp(state.scrollData().target.y, 0.f, state.scrollData().range.y)};
 
-                if(state.draggingScrollbar == true)
+                if(state.scrollData().draggingScrollbar == true)
                 {
-                    state.scrollTarget = state.scrollPosition;
-                    state.scrollVelocity = {};
+                    state.scrollData().target = state.scrollData().position;
+                    state.scrollData().velocity = {};
                     continue;
                 }
 
-                bool smooth = node.scrollOptions.smooth && node.scrollOptions.smoothDuration > 0.f && node.style->behavior.animationsEnabled;
-                Vec2 updated = state.scrollTarget;
+                bool smooth = node.scrollOptions().smooth && node.scrollOptions().smoothDuration > 0.f && node.style->behavior.animationsEnabled;
+                Vec2 updated = state.scrollData().target;
 
                 if(smooth == true)
                 {
-                    updated.x = Detail::smoothScrollAxis(state.scrollPosition.x, state.scrollTarget.x, state.scrollVelocity.x, ui->input.deltaTime, node.scrollOptions.smoothDuration);
-                    updated.y = Detail::smoothScrollAxis(state.scrollPosition.y, state.scrollTarget.y, state.scrollVelocity.y, ui->input.deltaTime, node.scrollOptions.smoothDuration);
+                    updated.x = Detail::smoothScrollAxis(state.scrollData().position.x, state.scrollData().target.x, state.scrollData().velocity.x, ui->input.deltaTime, node.scrollOptions().smoothDuration);
+                    updated.y = Detail::smoothScrollAxis(state.scrollData().position.y, state.scrollData().target.y, state.scrollData().velocity.y, ui->input.deltaTime, node.scrollOptions().smoothDuration);
                 }
                 else
                 {
-                    state.scrollVelocity = {};
+                    state.scrollData().velocity = {};
                 }
 
-                if(updated == state.scrollPosition)
+                if(updated == state.scrollData().position)
                 {
                     continue;
                 }
 
-                state.scrollPosition = updated;
-                state.scroll = node.layout.orientation == Orientation::Vertical ? updated.y : updated.x;
+                state.scrollData().position = updated;
+                state.scrollData().value = node.layout.orientation == Orientation::Vertical ? updated.y : updated.x;
                 Detail::markScrollLayout(ui, index);
                 changed = true;
             }
@@ -1606,7 +1706,7 @@ namespace Mosaic
                 state.activeVisual = activeTarget;
                 state.selectionVisual = selectionTarget;
                 state.focusVisual = focusTarget;
-                state.scalarVisual = node.scalar;
+                state.scalarVisual = node.valueData().scalar;
 
                 return;
             }
@@ -1615,7 +1715,7 @@ namespace Mosaic
             state.activeVisual = Detail::animateVisual(state.activeVisual, activeTarget, deltaTime, behavior.activeAnimationDuration, behavior.animationsEnabled);
             state.selectionVisual = Detail::animateVisual(state.selectionVisual, selectionTarget, deltaTime, behavior.selectionAnimationDuration, behavior.animationsEnabled);
             state.focusVisual = Detail::animateVisual(state.focusVisual, focusTarget, deltaTime, behavior.selectionAnimationDuration, behavior.animationsEnabled);
-            state.scalarVisual = node.response.active() ? node.scalar : Detail::animateVisual(state.scalarVisual, node.scalar, deltaTime, behavior.valueAnimationDuration, behavior.animationsEnabled);
+            state.scalarVisual = node.response.active() ? node.valueData().scalar : Detail::animateVisual(state.scalarVisual, node.valueData().scalar, deltaTime, behavior.valueAnimationDuration, behavior.animationsEnabled);
         }
         //////////////////////////////////////////////////////////////////////////
         void drawFrame(DrawList & drawList, const Rect & bounds, float radius, float borderWidth, const Color & fill, const Color & border, float shadow, uint64_t renderKey)
@@ -2078,7 +2178,7 @@ namespace Mosaic
             float localX = viewportX + editorState.textScrollX;
             float localY = pointer.y - persistentState.lastBounds.y - node.style->metrics.padding * 0.5f + editorState.textScrollY;
 
-            size_t requestedLine = node.multiline ? static_cast<size_t>(std::max(0.f, std::floor(localY / std::max(1.f, node.style->metrics.lineHeight)))) : 0;
+            size_t requestedLine = node.textEditData().multiline ? static_cast<size_t>(std::max(0.f, std::floor(localY / std::max(1.f, node.style->metrics.lineHeight)))) : 0;
             ShapedTextLine line = Detail::visualLine(node, value, requestedLine);
             size_t lineStart = line.begin;
             size_t lineEnd = line.end;
@@ -2122,8 +2222,8 @@ namespace Mosaic
         {
             size_t clamped = std::min(position, node.label.size());
             Vec2 local = Detail::textPosition(node, clamped);
-            float x = Detail::snapToPixel(node.bounds.x + node.style->metrics.padding - node.textScrollX + local.x, ui->viewport.dpiScale);
-            float y = Detail::snapToPixel(node.bounds.y + node.style->metrics.padding * 0.5f - node.textScrollY + local.y, ui->viewport.dpiScale);
+            float x = Detail::snapToPixel(node.bounds.x + node.style->metrics.padding - node.textEditData().scrollX + local.x, ui->viewport.dpiScale);
+            float y = Detail::snapToPixel(node.bounds.y + node.style->metrics.padding * 0.5f - node.textEditData().scrollY + local.y, ui->viewport.dpiScale);
             Vec2 result = {x, y};
 
             return result;
@@ -2131,8 +2231,8 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         void drawTextSelection(Context * ui, DrawList & drawList, const Context::Node & node, const Color & color, uint64_t renderKey)
         {
-            size_t selectionBegin = std::min(node.textCursor, node.textAnchor);
-            size_t selectionEnd = std::max(node.textCursor, node.textAnchor);
+            size_t selectionBegin = std::min(node.textEditData().cursor, node.textEditData().anchor);
+            size_t selectionEnd = std::max(node.textEditData().cursor, node.textEditData().anchor);
 
             if(selectionBegin == selectionEnd)
             {
@@ -2152,7 +2252,7 @@ namespace Mosaic
                 if(begin < end || selectsNewline == true)
                 {
                     float beginX = begin == lineEnd ? line.width : Detail::textOffset(node, begin);
-                    float x = Detail::snapToPixel(node.bounds.x + node.style->metrics.padding - node.textScrollX + beginX, ui->viewport.dpiScale);
+                    float x = Detail::snapToPixel(node.bounds.x + node.style->metrics.padding - node.textEditData().scrollX + beginX, ui->viewport.dpiScale);
                     float endX = end == lineEnd ? line.width : Detail::textOffset(node, end);
                     float width = endX - beginX;
 
@@ -2162,19 +2262,19 @@ namespace Mosaic
                     }
 
                     width = Detail::snapToPixel(width, ui->viewport.dpiScale);
-                    drawList.roundedRect({x, Detail::snapToPixel(node.bounds.y + node.style->metrics.padding * 0.5f - node.textScrollY + static_cast<float>(lineIndex) * node.style->metrics.lineHeight, ui->viewport.dpiScale), std::max(2.f, width), node.style->metrics.lineHeight}, 2.f, color, renderKey);
+                    drawList.roundedRect({x, Detail::snapToPixel(node.bounds.y + node.style->metrics.padding * 0.5f - node.textEditData().scrollY + static_cast<float>(lineIndex) * node.style->metrics.lineHeight, ui->viewport.dpiScale), std::max(2.f, width), node.style->metrics.lineHeight}, 2.f, color, renderKey);
                 }
             }
         }
         //////////////////////////////////////////////////////////////////////////
         void updateTextScroll(Context::Node & node, TextEditorState & state, const Rect & bounds, bool focused)
         {
-            if(node.textHint == true)
+            if(node.textEditData().hint == true)
             {
                 state.textScrollX = 0.f;
                 state.textScrollY = 0.f;
-                node.textScrollX = 0.f;
-                node.textScrollY = 0.f;
+                node.textEditData().scrollX = 0.f;
+                node.textEditData().scrollY = 0.f;
 
                 return;
             }
@@ -2182,9 +2282,9 @@ namespace Mosaic
             if(focused == false)
             {
                 state.textScrollX = 0.f;
-                node.textScrollX = 0.f;
+                node.textEditData().scrollX = 0.f;
 
-                if(node.multiline == true)
+                if(node.textEditData().multiline == true)
                 {
                     float visibleHeight = std::max(0.f, bounds.height - node.style->metrics.padding - node.style->metrics.frameBorderSize * 2.f);
                     float maximumY = std::max(0.f, node.textSize.y - visibleHeight);
@@ -2195,13 +2295,13 @@ namespace Mosaic
                     state.textScrollY = 0.f;
                 }
 
-                node.textScrollY = state.textScrollY;
+                node.textEditData().scrollY = state.textScrollY;
 
                 return;
             }
 
             float visibleWidth = Detail::inputTextViewportWidth(node, bounds);
-            size_t cursor = std::min(node.textCursor, node.label.size());
+            size_t cursor = std::min(node.textEditData().cursor, node.label.size());
             Vec2 cursorPosition = Detail::textPosition(node, cursor);
             float cursorX = cursorPosition.x;
 
@@ -2216,9 +2316,9 @@ namespace Mosaic
 
             float maximumScroll = std::max(0.f, node.textSize.x - visibleWidth);
             state.textScrollX = std::clamp(state.textScrollX, 0.f, maximumScroll);
-            node.textScrollX = state.textScrollX;
+            node.textEditData().scrollX = state.textScrollX;
 
-            if(node.multiline == true)
+            if(node.textEditData().multiline == true)
             {
                 float visibleHeight = std::max(0.f, bounds.height - node.style->metrics.padding - node.style->metrics.frameBorderSize * 2.f);
                 float cursorTop = cursorPosition.y;
@@ -2240,7 +2340,7 @@ namespace Mosaic
                 state.textScrollY = 0.f;
             }
 
-            node.textScrollY = state.textScrollY;
+            node.textEditData().scrollY = state.textScrollY;
         }
         //////////////////////////////////////////////////////////////////////////
         void autoScrollTextSelection(const Context::Node & node, TextEditorState & state, const Rect & bounds, const PointerState & pointer, float deltaTime)
@@ -2256,7 +2356,7 @@ namespace Mosaic
                 state.textScrollX += speed * (1.f + (pointer.position.x - bounds.right()) / 24.f);
             }
 
-            if(node.multiline == true)
+            if(node.textEditData().multiline == true)
             {
                 if(pointer.position.y < bounds.y)
                 {
@@ -2278,6 +2378,7 @@ namespace Mosaic
         if(inserted == true)
         {
             iterator->second.firstFrame = frame.number;
+            iterator->second.allocator = allocator;
         }
 
         iterator->second.lastFrame = frame.number;
@@ -2297,6 +2398,14 @@ namespace Mosaic
         }
 
         return *node.persistentState;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Context::Persistent * Context::findState(Id id) noexcept
+    {
+        auto iterator = persistent.find(id);
+        auto returnedValue = iterator == persistent.end() ? nullptr : &iterator->second;
+
+        return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
     const Context::Persistent * Context::findState(Id id) const noexcept
@@ -2373,7 +2482,10 @@ namespace Mosaic
         {
             Id id = iterator->first;
             Persistent & value = iterator->second;
-            bool durable = value.windowInitialized || value.expandedInitialized == true || value.table != nullptr || value.scrollPosition != Vec2{} || value.scrollTarget != Vec2{};
+            const Persistent & readOnlyValue = value;
+            bool durableWindow = value.window != nullptr && readOnlyValue.windowData().initialized == true;
+            bool durableScroll = value.scroll != nullptr && (readOnlyValue.scrollData().position != Vec2{} || readOnlyValue.scrollData().target != Vec2{});
+            bool durable = durableWindow || durableScroll || value.expandedInitialized == true || value.table != nullptr;
             uint64_t retention = durable ? DurableRetentionFrames : TransientRetentionFrames;
             bool retain = frame.number - value.lastFrame <= retention;
 
@@ -2429,16 +2541,16 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Context::ColorTextData & Context::ensureColorTextData(Node & node)
     {
-        if(node.colorTextDataIndex == std::numeric_limits<size_t>::max())
+        if(node.valueData().colorTextDataIndex == std::numeric_limits<size_t>::max())
         {
-            node.colorTextDataIndex = frameColorTextDataCount++;
+            node.valueData().colorTextDataIndex = frameColorTextDataCount++;
 
-            if(node.colorTextDataIndex == frameColorTextData.size())
+            if(node.valueData().colorTextDataIndex == frameColorTextData.size())
             {
                 frameColorTextData.emplace_back();
             }
 
-            ColorTextData & colorText = frameColorTextData[node.colorTextDataIndex];
+            ColorTextData & colorText = frameColorTextData[node.valueData().colorTextDataIndex];
             for(String & text : colorText.text)
             {
                 text.clear();
@@ -2448,12 +2560,12 @@ namespace Mosaic
             colorText.prepared = {true, true, true, true};
         }
 
-        return frameColorTextData[node.colorTextDataIndex];
+        return frameColorTextData[node.valueData().colorTextDataIndex];
     }
     //////////////////////////////////////////////////////////////////////////
     const Context::ColorTextData * Context::findColorTextData(const Node & node) const noexcept
     {
-        auto returnedValue = node.colorTextDataIndex < frameColorTextData.size() ? &frameColorTextData[node.colorTextDataIndex] : nullptr;
+        auto returnedValue = node.valueData().colorTextDataIndex < frameColorTextData.size() ? &frameColorTextData[node.valueData().colorTextDataIndex] : nullptr;
 
         return returnedValue;
     }
@@ -2473,6 +2585,30 @@ namespace Mosaic
     const Context::Node * Context::findFrameNode(Id id) const noexcept
     {
         size_t index = findFrameNodeIndex(id);
+
+        if(index >= nodes.size())
+        {
+            return nullptr;
+        }
+
+        return &nodes[index];
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Context::Node * Context::findFrameNode(const ItemRef & item) noexcept
+    {
+        size_t index = findFrameNodeIndex(item);
+
+        if(index >= nodes.size())
+        {
+            return nullptr;
+        }
+
+        return &nodes[index];
+    }
+    //////////////////////////////////////////////////////////////////////////
+    const Context::Node * Context::findFrameNode(const ItemRef & item) const noexcept
+    {
+        size_t index = findFrameNodeIndex(item);
 
         if(index >= nodes.size())
         {
@@ -2502,6 +2638,28 @@ namespace Mosaic
 
             slot = (slot + 1) & mask;
         }
+        auto returnedValue = std::numeric_limits<size_t>::max();
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    size_t Context::findFrameNodeIndex(const ItemRef & item) const noexcept
+    {
+        if(item.valid() == false)
+        {
+            auto returnedValue = std::numeric_limits<size_t>::max();
+
+            return returnedValue;
+        }
+
+        for(size_t index = 0; index != nodes.size(); ++index)
+        {
+            if(nodes[index].item == item)
+            {
+                return index;
+            }
+        }
+
         auto returnedValue = std::numeric_limits<size_t>::max();
 
         return returnedValue;
@@ -2542,6 +2700,7 @@ namespace Mosaic
             strings.semanticDescription.clear();
             strings.semanticValue.clear();
             strings.path.clear();
+            strings.identityDebugValue.clear();
         }
 
         return frameNodeStrings[node.frameStringIndex];
@@ -2629,11 +2788,518 @@ namespace Mosaic
         frameNodeIndices[slot] = {id, index, frame.number};
     }
     //////////////////////////////////////////////////////////////////////////
+    const Context::InteractionSnapshotItem * Context::findInteractionSnapshot(const ItemRef & item) const noexcept
+    {
+        if(item.valid() == false)
+        {
+            return nullptr;
+        }
+
+        if(interactionSnapshotIndices.empty() == true)
+        {
+            return nullptr;
+        }
+
+        Id hash = combineId(combineId(item.id, item.submission), item.occurrence);
+        size_t mask = interactionSnapshotIndices.size() - 1;
+        size_t slot = std::hash<Id>{}(hash) & mask;
+        while(interactionSnapshotIndices[slot].generation == interactionSnapshotGeneration)
+        {
+            const InteractionSnapshotIndexEntry & entry = interactionSnapshotIndices[slot];
+
+            if(entry.item == item)
+            {
+                return &interactionSnapshot[entry.index];
+            }
+
+            slot = (slot + 1) & mask;
+        }
+
+        return nullptr;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    ItemRef Context::addWindowFrameInstance(size_t node, uint64_t submission)
+    {
+        ItemRef item;
+        item.id = nodes[node].id;
+        item.submission = submission;
+
+        for(const WindowFrameInstance & instance : windowFrameInstances)
+        {
+            if(instance.item.id == item.id)
+            {
+                ++item.occurrence;
+            }
+        }
+
+        windowFrameInstances.push_back({item, node});
+
+        return item;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Context::windowHasMultipleFrameInstances(Id id) const noexcept
+    {
+        size_t count = 0;
+
+        for(const WindowFrameInstance & instance : windowFrameInstances)
+        {
+            if(instance.item.id != id)
+            {
+                continue;
+            }
+
+            ++count;
+
+            if(count > 1)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void Context::captureInteractionSnapshot()
+    {
+        interactionSnapshot.clear();
+        interactionScrollTransforms.clear();
+        ++interactionSnapshotGeneration;
+
+        if(interactionSnapshotGeneration == 0)
+        {
+            interactionSnapshotGeneration = 1;
+            interactionSnapshotIndices.clear();
+        }
+
+        interactionSnapshot.reserve(nodes.size());
+        for(size_t nodeIndex = 1; nodeIndex != nodes.size(); ++nodeIndex)
+        {
+            const Node & node = nodes[nodeIndex];
+
+            if(node.item.valid() == false)
+            {
+                continue;
+            }
+
+            bool queryable = node.persistentState != nullptr || node.focusable || node.kind == Detail::NodeKind::Window;
+
+            if(queryable == false)
+            {
+                continue;
+            }
+
+            InteractionSnapshotItem item;
+            item.item = node.item;
+            item.kind = node.kind;
+            item.identityParent = node.identityParent;
+            item.inputLayer = node.inputLayer;
+            item.windowOwner = node.windowOwner;
+            item.windowSubmission = node.windowSubmission;
+            item.capturedBounds = node.persistentState == nullptr ? node.bounds : node.persistentState->lastBounds;
+            item.capturedClip = node.persistentState == nullptr ? node.clip : node.persistentState->lastClip;
+            item.bounds = item.capturedBounds;
+            item.clip = item.capturedClip;
+            item.textSize = node.textSize;
+            item.scrollOptions = node.scrollOptions();
+            item.tableOptions = node.tableOptions();
+            item.textVisibleHeight = std::max(0.f, node.bounds.height - node.style->metrics.padding - node.style->metrics.frameBorderSize * 2.f);
+            item.animationsEnabled = node.style->behavior.animationsEnabled;
+            item.visible = node.visible && (node.response.flags & Detail::CulledNodeFlag) == 0;
+            item.disabled = node.disabled;
+            item.inputBlocked = node.inputBlocked;
+            item.navigationBlocked = node.navigationBlocked;
+            item.focusable = node.focusable;
+            item.scrollTransformBegin = interactionScrollTransforms.size();
+
+            size_t parent = node.parent;
+            while(parent < nodes.size() && parent != 0)
+            {
+                const Node & ancestor = nodes[parent];
+
+                if(ancestor.kind == Detail::NodeKind::Window && item.capturedWindowBounds.empty() == true)
+                {
+                    item.capturedWindowBounds = ancestor.bounds;
+                }
+
+                bool scrollAncestor = Detail::scrollsContent(ancestor) || ancestor.kind == Detail::NodeKind::Table;
+
+                if(scrollAncestor == true)
+                {
+                    const Persistent * scrollState = findState(ancestor.id);
+
+                    if(scrollState != nullptr)
+                    {
+                        InteractionScrollTransform transform;
+                        transform.id = ancestor.id;
+                        transform.position = scrollState->scrollData().position;
+                        transform.clip = ancestor.childrenClip;
+                        interactionScrollTransforms.push_back(transform);
+                    }
+                }
+
+                parent = ancestor.parent;
+            }
+
+            item.scrollTransformCount = interactionScrollTransforms.size() - item.scrollTransformBegin;
+            const Persistent * windowState = findState(node.kind == Detail::NodeKind::Window ? node.id : node.windowOwner);
+
+            if(windowState != nullptr)
+            {
+                item.windowZOrder = windowState->windowData().zOrder;
+                item.windowPopup = windowState->windowData().popup;
+                item.windowAcceptsPointerInput = windowState->windowData().acceptsPointerInput;
+            }
+
+            interactionSnapshot.push_back(item);
+        }
+
+        for(const WindowFrameInstance & instance : windowFrameInstances)
+        {
+            const Node & node = nodes[instance.node];
+
+            if(instance.item == node.item)
+            {
+                continue;
+            }
+
+            auto primary = std::find_if(interactionSnapshot.begin(), interactionSnapshot.end(), [&node](const InteractionSnapshotItem & item)
+            {
+                return item.item == node.item;
+            });
+
+            if(primary == interactionSnapshot.end())
+            {
+                continue;
+            }
+
+            InteractionSnapshotItem item = *primary;
+            item.item = instance.item;
+            item.windowSubmission = instance.item.submission;
+            interactionSnapshot.push_back(item);
+        }
+
+        size_t capacity = 256;
+        while(capacity < interactionSnapshot.size() * 2)
+        {
+            capacity *= 2;
+        }
+
+        if(interactionSnapshotIndices.size() != capacity)
+        {
+            interactionSnapshotIndices.assign(capacity, {});
+        }
+
+        size_t mask = interactionSnapshotIndices.size() - 1;
+        for(size_t index = 0; index != interactionSnapshot.size(); ++index)
+        {
+            const ItemRef & item = interactionSnapshot[index].item;
+            Id hash = combineId(combineId(item.id, item.submission), item.occurrence);
+            size_t slot = std::hash<Id>{}(hash) & mask;
+            while(interactionSnapshotIndices[slot].generation == interactionSnapshotGeneration)
+            {
+                slot = (slot + 1) & mask;
+            }
+
+            interactionSnapshotIndices[slot] = {item, index, interactionSnapshotGeneration};
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void Context::prepareInteractionSnapshot()
+    {
+        pointerWindow = InvalidId;
+        pointerWindowSubmission = 0;
+        const PointerState * pointer = input.primaryPointer();
+        bool selectedPopup = false;
+        uint64_t selectedOrder = 0;
+
+        for(InteractionSnapshotItem & item : interactionSnapshot)
+        {
+            item.bounds = item.capturedBounds;
+            item.clip = item.capturedClip;
+            Vec2 windowTranslation;
+            Id window = item.kind == Detail::NodeKind::Window ? item.item.id : item.windowOwner;
+            const Persistent * windowState = findState(window);
+
+            if(windowState != nullptr && item.capturedWindowBounds.empty() == false)
+            {
+                windowTranslation = {windowState->windowData().bounds.x - item.capturedWindowBounds.x, windowState->windowData().bounds.y - item.capturedWindowBounds.y};
+                item.bounds.x += windowTranslation.x;
+                item.bounds.y += windowTranslation.y;
+                item.clip.x += windowTranslation.x;
+                item.clip.y += windowTranslation.y;
+            }
+
+            for(size_t index = 0; index != item.scrollTransformCount; ++index)
+            {
+                const InteractionScrollTransform & transform = interactionScrollTransforms[item.scrollTransformBegin + index];
+                const Persistent * scrollState = findState(transform.id);
+
+                if(scrollState == nullptr)
+                {
+                    item.visible = false;
+                    break;
+                }
+
+                Vec2 delta = scrollState->scrollData().position - transform.position;
+                item.bounds.x -= delta.x;
+                item.bounds.y -= delta.y;
+                Rect ancestorClip = transform.clip;
+                ancestorClip.x += windowTranslation.x;
+                ancestorClip.y += windowTranslation.y;
+                item.clip = Rect::intersection(item.clip, ancestorClip);
+            }
+
+            if(pointer == nullptr)
+            {
+                continue;
+            }
+
+            if(item.kind != Detail::NodeKind::Window)
+            {
+                continue;
+            }
+
+            if(item.visible == false || item.windowAcceptsPointerInput == false)
+            {
+                continue;
+            }
+
+            if(item.bounds.contains(pointer->position) == false)
+            {
+                continue;
+            }
+
+            bool selectWindow = pointerWindow == InvalidId;
+
+            if(item.windowPopup == true && selectedPopup == false)
+            {
+                selectWindow = true;
+            }
+
+            if(item.windowPopup == selectedPopup && item.windowZOrder >= selectedOrder)
+            {
+                selectWindow = true;
+            }
+
+            if(selectWindow == true)
+            {
+                pointerWindow = item.item.id;
+                pointerWindowSubmission = windowHasMultipleFrameInstances(item.item.id) == true ? 0 : item.item.submission;
+                selectedPopup = item.windowPopup;
+                selectedOrder = item.windowZOrder;
+            }
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void Context::updateInteractionScrollAnimations()
+    {
+        for(const InteractionSnapshotItem & item : interactionSnapshot)
+        {
+            bool scrollContainer = item.kind == Detail::NodeKind::Scroll;
+            bool scrollTable = item.kind == Detail::NodeKind::Table && (item.tableOptions.scrollHorizontal || item.tableOptions.scrollVertical);
+
+            if(scrollContainer == false && scrollTable == false)
+            {
+                continue;
+            }
+
+            Persistent * persistent = findState(item.item.id);
+
+            if(persistent == nullptr)
+            {
+                continue;
+            }
+
+            if(persistent->scrollData().animationFrame == frame.number)
+            {
+                continue;
+            }
+
+            persistent->scrollData().animationFrame = frame.number;
+
+            if(persistent->scrollData().targetInitialized == false)
+            {
+                persistent->scrollData().target = persistent->scrollData().position;
+                persistent->scrollData().targetInitialized = true;
+            }
+
+            persistent->scrollData().target.x = std::clamp(persistent->scrollData().target.x, 0.f, persistent->scrollData().range.x);
+            persistent->scrollData().target.y = std::clamp(persistent->scrollData().target.y, 0.f, persistent->scrollData().range.y);
+
+            if(persistent->scrollData().draggingScrollbar == true)
+            {
+                persistent->scrollData().target = persistent->scrollData().position;
+                persistent->scrollData().velocity = {};
+                continue;
+            }
+
+            bool smooth = item.scrollOptions.smooth && item.scrollOptions.smoothDuration > 0.f && item.animationsEnabled;
+            Vec2 updated = persistent->scrollData().target;
+
+            if(smooth == true)
+            {
+                updated.x = Detail::smoothScrollAxis(persistent->scrollData().position.x, persistent->scrollData().target.x, persistent->scrollData().velocity.x, input.deltaTime, item.scrollOptions.smoothDuration);
+                updated.y = Detail::smoothScrollAxis(persistent->scrollData().position.y, persistent->scrollData().target.y, persistent->scrollData().velocity.y, input.deltaTime, item.scrollOptions.smoothDuration);
+            }
+            else
+            {
+                persistent->scrollData().velocity = {};
+            }
+
+            persistent->scrollData().position = updated;
+            persistent->scrollData().value = item.scrollOptions.axes == ScrollAxes::Horizontal ? updated.x : updated.y;
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void Context::routeInteractionWheel()
+    {
+        if(input.wheel.x == 0.f && input.wheel.y == 0.f)
+        {
+            return;
+        }
+
+        const PointerState * pointer = input.primaryPointer();
+
+        if(pointer == nullptr)
+        {
+            return;
+        }
+
+        if(captured != InvalidId && pointer->isDown() == true)
+        {
+            return;
+        }
+
+        auto apply = [this, pointer](InteractionSnapshotItem & item)
+        {
+            bool multilineText = item.kind == Detail::NodeKind::InputMultiline;
+            bool scrollContainer = item.kind == Detail::NodeKind::Scroll;
+            bool scrollTable = item.kind == Detail::NodeKind::Table && (item.tableOptions.scrollHorizontal || item.tableOptions.scrollVertical);
+
+            if(multilineText == false && scrollContainer == false && scrollTable == false)
+            {
+                return false;
+            }
+
+            if(item.visible == false || item.disabled == true || item.inputBlocked == true)
+            {
+                return false;
+            }
+
+            Id blockedLayer = blockingInputLayer != InvalidId ? blockingInputLayer : previousBlockingInputLayer;
+
+            if(blockedLayer != InvalidId && item.inputLayer != blockedLayer && Detail::popupOwnerCanInteract(this, item.item.id) == false)
+            {
+                return false;
+            }
+
+            bool matchingWindow = pointerWindow == InvalidId || (item.windowOwner == pointerWindow && (pointerWindowSubmission == 0 || item.windowSubmission == pointerWindowSubmission));
+
+            if(matchingWindow == false)
+            {
+                return false;
+            }
+
+            if(item.bounds.empty() == true || item.clip.empty() == true)
+            {
+                return false;
+            }
+
+            if(item.bounds.contains(pointer->position) == false || item.clip.contains(pointer->position) == false)
+            {
+                return false;
+            }
+
+            wheelOwner = item.item.id;
+            wheelOwnerItem = item.item;
+            wheelOwnerTimestamp = input.timestamp;
+
+            if(multilineText == true)
+            {
+                Detail::TextEditorState & editorState = textEditorState(item.item.id);
+                float maximumY = std::max(0.f, item.textSize.y - item.textVisibleHeight);
+                editorState.textScrollY = std::clamp(editorState.textScrollY - input.wheel.y, 0.f, maximumY);
+                frame.events.push_back({EventType::Change, item.item.id, {}, {}, 0, input.timestamp});
+
+                return true;
+            }
+
+            Persistent & persistent = state(item.item.id);
+
+            if(persistent.scrollData().targetInitialized == false)
+            {
+                persistent.scrollData().target = persistent.scrollData().position;
+                persistent.scrollData().targetInitialized = true;
+            }
+
+            bool horizontal = scrollTable ? item.tableOptions.scrollHorizontal : item.scrollOptions.axes == ScrollAxes::Horizontal || item.scrollOptions.axes == ScrollAxes::Both;
+            bool vertical = scrollTable ? item.tableOptions.scrollVertical : item.scrollOptions.axes == ScrollAxes::Vertical || item.scrollOptions.axes == ScrollAxes::Both;
+            float deltaX = horizontal ? input.wheel.x * item.scrollOptions.wheelStep : 0.f;
+            float deltaY = vertical ? input.wheel.y * item.scrollOptions.wheelStep : 0.f;
+
+            if(horizontal == true && deltaX == 0.f && (vertical == false || input.modifiers.shift == true))
+            {
+                deltaX = input.wheel.y * item.scrollOptions.wheelStep;
+
+                if(input.modifiers.shift == true)
+                {
+                    deltaY = 0.f;
+                }
+            }
+
+            Vec2 updated;
+            updated.x = std::clamp(persistent.scrollData().target.x - deltaX, 0.f, persistent.scrollData().range.x);
+            updated.y = std::clamp(persistent.scrollData().target.y - deltaY, 0.f, persistent.scrollData().range.y);
+
+            if(updated == persistent.scrollData().target)
+            {
+                return true;
+            }
+
+            persistent.scrollData().target = updated;
+            bool smooth = item.scrollOptions.smooth && item.scrollOptions.smoothDuration > 0.f && item.animationsEnabled;
+
+            if(smooth == false)
+            {
+                persistent.scrollData().position = updated;
+                persistent.scrollData().velocity = {};
+                persistent.scrollData().value = item.scrollOptions.axes == ScrollAxes::Horizontal ? updated.x : updated.y;
+            }
+
+            frame.events.push_back({EventType::Change, item.item.id, {}, {}, 0, input.timestamp});
+
+            return true;
+        };
+
+        constexpr double wheelOwnershipTimeout = 0.35;
+
+        if(wheelOwnerItem.valid() == true && input.timestamp - wheelOwnerTimestamp <= wheelOwnershipTimeout)
+        {
+            for(InteractionSnapshotItem & item : interactionSnapshot)
+            {
+                if(item.item == wheelOwnerItem && apply(item) == true)
+                {
+                    return;
+                }
+            }
+        }
+
+        wheelOwner = InvalidId;
+        wheelOwnerItem = {};
+        for(size_t index = interactionSnapshot.size(); index != 0; --index)
+        {
+            if(apply(interactionSnapshot[index - 1]) == true)
+            {
+                return;
+            }
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
     Context::TableState & Context::tableState(Id id)
     {
-        if(const Node * node = findFrameNode(id); node != nullptr && node->kind == Detail::NodeKind::Table && node->tableSettingsId != InvalidId)
+        if(const Node * node = findFrameNode(id); node != nullptr && node->kind == Detail::NodeKind::Table && node->tableSettingsId() != InvalidId)
         {
-            id = node->tableSettingsId;
+            id = node->tableSettingsId();
         }
 
         Persistent & persistentState = state(id);
@@ -2648,9 +3314,9 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     const Context::TableState * Context::findTableState(Id id) const noexcept
     {
-        if(const Node * node = findFrameNode(id); node != nullptr && node->kind == Detail::NodeKind::Table && node->tableSettingsId != InvalidId)
+        if(const Node * node = findFrameNode(id); node != nullptr && node->kind == Detail::NodeKind::Table && node->tableSettingsId() != InvalidId)
         {
-            id = node->tableSettingsId;
+            id = node->tableSettingsId();
         }
 
         const Persistent * persistentState = findState(id);
@@ -2748,41 +3414,7 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Vec2 Context::estimateText(StringView value, const Theme & nodeStyle) const noexcept
     {
-        bool monospace = nodeStyle.metrics.font == MonospaceFont;
-        float longest = 0.f;
-        float current = 0.f;
-        size_t lines = 1;
-        for(size_t index = 0; index < value.size();)
-        {
-            unsigned char character = static_cast<unsigned char>(value[index]);
-
-            if(character == '\n')
-            {
-                longest = std::max(longest, current);
-                current = 0.f;
-                ++lines;
-                ++index;
-                continue;
-            }
-
-            if((character & 0x80U) == 0)
-            {
-                current += Detail::estimatedAsciiAdvance(static_cast<char>(character), nodeStyle.metrics.fontSize, monospace);
-                ++index;
-                continue;
-            }
-
-            current += nodeStyle.metrics.fontSize;
-            ++index;
-            while(index < value.size() && (static_cast<unsigned char>(value[index]) & 0xc0U) == 0x80U)
-            {
-                ++index;
-            }
-        }
-        longest = std::max(longest, current);
-        float estimatedLineHeight = std::min(nodeStyle.metrics.lineHeight, nodeStyle.metrics.fontSize * 1.2f);
-        float height = static_cast<float>(lines) * std::max(1.f, estimatedLineHeight);
-        Vec2 result = {longest, height};
+        Vec2 result = measureText(value, nodeStyle);
 
         return result;
     }
@@ -2791,9 +3423,41 @@ namespace Mosaic
     {
         if(fontProvider != nullptr)
         {
+            uint64_t revision = fontProvider->revision();
+            uint32_t fontSize = Detail::quantizeFontSize(nodeStyle.metrics.fontSize);
+            uint64_t key = hashBytes(value);
+            key = combineId(key, reinterpret_cast<uintptr_t>(fontProvider));
+            key = combineId(key, revision);
+            key = combineId(key, nodeStyle.metrics.font);
+            key = combineId(key, fontSize);
+            TextMeasureCacheEntry & entry = textMeasureCache[static_cast<size_t>(key) & (textMeasureCache.size() - 1U)];
+            bool matches = entry.key == key;
+            matches = matches == true && entry.provider == fontProvider;
+            matches = matches == true && entry.providerRevision == revision;
+            matches = matches == true && entry.font == nodeStyle.metrics.font;
+            matches = matches == true && entry.fontSize == fontSize;
+            matches = matches == true && entry.text == value;
+
+            if(matches == true)
+            {
+                ++frameTextMeasureCacheHits;
+
+                return entry.size;
+            }
+
             Vec2 measured;
+
             if(fontProvider->measure(nodeStyle.metrics.font, nodeStyle.metrics.fontSize, value, &measured) == true)
             {
+                entry.text.assign(value);
+                entry.size = measured;
+                entry.provider = fontProvider;
+                entry.providerRevision = revision;
+                entry.font = nodeStyle.metrics.font;
+                entry.fontSize = fontSize;
+                entry.key = key;
+                ++frameTextMeasureCacheMisses;
+
                 return measured;
             }
         }
@@ -2834,6 +3498,15 @@ namespace Mosaic
         textUseHistory.fill({});
         textCacheEntryCount = 0;
         textCacheMemory = 0;
+        for(TextMeasureCacheEntry & entry : textMeasureCache)
+        {
+            entry.text.clear();
+            entry.provider = nullptr;
+            entry.providerRevision = 0;
+            entry.font = DefaultFont;
+            entry.fontSize = 0;
+            entry.key = 0;
+        }
     }
     //////////////////////////////////////////////////////////////////////////
     void Context::unlinkCachedText(CachedText & text) noexcept
@@ -3151,45 +3824,39 @@ namespace Mosaic
                     break;
                 }
 
-                for(const PreparedTextBatch & source : character->batches)
+                for(const PreparedTextRunBatch & source : character->batches)
                 {
                     bool appendBatch = cached->batches.empty() == true;
 
                     if(appendBatch == false)
                     {
-                        const PreparedTextBatch & lastBatch = cached->batches.back();
+                        const PreparedTextRunBatch & lastBatch = cached->batches.back();
                         appendBatch = lastBatch.texture != source.texture;
                     }
 
                     if(appendBatch == true)
                     {
-                        PreparedTextBatch batch;
+                        PreparedTextRunBatch batch;
                         batch.texture = source.texture;
                         cached->batches.push_back(std::move(batch));
                     }
 
-                    PreparedTextBatch & destination = cached->batches.back();
+                    PreparedTextRunBatch & destination = cached->batches.back();
 
-                    if(destination.vertices.size() > std::numeric_limits<uint32_t>::max() - source.vertices.size())
+                    if(destination.rectangles.size() > std::numeric_limits<uint32_t>::max() - source.rectangles.size())
                     {
                         auto returnedValue = discardText();
 
                         return returnedValue;
                     }
 
-                    uint32_t first = static_cast<uint32_t>(destination.vertices.size());
-                    destination.vertices.reserve(destination.vertices.size() + source.vertices.size());
-                    for(const Vertex & vertex : source.vertices)
+                    destination.rectangles.reserve(destination.rectangles.size() + source.rectangles.size());
+                    for(const TexturedRectInstance & sourceRectangle : source.rectangles)
                     {
-                        Vertex translated = vertex;
-                        translated.position.x = Detail::snapToPixel(translated.position.x + cursor, viewport.dpiScale);
-                        translated.position.y = Detail::snapToPixel(translated.position.y, viewport.dpiScale);
-                        destination.vertices.push_back(translated);
-                    }
-                    destination.indices.reserve(destination.indices.size() + source.indices.size());
-                    for(uint32_t sourceIndex : source.indices)
-                    {
-                        destination.indices.push_back(first + sourceIndex);
+                        TexturedRectInstance translated = sourceRectangle;
+                        translated.bounds.x = Detail::snapToPixel(translated.bounds.x + cursor, viewport.dpiScale);
+                        translated.bounds.y = Detail::snapToPixel(translated.bounds.y, viewport.dpiScale);
+                        destination.rectangles.push_back(translated);
                     }
                 }
                 cursor += character->size.x;
@@ -3248,37 +3915,33 @@ namespace Mosaic
 
                 if(appendBatch == false)
                 {
-                    const PreparedTextBatch & lastBatch = cached->batches.back();
+                    const PreparedTextRunBatch & lastBatch = cached->batches.back();
                     appendBatch = lastBatch.texture != glyph.texture;
                 }
 
                 if(appendBatch == true)
                 {
-                    PreparedTextBatch batch;
+                    PreparedTextRunBatch batch;
                     batch.texture = glyph.texture;
                     cached->batches.push_back(std::move(batch));
                 }
 
-                PreparedTextBatch & batch = cached->batches.back();
+                PreparedTextRunBatch & batch = cached->batches.back();
 
-                if(batch.vertices.size() > std::numeric_limits<uint32_t>::max() - 4)
+                if(batch.rectangles.size() == std::numeric_limits<uint32_t>::max())
                 {
                     auto returnedValue = discardText();
 
                     return returnedValue;
                 }
 
-                uint32_t first = static_cast<uint32_t>(batch.vertices.size());
                 float left = Detail::snapToPixel(placement.position.x + glyph.bearing.x, viewport.dpiScale);
                 float top = Detail::snapToPixel(placement.position.y + glyph.bearing.y, viewport.dpiScale);
                 float right = Detail::snapToPixel(placement.position.x + glyph.bearing.x + glyph.size.x, viewport.dpiScale);
                 float bottom = Detail::snapToPixel(placement.position.y + glyph.bearing.y + glyph.size.y, viewport.dpiScale);
                 constexpr Color white = {1.f, 1.f, 1.f, 1.f};
-                batch.vertices.push_back({{left, top}, white, {glyph.uv.x, glyph.uv.y}});
-                batch.vertices.push_back({{right, top}, white, {glyph.uv.right(), glyph.uv.y}});
-                batch.vertices.push_back({{right, bottom}, white, {glyph.uv.right(), glyph.uv.bottom()}});
-                batch.vertices.push_back({{left, bottom}, white, {glyph.uv.x, glyph.uv.bottom()}});
-                batch.indices.insert(batch.indices.end(), {first, first + 1, first + 2, first, first + 2, first + 3});
+                TexturedRectInstance rectangle = {{left, top, right - left, bottom - top}, glyph.uv, white};
+                batch.rectangles.push_back(rectangle);
             }
         }
 
@@ -3320,12 +3983,12 @@ namespace Mosaic
     {
         node.textPrepared = true;
         bool editable = node.kind == Detail::NodeKind::InputText || node.kind == Detail::NodeKind::InputMultiline;
-        float wrapWidth = node.textWrapWidth;
+        float wrapWidth = node.valueData().textWrapWidth;
 
         if(node.wordWrap == true && wrapWidth <= 0.f)
         {
             const Rect & textBounds = node.bounds.empty() == true ? state(node).lastBounds : node.bounds;
-            wrapWidth = std::max(0.f, textBounds.width - node.style->metrics.padding * (node.multiline ? 2.f : 0.f) - node.style->metrics.frameBorderSize * (node.multiline ? 2.f : 0.f));
+            wrapWidth = std::max(0.f, textBounds.width - node.style->metrics.padding * (node.textEditData().multiline ? 2.f : 0.f) - node.style->metrics.frameBorderSize * (node.textEditData().multiline ? 2.f : 0.f));
         }
 
         node.textRun = findOrCreateText(value, *node.style, editable, node.wordWrap, wrapWidth);
@@ -3337,7 +4000,7 @@ namespace Mosaic
         node.valueText.assign(value);
         Theme valueStyle = *node.style;
         valueStyle.metrics.font = MonospaceFont;
-        node.valueTextSize = estimateText(value, valueStyle);
+        node.valueData().valueTextSize = estimateText(value, valueStyle);
         node.valueTextRun = nullptr;
         node.valueTextPrepared = value.empty() == true;
     }
@@ -3348,7 +4011,7 @@ namespace Mosaic
         Theme valueStyle = *node.style;
         valueStyle.metrics.font = MonospaceFont;
         node.valueTextRun = findOrCreateText(node.valueText, valueStyle, false);
-        node.valueTextSize = node.valueTextRun == nullptr ? measureText(node.valueText, valueStyle) : node.valueTextRun->size;
+        node.valueData().valueTextSize = node.valueTextRun == nullptr ? measureText(node.valueText, valueStyle) : node.valueTextRun->size;
     }
     //////////////////////////////////////////////////////////////////////////
     void Context::prepareColorChannelText(Node & node, size_t channel, StringView value)
@@ -3369,7 +4032,7 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     void Context::shapeColorChannelText(Node & node, size_t channel)
     {
-        ColorTextData * colorText = node.colorTextDataIndex < frameColorTextData.size() ? &frameColorTextData[node.colorTextDataIndex] : nullptr;
+        ColorTextData * colorText = node.valueData().colorTextDataIndex < frameColorTextData.size() ? &frameColorTextData[node.valueData().colorTextDataIndex] : nullptr;
 
         if(colorText == nullptr)
         {
@@ -3410,7 +4073,7 @@ namespace Mosaic
                 shapeValueText(node);
             }
 
-            ColorTextData * colorText = node.colorTextDataIndex < frameColorTextData.size() ? &frameColorTextData[node.colorTextDataIndex] : nullptr;
+            ColorTextData * colorText = node.valueData().colorTextDataIndex < frameColorTextData.size() ? &frameColorTextData[node.valueData().colorTextDataIndex] : nullptr;
 
             if(colorText == nullptr)
             {
@@ -3460,33 +4123,195 @@ namespace Mosaic
     {
         Node node = acquireNode();
         node.kind = kind;
+        node.debugPayload = frameArena.make<NodeDebugPayload>();
+
+        if(node.debugPayload == nullptr)
+        {
+            node.debugPayload = &fallbackNodeDebugPayload;
+            frame.diagnostics.emplace_back("Frame arena could not allocate node debug payload");
+        }
+
+        node.valuePayload = frameArena.make<ValueNodePayload>();
+
+        if(node.valuePayload == nullptr)
+        {
+            node.valuePayload = &fallbackValueNodePayload;
+            frame.diagnostics.emplace_back("Frame arena could not allocate node value payload");
+        }
+
+        if(kind == Detail::NodeKind::Window || kind == Detail::NodeKind::Scroll || kind == Detail::NodeKind::Table)
+        {
+            node.scrollPayload = frameArena.make<ScrollNodePayload>();
+
+            if(node.scrollPayload == nullptr)
+            {
+                node.scrollPayload = &fallbackScrollNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate scroll node payload");
+            }
+        }
+
+        if(kind == Detail::NodeKind::Window)
+        {
+            node.windowPayload = frameArena.make<WindowNodePayload>();
+
+            if(node.windowPayload == nullptr)
+            {
+                node.windowPayload = &fallbackWindowNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate window node payload");
+            }
+        }
+
+        if(kind == Detail::NodeKind::IconButton || kind == Detail::NodeKind::Image || kind == Detail::NodeKind::ImageButton)
+        {
+            node.imagePayload = frameArena.make<ImageNodePayload>();
+
+            if(node.imagePayload == nullptr)
+            {
+                node.imagePayload = &fallbackImageNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate image node payload");
+            }
+        }
+
+        if(kind == Detail::NodeKind::Tree)
+        {
+            node.treePayload = frameArena.make<TreeNodePayload>();
+
+            if(node.treePayload == nullptr)
+            {
+                node.treePayload = &fallbackTreeNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate tree node payload");
+            }
+        }
+
+        if(kind == Detail::NodeKind::InputText || kind == Detail::NodeKind::InputMultiline || kind == Detail::NodeKind::Slider || kind == Detail::NodeKind::DragValue)
+        {
+            node.textEditPayload = frameArena.make<TextEditNodePayload>();
+
+            if(node.textEditPayload == nullptr)
+            {
+                node.textEditPayload = &fallbackTextEditNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate text edit node payload");
+            }
+        }
+
+        if(kind == Detail::NodeKind::Table)
+        {
+            node.tablePayload = frameArena.make<TableNodePayload>();
+
+            if(node.tablePayload == nullptr)
+            {
+                node.tablePayload = &fallbackTableNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate table node payload");
+            }
+        }
+
+        if(nodes[currentParent].kind == Detail::NodeKind::Table)
+        {
+            node.tableItemPayload = frameArena.make<TableItemNodePayload>();
+
+            if(node.tableItemPayload == nullptr)
+            {
+                node.tableItemPayload = &fallbackTableItemNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate table item payload");
+            }
+        }
+
         node.parent = currentParent;
         node.parentId = nodes[currentParent].id;
         // Windows have a global identity just like Mosaic windows: moving a panel between
         // a split container, a dock node and the floating root must not change its persistent id.
-        Id identityParent = kind == Detail::NodeKind::Window ? RootId : node.parentId;
-        node.id = combineId(identityParent, localId(kind, key, location, anonymous));
+        Id identityParent = kind == Detail::NodeKind::Window ? RootId : nodes[currentParent].identityScope;
+
+        if(kind != Detail::NodeKind::TableRow && nodes[currentParent].kind == Detail::NodeKind::Table)
+        {
+            const TableState & parentTable = tableState(nodes[currentParent].id);
+
+            if(parentTable.currentRowIdentity != InvalidId)
+            {
+                identityParent = parentTable.currentRowIdentity;
+            }
+        }
+
+        Id identityLocal = localId(kind, key, location, anonymous);
+        node.id = combineId(identityParent, identityLocal);
+        node.identityScope = anonymous == true ? identityParent : node.id;
+        node.identityParent = identityParent;
+        node.identityLocal = identityLocal;
+        node.anonymousIdentity = anonymous;
+
+        if(key.isExplicit() == true)
+        {
+            if(key.hasIntegralDebug() == true)
+            {
+                node.mutableDebugData().identityValueKind = IdentityValueKind::Integral;
+                node.mutableDebugData().identityIntegral = key.integralDebug();
+            }
+            else
+            {
+                if(key.debug().empty() == true)
+                {
+                    node.mutableDebugData().identityValueKind = IdentityValueKind::Hash;
+                }
+                else
+                {
+                    node.mutableDebugData().identityValueKind = IdentityValueKind::String;
+                    FrameNodeStrings & strings = ensureNodeStrings(node);
+                    strings.identityDebugValue.assign(key.debug());
+                }
+            }
+        }
+
         node.label.assign(label);
         node.layout = layout;
+        Node & parentNode = nodes[currentParent];
+
+        if(parentNode.nextSameLinePending == true)
+        {
+            node.sameLine = true;
+            node.sameLineOffset = std::max(0.f, parentNode.nextSameLine.offset);
+            node.sameLineSpacing = parentNode.nextSameLine.spacing;
+            parentNode.nextSameLinePending = false;
+        }
+
+        if(parentNode.nextTextAlignToFramePadding == true)
+        {
+            bool textNode = kind == Detail::NodeKind::Text || kind == Detail::NodeKind::Bullet || kind == Detail::NodeKind::BulletText;
+
+            if(textNode == true)
+            {
+                node.alignTextToFramePadding = true;
+                parentNode.nextTextAlignToFramePadding = false;
+            }
+        }
 
         if(Detail::usesItemWidth(kind) == true)
         {
             if(nextItemWidthPending == true)
             {
-                node.itemWidth = nextItemWidth;
-                node.itemWidthRequested = true;
+                node.valueData().itemWidth = nextItemWidth;
+                node.valueData().itemWidthRequested = true;
                 nextItemWidthPending = false;
             }
             else if(itemWidthStack.empty() == false)
             {
-                node.itemWidth = itemWidthStack.back();
-                node.itemWidthRequested = true;
+                node.valueData().itemWidth = itemWidthStack.back();
+                node.valueData().itemWidthRequested = true;
             }
         }
 
         node.style = currentStyle;
         node.inputLayer = currentInputLayer;
         node.windowOwner = currentWindow;
+        node.windowSubmission = currentWindowSubmission;
+        node.item.id = node.id;
+        node.item.submission = node.windowSubmission;
+        for(const Node & existingNode : nodes)
+        {
+            if(existingNode.item.id == node.item.id && existingNode.item.submission == node.item.submission)
+            {
+                ++node.item.occurrence;
+            }
+        }
         estimateNodeText(node, node.label);
         node.disabled = currentDisabled;
         node.inputBlocked = currentInputBlocked;
@@ -3509,32 +4334,33 @@ namespace Mosaic
             }
         }
 
-        node.file = location.file_name();
-        node.function = location.function_name();
-        node.line = location.line();
+        node.mutableDebugData().file = location.file_name();
+        node.mutableDebugData().function = location.function_name();
+        node.mutableDebugData().line = location.line();
 
         if(nodes[currentParent].kind == Detail::NodeKind::Table)
         {
             TableState & tableState = this->tableState(nodes[currentParent].id);
             uint32_t columnCount = std::max(1U, nodes[currentParent].layout.columns);
-            node.tableRow = tableState.currentRow;
-            node.tableColumn = std::min(tableState.currentColumn, columnCount - 1);
+            TableItemNodePayload & tableItem = node.mutableTableItem();
+            tableItem.row = tableState.currentRow;
+            tableItem.column = std::min(tableState.currentColumn, columnCount - 1);
 
-            if(node.tableColumn < tableState.columns.size())
+            if(tableItem.column < tableState.columns.size())
             {
-                node.tableColumnOptions = tableState.columns[node.tableColumn].options;
+                tableItem.columnOptions = tableState.columns[tableItem.column].options;
 
-                if(Detail::usesItemWidth(kind) == true && node.itemWidthRequested == false && node.tableColumnOptions.itemWidth != 0.f)
+                if(Detail::usesItemWidth(kind) == true && node.valueData().itemWidthRequested == false && tableItem.columnOptions.itemWidth != 0.f)
                 {
-                    node.itemWidth = node.tableColumnOptions.itemWidth;
-                    node.itemWidthRequested = true;
+                    node.valueData().itemWidth = tableItem.columnOptions.itemWidth;
+                    node.valueData().itemWidthRequested = true;
                 }
             }
 
-            node.tableRowBackgrounds = tableState.currentRowBackgrounds;
-            node.tableRowBackgroundsEnabled = tableState.currentRowBackgroundsEnabled;
-            node.tableCellBackground = tableState.pendingCellBackground;
-            node.tableCellBackgroundEnabled = tableState.pendingCellBackgroundEnabled;
+            tableItem.rowBackgrounds = tableState.currentRowBackgrounds;
+            tableItem.rowBackgroundsEnabled = tableState.currentRowBackgroundsEnabled;
+            tableItem.cellBackground = tableState.pendingCellBackground;
+            tableItem.cellBackgroundEnabled = tableState.pendingCellBackgroundEnabled;
             tableState.pendingCellBackgroundEnabled = false;
             ++tableState.currentColumn;
 
@@ -3542,6 +4368,7 @@ namespace Mosaic
             {
                 tableState.currentColumn = 0;
                 ++tableState.currentRow;
+                tableState.currentRowIdentity = InvalidId;
             }
         }
 
@@ -3556,15 +4383,40 @@ namespace Mosaic
         size_t index = nodes.size();
         size_t existing = findFrameNodeIndex(node.id);
 
-        if(existing >= nodes.size())
-        {
-            indexFrameNode(node.id, index);
-        }
-
         nodes.emplace_back(std::move(node));
 
-        if(existing < index)
+        bool duplicateIdentity = existing < index;
+
+        if(duplicateIdentity == true)
         {
+            duplicateIdentity = nodes[existing].anonymousIdentity == false && nodes[index].anonymousIdentity == false;
+        }
+
+        if(duplicateIdentity == true)
+        {
+            duplicateIdentity = nodes[existing].identityParent == nodes[index].identityParent;
+        }
+
+        if(duplicateIdentity == true)
+        {
+            duplicateIdentity = nodes[existing].identityLocal == nodes[index].identityLocal;
+        }
+
+        if(duplicateIdentity == true && nodes[existing].kind == Detail::NodeKind::Window && nodes[index].kind == Detail::NodeKind::Window)
+        {
+            duplicateIdentity = false;
+        }
+
+        if(duplicateIdentity == true && nodes[existing].windowOwner != InvalidId && nodes[existing].windowOwner == nodes[index].windowOwner && nodes[existing].windowSubmission != nodes[index].windowSubmission)
+        {
+            duplicateIdentity = false;
+        }
+
+        if(duplicateIdentity == true)
+        {
+            nodes[existing].idConflict = true;
+            nodes[index].idConflict = true;
+
             // nodePath() may grow frameNodeStrings. Keep owned copies so the
             // second lookup cannot invalidate the first diagnostic path.
             String existingPath(nodePath(existing));
@@ -3580,22 +4432,24 @@ namespace Mosaic
             diagnostic += ": ";
             diagnostic += existingPath;
             diagnostic += " (";
-            diagnostic += nodes[existing].file;
+            diagnostic += nodes[existing].debugData().file;
             diagnostic += ':';
             String existingLine = "?";
-            (void)Detail::toString(nodes[existing].line, &existingLine);
+            (void)Detail::toString(nodes[existing].debugData().line, &existingLine);
             diagnostic += existingLine;
             diagnostic += ") vs ";
             diagnostic += addedPath;
             diagnostic += " (";
-            diagnostic += nodes[index].file;
+            diagnostic += nodes[index].debugData().file;
             diagnostic += ':';
             String addedLine = "?";
-            (void)Detail::toString(nodes[index].line, &addedLine);
+            (void)Detail::toString(nodes[index].debugData().line, &addedLine);
             diagnostic += addedLine;
             diagnostic += ')';
             frame.diagnostics.emplace_back(std::move(diagnostic));
         }
+
+        indexFrameNode(nodes[index].id, index);
 
         if(frameCaptureOptions.debug == true)
         {
@@ -3722,7 +4576,7 @@ namespace Mosaic
     uint64_t Context::pushScope(size_t node, const Theme * previousStyle, bool previousDisabled)
     {
         uint64_t token = nextScopeToken++;
-        scopes.push_back({token, currentParent, previousDisabled, currentInputBlocked, currentNavigationBlocked, currentLiveEditText, currentLiveEditScalar, currentInputLayer, currentWindow, previousStyle, currentSelectionModel, currentSelectionOrder, currentSelectionOptions, currentSelectionScope});
+        scopes.push_back({token, node, currentParent, previousDisabled, currentInputBlocked, currentNavigationBlocked, currentLiveEditText, currentLiveEditScalar, currentInputLayer, currentWindow, currentWindowSubmission, previousStyle, currentSelectionModel, currentSelectionOrder, currentSelectionOptions, currentSelectionScope});
         currentParent = node;
 
         return token;
@@ -3747,6 +4601,71 @@ namespace Mosaic
         }
 
         ScopeState previous = lastScope;
+
+        if(previous.node != previous.previousParent && previous.node < nodes.size())
+        {
+            Node & scopeNode = nodes[previous.node];
+
+            if(scopeNode.nextSameLinePending == true)
+            {
+                frame.diagnostics.emplace_back("sameLine directive was not consumed before its layout scope closed");
+                scopeNode.nextSameLinePending = false;
+            }
+
+            if(scopeNode.nextTextAlignToFramePadding == true)
+            {
+                frame.diagnostics.emplace_back("alignTextToFramePadding directive was not consumed before its layout scope closed");
+                scopeNode.nextTextAlignToFramePadding = false;
+            }
+
+            bool aggregateGroup = false;
+
+            if(scopeNode.kind == Detail::NodeKind::Scope)
+            {
+                aggregateGroup = true;
+            }
+
+            if(scopeNode.kind == Detail::NodeKind::Row)
+            {
+                aggregateGroup = true;
+            }
+
+            if(scopeNode.kind == Detail::NodeKind::Column)
+            {
+                aggregateGroup = true;
+            }
+
+            if(scopeNode.kind == Detail::NodeKind::Grid)
+            {
+                aggregateGroup = true;
+            }
+
+            if(scopeNode.kind == Detail::NodeKind::Overlay)
+            {
+                aggregateGroup = true;
+            }
+
+            if(scopeNode.semanticRole == SemanticRole::Group && aggregateGroup == true)
+            {
+                Response aggregate;
+                aggregate.id = scopeNode.id;
+                size_t child = scopeNode.firstChild;
+
+                while(child != std::numeric_limits<size_t>::max())
+                {
+                    aggregate.flags |= nodes[child].response.flags & ~(1U << 13U);
+                    child = nodes[child].nextSibling;
+                }
+
+                if(scopeNode.anonymousIdentity == false)
+                {
+                    Detail::setFlag(aggregate, 0, Mosaic::itemHovered(this, scopeNode.id));
+                }
+
+                scopeNode.response = aggregate;
+            }
+        }
+
         scopes.pop_back();
         currentParent = previous.previousParent;
         currentDisabled = previous.previousDisabled;
@@ -3756,6 +4675,7 @@ namespace Mosaic
         currentLiveEditScalar = previous.previousLiveEditScalar;
         currentInputLayer = previous.previousInputLayer;
         currentWindow = previous.previousWindow;
+        currentWindowSubmission = previous.previousWindowSubmission;
         currentStyle = previous.previousStyle;
         currentSelectionModel = previous.previousSelectionModel;
         currentSelectionOrder = previous.previousSelectionOrder;
@@ -3778,25 +4698,51 @@ namespace Mosaic
         }
     }
     //////////////////////////////////////////////////////////////////////////
-    Context * newContext(PlatformAdapter * platform, FontProvider * fontProvider)
+    Context * newContext(const ContextOptions & options)
     {
-        Allocator & allocator = defaultAllocator();
-        void * memory = allocator.allocate(sizeof(Context), alignof(Context));
+        Allocator & backingAllocator = options.allocator == nullptr ? defaultAllocator() : *options.allocator;
+        void * memory = backingAllocator.allocate(sizeof(Context), alignof(Context));
 
         if(memory == nullptr)
         {
             return nullptr;
         }
 
-        Context * ui = ::new(memory) Context;
-        ui->allocator = &allocator;
+        void * trackerMemory = backingAllocator.allocate(sizeof(Detail::AllocationTracker), alignof(Detail::AllocationTracker));
 
-        if(platform != nullptr)
+        if(trackerMemory == nullptr)
         {
-            ui->platform = platform;
+            backingAllocator.deallocate(memory, sizeof(Context), alignof(Context));
+
+            return nullptr;
         }
 
-        ui->fontProvider = fontProvider;
+        Detail::AllocationTracker * tracker = ::new(trackerMemory) Detail::AllocationTracker(&backingAllocator);
+        Allocator * previousAllocator = Detail::setConstructionAllocator(tracker);
+        Context * ui = ::new(memory) Context;
+        Detail::setConstructionAllocator(previousAllocator);
+        ui->allocationTracker = Detail::AllocationTrackerPtr(tracker, AllocatorDeleter<Detail::AllocationTracker>(backingAllocator));
+        ui->allocator = tracker;
+
+        if(options.platform != nullptr)
+        {
+            ui->platform = options.platform;
+        }
+
+        ui->fontProvider = options.fontProvider;
+        ui->frameArena.setAllocator(tracker);
+        ui->drawList.setStorage(&ui->drawCommandStorage);
+        ui->textMeasureCache.resize(4096);
+
+        return ui;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Context * newContext(PlatformAdapter * platform, FontProvider * fontProvider)
+    {
+        ContextOptions options;
+        options.platform = platform;
+        options.fontProvider = fontProvider;
+        Context * ui = Mosaic::newContext(options);
 
         return ui;
     }
@@ -3808,9 +4754,16 @@ namespace Mosaic
             return;
         }
 
-        Allocator * allocator = ui->allocator;
+        Allocator * backingAllocator = ui->allocationTracker->backingAllocator();
+
+        if(ui->activeFrame == true)
+        {
+            Detail::setConstructionAllocator(ui->previousFrameAllocator);
+            ui->activeFrame = false;
+        }
+
         ui->~Context();
-        allocator->deallocate(ui, sizeof(Context), alignof(Context));
+        backingAllocator->deallocate(ui, sizeof(Context), alignof(Context));
     }
     //////////////////////////////////////////////////////////////////////////
     void beginFrame(Context * ui, const Input & input, const Viewport & viewport)
@@ -3822,7 +4775,9 @@ namespace Mosaic
             return;
         }
 
+        ui->previousFrameAllocator = Detail::setConstructionAllocator(ui->allocator);
         ui->activeFrame = true;
+        ui->allocationTracker->reset();
         ui->frameStarted = ui->platform->monotonicTime();
         bool altPressed = input.modifiers.alt && ui->previousModifiers.alt == false;
         ui->input = input;
@@ -3832,7 +4787,7 @@ namespace Mosaic
 
         if(altPressed == true && ui->previousMenuBarItems.empty() == false)
         {
-            ui->menuKeyboardMode = !ui->menuKeyboardMode;
+            ui->menuKeyboardMode = ui->menuKeyboardMode == false;
 
             if(ui->menuKeyboardMode == true)
             {
@@ -3858,9 +4813,12 @@ namespace Mosaic
             ui->input.pointers.clear();
             ui->input.wheel = {};
             ui->active = InvalidId;
+            ui->activeItem = {};
             ui->captured = InvalidId;
+            ui->capturedItem = {};
             ui->capturedPointer = 0;
             ui->wheelOwner = InvalidId;
+            ui->wheelOwnerItem = {};
             ui->wheelOwnerTimestamp = 0.0;
             ui->pointerFocused = InvalidId;
             ui->pointerDownDurations.fill(0.f);
@@ -3994,9 +4952,12 @@ namespace Mosaic
         ui->inputCaptureOverride = {};
         ui->frameCaptureOptions = {};
         ++ui->frame.number;
+        ui->debugBeginCall = 0;
         ui->frameTextCacheHits = 0;
         ui->frameTextCacheMisses = 0;
         ui->frameTextCacheEvictions = 0;
+        ui->frameTextMeasureCacheHits = 0;
+        ui->frameTextMeasureCacheMisses = 0;
         ui->syncTextCache();
         ui->transientTextCount = 0;
         ui->transientTextIndexCount = 0;
@@ -4004,11 +4965,25 @@ namespace Mosaic
         if(ui->frame.viewports.empty() == false)
         {
             FrameViewport & previousViewport = ui->frame.viewports.front();
-            ui->drawList.commands().swap(previousViewport.drawCommands);
+            DrawCommandVector * previousCommands = Detail::FrameViewportAccess::commands(previousViewport);
+
+            if(previousCommands != nullptr)
+            {
+                ui->drawList.commands().swap(*previousCommands);
+            }
+
+            Detail::FrameRenderData * previousRenderData = Detail::FrameViewportAccess::renderData(previousViewport);
+
+            if(previousRenderData != nullptr)
+            {
+                ui->drawCommandStorage.swap(previousRenderData->storage);
+            }
         }
 
         ui->drawList.clear();
+        ui->drawCommandStorage.clear();
         ui->frame.viewports.clear();
+        ui->frameRenderDataCount = 0;
         ui->frame.renderStates.clear();
         ui->frame.textInput.owner = InvalidId;
         ui->frame.textInput.value.clear();
@@ -4041,9 +5016,11 @@ namespace Mosaic
             ui->frameNodeStrings[index].semanticDescription.clear();
             ui->frameNodeStrings[index].semanticValue.clear();
             ui->frameNodeStrings[index].path.clear();
+            ui->frameNodeStrings[index].identityDebugValue.clear();
         }
         ui->frameNodeStringCount = 0;
         ui->recycleFrameNodes();
+        ui->frameArena.reset();
         ui->frameColorTextDataCount = 0;
         ui->frameStyleCount = 0;
         ui->trimTextCache(Detail::MaximumTextCacheEntries, Detail::MaximumTextCacheMemory);
@@ -4056,6 +5033,7 @@ namespace Mosaic
         ui->currentLiveEditScalar = true;
         ui->currentInputLayer = InvalidId;
         ui->currentWindow = InvalidId;
+        ui->currentWindowSubmission = 0;
         ui->currentSelectionModel = nullptr;
         ui->currentSelectionOrder = {};
         ui->currentSelectionOptions = {};
@@ -4067,81 +5045,26 @@ namespace Mosaic
         ui->popupClosedByOutsidePointer = false;
         ui->popupClosedThisFrame.clear();
         ui->frameTheme = ui->theme;
+        ui->frameTheme.metrics.fontSize *= ui->mainFontScale;
+        ui->frameTheme.metrics.lineHeight *= ui->mainFontScale;
         ui->currentStyle = &ui->frameTheme;
         ui->anonymousCounter = 1;
+        ui->nextWindowSubmission = 1;
         ui->focusOrder.clear();
         ui->focusNextPending = false;
         ui->nextItemShortcutPending = false;
         ui->nextWindow = {};
+        ui->mainMenuBarSubmitted = false;
         ui->itemWidthStack.clear();
         ui->nextItemWidthPending = false;
         Detail::beginPopupFrame(ui);
+        ui->updateInteractionScrollAnimations();
+        ui->prepareInteractionSnapshot();
+        ui->routeInteractionWheel();
+        ui->prepareInteractionSnapshot();
 
         if(const PointerState * pointer = ui->input.primaryPointer(); pointer != nullptr)
         {
-            bool selectedPopup = false;
-            uint64_t selectedOrder = 0;
-            for(Id candidateId : ui->visibleWindowIds)
-            {
-                const Context::Persistent * candidateState = ui->findState(candidateId);
-
-                if(candidateState == nullptr)
-                {
-                    continue;
-                }
-
-                const Context::Persistent & candidate = *candidateState;
-
-                if(candidate.windowVisible == false)
-                {
-                    continue;
-                }
-
-                if(candidate.windowAcceptsInput == false)
-                {
-                    continue;
-                }
-
-                if(candidate.lastBounds.empty() == true)
-                {
-                    continue;
-                }
-
-                if(candidate.lastFrame + 1 < ui->frame.number)
-                {
-                    continue;
-                }
-
-                if(candidate.lastBounds.contains(pointer->position) == false)
-                {
-                    continue;
-                }
-
-                bool selectWindow = ui->pointerWindow == InvalidId;
-
-                if(candidate.windowPopup == true)
-                {
-                    if(selectedPopup == false)
-                    {
-                        selectWindow = true;
-                    }
-                }
-
-                if(candidate.windowPopup == selectedPopup)
-                {
-                    if(candidate.windowZOrder >= selectedOrder)
-                    {
-                        selectWindow = true;
-                    }
-                }
-
-                if(selectWindow == true)
-                {
-                    ui->pointerWindow = candidateId;
-                    selectedPopup = candidate.windowPopup;
-                    selectedOrder = candidate.windowZOrder;
-                }
-            }
             for(Id candidateId : ui->visibleWindowIds)
             {
                 Context::Persistent & candidate = ui->state(candidateId);
@@ -4175,6 +5098,7 @@ namespace Mosaic
 
         ui->previousVisibleWindowIds = ui->visibleWindowIds;
         ui->visibleWindowIds.clear();
+        ui->windowFrameInstances.clear();
         ui->collectPersistentStateGarbage();
 
         const PointerState * dockPointer = ui->input.primaryPointer();
@@ -4194,6 +5118,7 @@ namespace Mosaic
                 if(ui->captured == activeSplitter)
                 {
                     ui->captured = InvalidId;
+                    ui->capturedItem = {};
                     ui->capturedPointer = 0;
                 }
             }
@@ -4258,13 +5183,33 @@ namespace Mosaic
                 ui->activeDockGroup = 0;
                 ui->activeDockSplitter = InvalidId;
                 ui->captured = InvalidId;
+                ui->capturedItem = {};
                 ui->capturedPointer = 0;
             }
         }
 
         Context::Node root = ui->acquireNode();
         root.kind = Detail::NodeKind::Root;
+        root.debugPayload = ui->frameArena.make<Context::NodeDebugPayload>();
+
+        if(root.debugPayload == nullptr)
+        {
+            root.debugPayload = &ui->fallbackNodeDebugPayload;
+            ui->frame.diagnostics.emplace_back("Frame arena could not allocate root debug payload");
+        }
+
+        root.valuePayload = ui->frameArena.make<Context::ValueNodePayload>();
+
+        if(root.valuePayload == nullptr)
+        {
+            root.valuePayload = &ui->fallbackValueNodePayload;
+            ui->frame.diagnostics.emplace_back("Frame arena could not allocate root value payload");
+        }
+
         root.id = RootId;
+        root.identityScope = RootId;
+        root.identityParent = RootId;
+        root.identityLocal = RootId;
         root.style = &ui->frameTheme;
         root.bounds = viewport.workArea.empty() == true ? viewport.bounds : viewport.workArea;
         root.content = root.bounds;
@@ -4276,7 +5221,9 @@ namespace Mosaic
         if(ui->input.windowFocused == false)
         {
             ui->active = InvalidId;
+            ui->activeItem = {};
             ui->captured = InvalidId;
+            ui->capturedItem = {};
             ui->capturedPointer = 0;
             ui->focused = InvalidId;
             ui->pointerFocused = InvalidId;
@@ -4298,6 +5245,7 @@ namespace Mosaic
             ui->activeBoxSelection = InvalidId;
             ui->boxSelectionModel = nullptr;
             ui->boxSelectionOriginal.clear();
+            ui->boxSelectionBounds = {};
         }
 
         if(ui->configuration.keyboardNavigation == true)
@@ -4326,12 +5274,25 @@ namespace Mosaic
 
         ui->configuration = configuration;
 
+        bool assertDisabled = ui->configuration.errorRecoveryEnableAssert == false;
+        bool debugLogDisabled = ui->configuration.errorRecoveryEnableDebugLog == false;
+        bool tooltipDisabled = ui->configuration.errorRecoveryEnableTooltip == false;
+
+        if(assertDisabled == true && debugLogDisabled == true && tooltipDisabled == true)
+        {
+            ui->configuration.errorRecoveryEnableAssert = true;
+            ui->configuration.errorRecoveryEnableDebugLog = true;
+            ui->configuration.errorRecoveryEnableTooltip = true;
+        }
+
         if(configuration.pointerInput == false)
         {
             ui->input.pointers.clear();
             ui->input.wheel = {};
             ui->active = InvalidId;
+            ui->activeItem = {};
             ui->captured = InvalidId;
+            ui->capturedItem = {};
             ui->capturedPointer = 0;
             ui->wheelOwner = InvalidId;
             ui->wheelOwnerTimestamp = 0.0;
@@ -4364,6 +5325,25 @@ namespace Mosaic
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool debugBreakAvailable(const Context * ui) noexcept
+    {
+        return ui != nullptr && ui->configuration.debugBreakCallback != nullptr;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool requestDebugBreak(Context * ui) noexcept
+    {
+        if(Mosaic::debugBreakAvailable(ui) == false)
+        {
+            return false;
+        }
+
+        DebugBreakCallback callback = ui->configuration.debugBreakCallback;
+        void * userData = ui->configuration.debugBreakUserData;
+        callback(userData);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     const Frame & endFrame(Context * ui)
     {
         if(ui->activeFrame == false)
@@ -4373,13 +5353,64 @@ namespace Mosaic
 
         if(ui->scopes.empty() == false)
         {
-            ui->frame.diagnostics.emplace_back("endFrame called with live RAII scopes");
+#if !defined(NDEBUG)
+            if(ui->configuration.errorRecoveryEnableAssert == true)
+            {
+                assert(ui->scopes.empty() == true && "endFrame called with live RAII scopes");
+            }
+#endif
+
+            if(ui->configuration.errorRecoveryEnableDebugLog == true)
+            {
+                ui->frame.diagnostics.emplace_back("endFrame called with live RAII scopes");
+            }
+
             while(ui->scopes.empty() == false)
             {
                 const Context::ScopeState & scope = ui->scopes.back();
                 ui->closeScope(scope.token);
             }
         }
+
+        Context::Node & rootNode = ui->nodes.front();
+
+        if(rootNode.nextSameLinePending == true)
+        {
+            ui->frame.diagnostics.emplace_back("sameLine directive was not consumed before the frame ended");
+            rootNode.nextSameLinePending = false;
+        }
+
+        if(rootNode.nextTextAlignToFramePadding == true)
+        {
+            ui->frame.diagnostics.emplace_back("alignTextToFramePadding directive was not consumed before the frame ended");
+            rootNode.nextTextAlignToFramePadding = false;
+        }
+
+        bool showRecoveryTooltip = ui->configuration.errorRecovery == true;
+        showRecoveryTooltip = showRecoveryTooltip == true && ui->configuration.errorRecoveryEnableTooltip == true;
+        showRecoveryTooltip = showRecoveryTooltip == true && ui->frame.diagnostics.empty() == false;
+
+        if(showRecoveryTooltip == true)
+        {
+            auto blocked = Mosaic::interactionScope(ui, false);
+            auto diagnosticTooltip = Mosaic::tooltip(ui, Key("Mosaic diagnostics"), "Mosaic diagnostics", {480.f, 0.f});
+
+            if(diagnosticTooltip.visible() == true)
+            {
+                Mosaic::separatorText(ui, "Programmer error");
+                TextOptions diagnosticText;
+                diagnosticText.wordWrap = true;
+                diagnosticText.layout.width = SizeRule::Fill;
+
+                for(size_t index = 0; index != ui->frame.diagnostics.size(); ++index)
+                {
+                    auto diagnostic = Mosaic::scope(ui, Key(index));
+                    Mosaic::text(ui, ui->frame.diagnostics[index], diagnosticText);
+                }
+            }
+        }
+
+        ui->fontScopeTokens.clear();
 
         const PointerState * primaryPointer = ui->input.primaryPointer();
         ui->dragDrop.endFrame(primaryPointer != nullptr && primaryPointer->isReleased(PointerButton::Primary));
@@ -4388,14 +5419,12 @@ namespace Mosaic
         Rect rootBounds = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
         ui->measureNode(0, {rootBounds.width, rootBounds.height});
         Detail::arrangeFrame(ui, rootBounds);
-        (void)Detail::applyWheelScroll(ui);
-        (void)Detail::updateScrollAnimations(ui);
         Detail::arrangeScrollChanges(ui);
-        // Exact shaping is deliberately performed after the final layout. Feeding exact text
-        // sizes back into wrap/scroll layout changes which nodes are visible and can leave the
-        // newly exposed nodes without glyph geometry in the same frame.
+        // Logical text metrics were resolved before layout. Only glyph placement and cached
+        // Graphics geometry are deferred until final visibility is known.
         ui->prepareVisibleText();
         Detail::syncPopupBounds(ui);
+        ui->captureInteractionSnapshot();
         for(const Context::Node & node : ui->nodes)
         {
             if(node.id != ui->focused)
@@ -4408,7 +5437,7 @@ namespace Mosaic
                 continue;
             }
 
-            Vec2 cursor = Detail::textCursorPosition(ui, node, node.textCursor);
+            Vec2 cursor = Detail::textCursorPosition(ui, node, node.textEditData().cursor);
             ui->platform->setImeCandidateRect({cursor.x, cursor.y, 1.f, node.style->metrics.lineHeight});
             const Detail::TextEditorState * editorState = ui->findTextEditorState(node.id);
 
@@ -4416,8 +5445,8 @@ namespace Mosaic
             {
                 TextInputState & textInput = ui->frame.textInput;
                 textInput.owner = node.id;
-                textInput.value = node.password ? String{} : String(ui->nodeSemanticValue(node));
-                textInput.composition = node.password ? String{} : editorState->composition;
+                textInput.value = node.textEditData().password ? String{} : String(ui->nodeSemanticValue(node));
+                textInput.composition = node.textEditData().password ? String{} : editorState->composition;
                 textInput.cursor = editorState->cursor;
                 textInput.anchor = editorState->anchor;
                 textInput.compositionBegin = editorState->compositionBegin;
@@ -4425,8 +5454,8 @@ namespace Mosaic
                 textInput.compositionSelectionBegin = editorState->compositionSelectionBegin;
                 textInput.compositionSelectionEnd = editorState->compositionSelectionEnd;
                 textInput.active = true;
-                textInput.password = node.password;
-                textInput.multiline = node.multiline;
+                textInput.password = node.textEditData().password;
+                textInput.multiline = node.textEditData().multiline;
             }
 
             break;
@@ -4455,7 +5484,7 @@ namespace Mosaic
         }
         auto windowOrder = [ui](size_t first, size_t second)
         {
-            return ui->nodes[first].windowZOrder < ui->nodes[second].windowZOrder;
+            return ui->nodes[first].windowData().zOrder < ui->nodes[second].windowData().zOrder;
         };
 
         if(std::is_sorted(ui->windowRenderOrder.begin(), ui->windowRenderOrder.end(), windowOrder) == false)
@@ -4481,6 +5510,115 @@ namespace Mosaic
                 ui->emitNode(index, drawList, CanvasLayer::Foreground);
             }
         }
+
+        ui->itemPickerHovered = InvalidId;
+        ui->itemPickerHoveredBounds = {};
+        if(ui->itemPickerSelected != InvalidId)
+        {
+            const Context::Node * selectedNode = ui->findFrameNode(ui->itemPickerSelected);
+
+            if(selectedNode != nullptr)
+            {
+                ui->itemPickerSelectedBounds = selectedNode->bounds;
+            }
+        }
+
+        if(ui->itemPickerEnabled == true && primaryPointer != nullptr)
+        {
+            uint64_t candidateZOrder = 0;
+            size_t candidateIndex = 0;
+            for(size_t index = 1; index != ui->nodes.size(); ++index)
+            {
+                const Context::Node & node = ui->nodes[index];
+                bool structural = Detail::itemPickerStructuralNode(node.kind);
+
+                if(structural == true)
+                {
+                    continue;
+                }
+
+                if(node.visible == false)
+                {
+                    continue;
+                }
+
+                if(node.inputBlocked == true)
+                {
+                    continue;
+                }
+
+                if(node.bounds.empty() == true)
+                {
+                    continue;
+                }
+
+                if(node.clip.empty() == true)
+                {
+                    continue;
+                }
+
+                if(node.bounds.contains(primaryPointer->position) == false)
+                {
+                    continue;
+                }
+
+                if(node.clip.contains(primaryPointer->position) == false)
+                {
+                    continue;
+                }
+
+                if(node.windowData().zOrder < candidateZOrder)
+                {
+                    continue;
+                }
+
+                if(node.windowData().zOrder == candidateZOrder && index < candidateIndex)
+                {
+                    continue;
+                }
+
+                candidateZOrder = node.windowData().zOrder;
+                candidateIndex = index;
+                ui->itemPickerHovered = node.id;
+                ui->itemPickerHoveredBounds = node.bounds;
+            }
+
+            if(primaryPointer->isPressed(PointerButton::Primary) == true && ui->itemPickerHovered != InvalidId)
+            {
+                ui->itemPickerSelected = ui->itemPickerHovered;
+                ui->itemPickerSelectedBounds = ui->itemPickerHoveredBounds;
+                ui->itemPickerEnabled = false;
+            }
+        }
+
+        auto drawPickerBounds = [ui, &drawList](const Rect & bounds, const Color & color, float thickness)
+        {
+            if(bounds.empty() == true)
+            {
+                return;
+            }
+
+            RenderState state;
+            state.clip = ui->viewport.bounds;
+            state.blend = BlendMode::PremultipliedAlpha;
+            state.renderTarget = ui->viewport.renderTarget;
+            uint64_t renderKey = ui->internRenderState(state);
+            drawList.line({bounds.x, bounds.y}, {bounds.right(), bounds.y}, thickness, color, renderKey);
+            drawList.line({bounds.right(), bounds.y}, {bounds.right(), bounds.bottom()}, thickness, color, renderKey);
+            drawList.line({bounds.right(), bounds.bottom()}, {bounds.x, bounds.bottom()}, thickness, color, renderKey);
+            drawList.line({bounds.x, bounds.bottom()}, {bounds.x, bounds.y}, thickness, color, renderKey);
+        };
+
+        if(ui->itemPickerSelected != InvalidId)
+        {
+            drawPickerBounds(ui->itemPickerSelectedBounds, Color::fromBytes(255, 86, 174, 230), 2.f);
+        }
+
+        if(ui->itemPickerEnabled == true && ui->itemPickerHovered != InvalidId)
+        {
+            drawPickerBounds(ui->itemPickerHoveredBounds, Color::fromBytes(255, 218, 72, 240), 2.f);
+        }
+
         for(const Context::SelectionOverlay & overlay : ui->selectionOverlays)
         {
             RenderState overlayState;
@@ -4551,14 +5689,24 @@ namespace Mosaic
         }
 
         FrameViewport & frameViewport = ui->frame.viewports.front();
-        frameViewport.drawCommands.swap(drawList.commands());
+        if(ui->frameRenderDataCount == ui->frameRenderData.size())
+        {
+            ui->frameRenderData.emplace_back(makeUnique<Detail::FrameRenderData>(*ui->allocator));
+        }
+        Detail::FrameRenderData * renderData = ui->frameRenderData[ui->frameRenderDataCount].get();
+        ++ui->frameRenderDataCount;
+        renderData->commands.swap(drawList.commands());
+        renderData->storage.swap(ui->drawCommandStorage);
+        Detail::FrameViewportAccess::setRenderData(frameViewport, renderData);
 
         const PointerState * pointer = ui->input.primaryPointer();
 
         if(pointer != nullptr && pointer->isReleased() == true)
         {
             ui->active = InvalidId;
+            ui->activeItem = {};
             ui->captured = InvalidId;
+            ui->capturedItem = {};
             ui->capturedPointer = 0;
         }
 
@@ -4603,7 +5751,7 @@ namespace Mosaic
         {
             for(const Context::Node & node : ui->nodes)
             {
-                if(node.kind == Detail::NodeKind::Scroll && (node.scrollResizeHovered == true || (ui->captured == node.id && ui->state(node.id).resizingScrollArea == true)))
+                if(node.kind == Detail::NodeKind::Scroll && (node.scrollResizeHovered == true || (ui->captured == node.id && ui->state(node.id).scrollData().resizingArea == true)))
                 {
                     uint8_t edges = node.scrollResizeEdges;
                     bool horizontal = (edges & Detail::WindowResizeRight) != 0;
@@ -4614,15 +5762,15 @@ namespace Mosaic
 
                 if(node.kind == Detail::NodeKind::Window)
                 {
-                    bool resizeWindow = node.windowResizable;
+                    bool resizeWindow = node.windowData().resizable;
 
-                    if(node.windowResizeHovered == false)
+                    if(node.windowData().resizeHovered == false)
                     {
                         if(ui->captured != node.id)
                         {
                             resizeWindow = false;
                         }
-                        else if(ui->state(node.id).windowInteraction != 6)
+                        else if(ui->state(node.id).windowData().interaction != 6)
                         {
                             resizeWindow = false;
                         }
@@ -4630,9 +5778,9 @@ namespace Mosaic
 
                     if(resizeWindow == true)
                     {
-                        bool horizontal = (node.windowResizeEdges & (Detail::WindowResizeLeft | Detail::WindowResizeRight)) != 0;
-                        bool vertical = (node.windowResizeEdges & (Detail::WindowResizeTop | Detail::WindowResizeBottom)) != 0;
-                        bool northEastSouthWest = ((node.windowResizeEdges & Detail::WindowResizeLeft) != 0 && (node.windowResizeEdges & Detail::WindowResizeBottom) != 0) || ((node.windowResizeEdges & Detail::WindowResizeRight) != 0 && (node.windowResizeEdges & Detail::WindowResizeTop) != 0);
+                        bool horizontal = (node.windowData().resizeEdges & (Detail::WindowResizeLeft | Detail::WindowResizeRight)) != 0;
+                        bool vertical = (node.windowData().resizeEdges & (Detail::WindowResizeTop | Detail::WindowResizeBottom)) != 0;
+                        bool northEastSouthWest = ((node.windowData().resizeEdges & Detail::WindowResizeLeft) != 0 && (node.windowData().resizeEdges & Detail::WindowResizeBottom) != 0) || ((node.windowData().resizeEdges & Detail::WindowResizeRight) != 0 && (node.windowData().resizeEdges & Detail::WindowResizeTop) != 0);
                         cursor = horizontal && vertical ? (northEastSouthWest ? CursorShape::ResizeDiagonalNesw : CursorShape::ResizeDiagonalNwse) : (horizontal ? CursorShape::ResizeHorizontal : CursorShape::ResizeVertical);
                         break;
                     }
@@ -4693,6 +5841,8 @@ namespace Mosaic
             ui->frame.metrics.textCacheMissCount = ui->frameTextCacheMisses;
             ui->frame.metrics.textCacheEvictionCount = ui->frameTextCacheEvictions;
             ui->frame.metrics.textCacheMemory = ui->textCacheMemory;
+            ui->frame.metrics.textMeasureCacheHitCount = ui->frameTextMeasureCacheHits;
+            ui->frame.metrics.textMeasureCacheMissCount = ui->frameTextMeasureCacheMisses;
 
             if(ui->fontProvider != nullptr)
             {
@@ -4747,7 +5897,8 @@ namespace Mosaic
             }
             ui->frame.metrics.persistentStateCount = ui->persistent.size();
             const FrameViewport & metricsViewport = ui->frame.viewports.front();
-            const DrawCommandVector & drawCommands = metricsViewport.drawCommands;
+            const DrawCommandVector * metricsCommands = Detail::FrameViewportAccess::commands(metricsViewport);
+            const DrawCommandVector & drawCommands = *metricsCommands;
             ui->frame.metrics.drawCommandCount = drawCommands.size();
             bool hasRenderState = false;
             TextureHandle previousTexture = 0;
@@ -4783,6 +5934,20 @@ namespace Mosaic
                 hasRenderState = true;
             }
             ui->frame.metrics.persistentMemory = ui->persistent.size() * sizeof(Context::Persistent);
+            for(const auto & [id, persistentState] : ui->persistent)
+            {
+                (void)id;
+
+                if(persistentState.window != nullptr)
+                {
+                    ui->frame.metrics.persistentMemory += sizeof(Context::WindowPersistentState);
+                }
+
+                if(persistentState.scroll != nullptr)
+                {
+                    ui->frame.metrics.persistentMemory += sizeof(Context::ScrollPersistentState);
+                }
+            }
             ui->frame.metrics.persistentMemory += ui->textEditorStates.size() * sizeof(Detail::TextEditorState);
             for(const auto & [id, editorState] : ui->textEditorStates)
             {
@@ -4826,14 +5991,21 @@ namespace Mosaic
                 ui->frame.metrics.persistentMemory += sizeof(Context::TableState) + persistentState.table->columns.capacity() * sizeof(Context::TableColumnState) + persistentState.table->sortSpecs.capacity() * sizeof(TableSortSpec) + (persistentState.table->intrinsicWidths.capacity() + persistentState.table->rowHeights.capacity() + persistentState.table->rowPositions.capacity() + persistentState.table->columnPositions.capacity()) * sizeof(float);
             }
             ui->frame.metrics.frameMemory =
-                ui->nodes.capacity() * sizeof(Context::Node) + ui->recycledNodeStorage.capacity() * sizeof(Context::RecycledNodeStorage) + ui->frameCanvasCommands.capacity() * sizeof(DrawCommandVector) + ui->frameNodeStrings.capacity() * sizeof(Context::FrameNodeStrings) + ui->frameColorTextData.capacity() * sizeof(Context::ColorTextData) + ui->layoutFloatScratch.capacity() * sizeof(float) + ui->frameStyles.capacity() * sizeof(Context::ThemePtr) + ui->frameStyles.size() * sizeof(Theme) + ui->frameStyleIndices.capacity() * sizeof(Context::ThemeIndexEntry) + ui->renderStateIndices.capacity() * sizeof(Context::RenderStateIndexEntry) + ui->frameNodeIndices.capacity() * sizeof(Context::FrameNodeIndexEntry) + ui->selectionItems.capacity() * sizeof(Context::SelectionItem) + ui->selectionOverlays.capacity() * sizeof(Context::SelectionOverlay) + ui->boxSelectionOriginal.capacity() * sizeof(Id) + ui->frame.textInput.value.capacity() + ui->frame.textInput.composition.capacity();
+                ui->nodes.capacity() * sizeof(Context::Node) + ui->frameArena.reservedMemory() + ui->recycledNodeStorage.capacity() * sizeof(Context::RecycledNodeStorage) + ui->frameCanvasCommands.capacity() * sizeof(DrawCommandVector) + ui->frameNodeStrings.capacity() * sizeof(Context::FrameNodeStrings) + ui->frameColorTextData.capacity() * sizeof(Context::ColorTextData) + ui->layoutFloatScratch.capacity() * sizeof(float) + ui->frameStyles.capacity() * sizeof(Context::ThemePtr) + ui->frameStyles.size() * sizeof(Theme) + ui->frameStyleIndices.capacity() * sizeof(Context::ThemeIndexEntry) + ui->renderStateIndices.capacity() * sizeof(Context::RenderStateIndexEntry) + ui->frameNodeIndices.capacity() * sizeof(Context::FrameNodeIndexEntry) + ui->selectionItems.capacity() * sizeof(Context::SelectionItem) + ui->selectionOverlays.capacity() * sizeof(Context::SelectionOverlay) + ui->boxSelectionOriginal.capacity() * sizeof(Id) + ui->frame.textInput.value.capacity() + ui->frame.textInput.composition.capacity();
+            ui->frame.metrics.frameMemory += Detail::drawCommandStorageMemory(ui->drawCommandStorage);
             for(const DrawCommandVector & commands : ui->frameCanvasCommands)
             {
                 ui->frame.metrics.frameMemory += commands.capacity() * sizeof(DrawCommand);
             }
+            for(size_t index = 0; index != ui->frameRenderDataCount; ++index)
+            {
+                const Detail::FrameRenderData & renderData = *ui->frameRenderData[index];
+                ui->frame.metrics.frameMemory += renderData.commands.capacity() * sizeof(DrawCommand);
+                ui->frame.metrics.frameMemory += Detail::drawCommandStorageMemory(renderData.storage);
+            }
             for(size_t index = 0; index != ui->frameNodeStringCount; ++index)
             {
-                ui->frame.metrics.frameMemory += ui->frameNodeStrings[index].semanticName.capacity() + ui->frameNodeStrings[index].semanticDescription.capacity() + ui->frameNodeStrings[index].semanticValue.capacity() + ui->frameNodeStrings[index].path.capacity();
+                ui->frame.metrics.frameMemory += ui->frameNodeStrings[index].semanticName.capacity() + ui->frameNodeStrings[index].semanticDescription.capacity() + ui->frameNodeStrings[index].semanticValue.capacity() + ui->frameNodeStrings[index].path.capacity() + ui->frameNodeStrings[index].identityDebugValue.capacity();
             }
             ui->frame.metrics.frameMemory += ui->transientText.capacity() * sizeof(Context::CachedTextPtr);
             ui->frame.metrics.frameMemory += ui->transientTextIndices.capacity() * sizeof(Context::TransientTextIndexEntry);
@@ -4841,6 +6013,12 @@ namespace Mosaic
             {
                 ui->frame.metrics.frameMemory += Detail::cachedTextMemory(*text);
             }
+            for(const Context::TextMeasureCacheEntry & entry : ui->textMeasureCache)
+            {
+                ui->frame.metrics.frameMemory += entry.text.capacity();
+            }
+            ui->frame.metrics.generalAllocationCount = ui->allocationTracker->allocationCount();
+            ui->frame.metrics.generalAllocationBytes = ui->allocationTracker->allocationBytes();
             ui->frame.metrics.layoutMilliseconds = (layoutEnd - layoutStart) * 1000.0;
             ui->frame.metrics.emitMilliseconds = (emitEnd - layoutEnd) * 1000.0;
             ui->frame.metrics.buildMilliseconds = (layoutStart - ui->frameStarted) * 1000.0;
@@ -4864,6 +6042,8 @@ namespace Mosaic
         }
 
         ui->activeFrame = false;
+        Detail::setConstructionAllocator(ui->previousFrameAllocator);
+        ui->previousFrameAllocator = nullptr;
 
         return ui->frame;
     }
@@ -4927,6 +6107,16 @@ namespace Mosaic
         ui->textLogBuffer.append(text);
     }
     //////////////////////////////////////////////////////////////////////////
+    void finishTextLog(Context * ui)
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        Detail::finishTextLog(ui);
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool textLogActive(const Context * ui) noexcept
     {
         return ui != nullptr && ui->textLogEnabled;
@@ -4949,6 +6139,8 @@ namespace Mosaic
         if(ui->activeFrame == false)
         {
             ui->frameTheme = ui->theme;
+            ui->frameTheme.metrics.fontSize *= ui->mainFontScale;
+            ui->frameTheme.metrics.lineHeight *= ui->mainFontScale;
             ui->currentStyle = &ui->frameTheme;
         }
     }
@@ -4956,6 +6148,144 @@ namespace Mosaic
     const Theme & getTheme(const Context * ui) noexcept
     {
         return ui->theme;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void setColorEditDefaults(Context * ui, const ColorEditOptions & options) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        ui->defaultColorEditOptions = options;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool colorEditDefaults(const Context * ui, ColorEditOptions * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        *_out = ui->defaultColorEditOptions;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void setColorPickerDefaults(Context * ui, const ColorPickerOptions & options) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        ui->defaultColorPickerOptions = options;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool colorPickerDefaults(const Context * ui, ColorPickerOptions * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        *_out = ui->defaultColorPickerOptions;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void setFontScale(Context * ui, float scale) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        ui->mainFontScale = std::max(0.1f, scale);
+
+        if(ui->activeFrame == false)
+        {
+            ui->frameTheme = ui->theme;
+            ui->frameTheme.metrics.fontSize *= ui->mainFontScale;
+            ui->frameTheme.metrics.lineHeight *= ui->mainFontScale;
+            ui->currentStyle = &ui->frameTheme;
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    float fontScale(const Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return 1.f;
+        }
+
+        return ui->mainFontScale;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void pushFont(Context * ui, FontHandle font, float size, const SourceLocation & location)
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        if(ui->activeFrame == false)
+        {
+            return;
+        }
+
+        (void)location;
+        Theme fontTheme = *ui->currentStyle;
+        fontTheme.metrics.font = font;
+
+        if(size > 0.f)
+        {
+            float lineHeightRatio = fontTheme.metrics.fontSize > 0.f ? fontTheme.metrics.lineHeight / fontTheme.metrics.fontSize : 1.3f;
+            float resolvedSize = size * ui->mainFontScale;
+            fontTheme.metrics.fontSize = resolvedSize;
+            fontTheme.metrics.lineHeight = std::ceil(resolvedSize * lineHeightRatio);
+        }
+
+        uint64_t token = ui->pushScope(ui->currentParent, ui->currentStyle, ui->currentDisabled);
+        ui->currentStyle = ui->internStyle(fontTheme);
+        ui->fontScopeTokens.push_back(token);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void popFont(Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        if(ui->fontScopeTokens.empty() == true)
+        {
+            ui->frame.diagnostics.emplace_back("popFont called without matching pushFont");
+
+            return;
+        }
+
+        uint64_t token = ui->fontScopeTokens.back();
+
+        if(ui->scopes.empty() == true || ui->scopes.back().token != token)
+        {
+            ui->frame.diagnostics.emplace_back("popFont must close the most recent active scope");
+
+            return;
+        }
+
+        ui->fontScopeTokens.pop_back();
+        ui->closeScope(token);
     }
     //////////////////////////////////////////////////////////////////////////
     void setPlatformAdapter(Context * ui, PlatformAdapter * platform) noexcept
@@ -4980,7 +6310,7 @@ namespace Mosaic
             node.valueTextRun = nullptr;
             node.textPrepared = node.label.empty() == true;
             node.valueTextPrepared = node.valueText.empty() == true;
-            Context::ColorTextData * colorText = node.colorTextDataIndex < ui->frameColorTextData.size() ? &ui->frameColorTextData[node.colorTextDataIndex] : nullptr;
+            Context::ColorTextData * colorText = node.valueData().colorTextDataIndex < ui->frameColorTextData.size() ? &ui->frameColorTextData[node.valueData().colorTextDataIndex] : nullptr;
 
             if(colorText == nullptr)
             {
@@ -5005,19 +6335,83 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope row(Context * ui, const LayoutOptions & options, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::row(ui, Key{}, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope row(Context * ui, const Key & key, const LayoutOptions & options, const SourceLocation & location)
+    {
         LayoutOptions layout = options;
         layout.orientation = Orientation::Horizontal;
-        size_t node = ui->addNode(Detail::NodeKind::Row, {}, {}, layout, location, SemanticRole::Group, false, true);
+        bool anonymous = key.isExplicit() == false;
+        size_t node = ui->addNode(Detail::NodeKind::Row, key, key.debug(), layout, location, SemanticRole::Group, false, anonymous);
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[node].id, true};
     }
     //////////////////////////////////////////////////////////////////////////
+    Scope line(Context * ui, const LineOptions & options, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::line(ui, Key{}, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope line(Context * ui, const Key & key, const LineOptions & options, const SourceLocation & location)
+    {
+        LayoutOptions layout;
+        layout.width = options.width;
+        layout.height = options.height;
+        layout.padding.left = std::max(0.f, options.offset);
+        layout.gap = options.spacing;
+        layout.crossAxisAlignment = options.alignment;
+        auto returnedValue = Mosaic::row(ui, key, layout, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void sameLine(Context * ui, const SameLineOptions & options) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        if(ui->nodes[ui->currentParent].lastChild == std::numeric_limits<size_t>::max())
+        {
+            return;
+        }
+
+        Context::Node & parentNode = ui->nodes[ui->currentParent];
+        parentNode.nextSameLine = options;
+        parentNode.nextSameLinePending = true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void alignTextToFramePadding(Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        Context::Node & parentNode = ui->nodes[ui->currentParent];
+        parentNode.nextTextAlignToFramePadding = true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     Scope column(Context * ui, const LayoutOptions & options, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::column(ui, Key{}, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope column(Context * ui, const Key & key, const LayoutOptions & options, const SourceLocation & location)
     {
         LayoutOptions layout = options;
         layout.orientation = Orientation::Vertical;
-        size_t node = ui->addNode(Detail::NodeKind::Column, {}, {}, layout, location, SemanticRole::Group, false, true);
+        bool anonymous = key.isExplicit() == false;
+        size_t node = ui->addNode(Detail::NodeKind::Column, key, key.debug(), layout, location, SemanticRole::Group, false, anonymous);
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[node].id, true};
@@ -5025,9 +6419,17 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope grid(Context * ui, uint32_t columns, const LayoutOptions & options, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::grid(ui, Key{}, columns, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope grid(Context * ui, const Key & key, uint32_t columns, const LayoutOptions & options, const SourceLocation & location)
+    {
         LayoutOptions layout = options;
         layout.columns = std::max(1U, columns);
-        size_t node = ui->addNode(Detail::NodeKind::Grid, {}, {}, layout, location, SemanticRole::Group, false, true);
+        bool anonymous = key.isExplicit() == false;
+        size_t node = ui->addNode(Detail::NodeKind::Grid, key, key.debug(), layout, location, SemanticRole::Group, false, anonymous);
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[node].id, true};
@@ -5035,7 +6437,15 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope overlay(Context * ui, const LayoutOptions & options, const SourceLocation & location)
     {
-        size_t node = ui->addNode(Detail::NodeKind::Overlay, {}, {}, options, location, SemanticRole::Group, false, true);
+        auto returnedValue = Mosaic::overlay(ui, Key{}, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope overlay(Context * ui, const Key & key, const LayoutOptions & options, const SourceLocation & location)
+    {
+        bool anonymous = key.isExplicit() == false;
+        size_t node = ui->addNode(Detail::NodeKind::Overlay, key, key.debug(), options, location, SemanticRole::Group, false, anonymous);
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[node].id, true};
@@ -5046,44 +6456,69 @@ namespace Mosaic
         ScrollOptions scrollOptions;
         scrollOptions.axes = orientation == Orientation::Vertical ? ScrollAxes::Vertical : ScrollAxes::Horizontal;
         scrollOptions.contentOrientation = orientation;
-        auto returnedValue = Mosaic::scrollArea(ui, label, scrollOptions, options, location);
+        auto returnedValue = Mosaic::scrollArea(ui, Key{}, label, scrollOptions, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope scrollArea(Context * ui, const Key & key, StringView label, Orientation orientation, const LayoutOptions & options, const SourceLocation & location)
+    {
+        ScrollOptions scrollOptions;
+        scrollOptions.axes = orientation == Orientation::Vertical ? ScrollAxes::Vertical : ScrollAxes::Horizontal;
+        scrollOptions.contentOrientation = orientation;
+        auto returnedValue = Mosaic::scrollArea(ui, key, label, scrollOptions, options, location);
 
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
     Scope scrollArea(Context * ui, StringView label, const ScrollOptions & scrollOptions, const LayoutOptions & options, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::scrollArea(ui, Key{}, label, scrollOptions, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope scrollArea(Context * ui, const Key & key, StringView label, const ScrollOptions & scrollOptions, const LayoutOptions & options, const SourceLocation & location)
+    {
         LayoutOptions layout = options;
         layout.orientation = scrollOptions.contentOrientation;
-        size_t node = ui->addNode(Detail::NodeKind::Scroll, {}, label, layout, location, SemanticRole::Group, true);
+        size_t node = ui->addNode(Detail::NodeKind::Scroll, key, label, layout, location, SemanticRole::Group, true);
         Context::Node & scrollNode = ui->nodes[node];
-        scrollNode.scrollOptions = scrollOptions;
+        scrollNode.mutableScrollOptions() = scrollOptions;
+        scrollNode.focusable = scrollOptions.navigationFlattened == false;
 
-        if(scrollOptions.autoResizeY == true)
+        if(scrollOptions.autoResizeY == true || scrollOptions.alwaysAutoResize == true)
         {
             scrollNode.layout.height = SizeRule::Content;
             scrollNode.layout.minimum.y = std::max(scrollNode.layout.minimum.y, scrollOptions.minimumSize.y);
             scrollNode.layout.maximum.y = std::min(scrollNode.layout.maximum.y, scrollOptions.maximumSize.y);
         }
 
+        if(scrollOptions.autoResizeX == true || scrollOptions.alwaysAutoResize == true)
+        {
+            scrollNode.layout.width = SizeRule::Content;
+            scrollNode.layout.minimum.x = std::max(scrollNode.layout.minimum.x, scrollOptions.minimumSize.x);
+            scrollNode.layout.maximum.x = std::min(scrollNode.layout.maximum.x, scrollOptions.maximumSize.x);
+        }
+
         Context::Persistent & persistentState = ui->state(scrollNode);
         const PointerState * pointer = ui->input.primaryPointer();
 
-        if((scrollOptions.resizeX == true || scrollOptions.resizeY == true) && persistentState.scrollAreaSizeInitialized == false)
+        if((scrollOptions.resizeX == true || scrollOptions.resizeY == true) && persistentState.scrollData().areaSizeInitialized == false)
         {
-            persistentState.scrollAreaSize.x = persistentState.lastBounds.empty() == false ? persistentState.lastBounds.width : (layout.width.rule == SizeRule::Fixed ? layout.width.value : scrollOptions.minimumSize.x);
-            persistentState.scrollAreaSize.y = persistentState.lastBounds.empty() == false ? persistentState.lastBounds.height : (layout.height.rule == SizeRule::Fixed ? layout.height.value : scrollOptions.minimumSize.y);
-            persistentState.scrollAreaSizeInitialized = true;
+            persistentState.scrollData().areaSize.x = persistentState.lastBounds.empty() == false ? persistentState.lastBounds.width : (layout.width.rule == SizeRule::Fixed ? layout.width.value : scrollOptions.minimumSize.x);
+            persistentState.scrollData().areaSize.y = persistentState.lastBounds.empty() == false ? persistentState.lastBounds.height : (layout.height.rule == SizeRule::Fixed ? layout.height.value : scrollOptions.minimumSize.y);
+            persistentState.scrollData().areaSizeInitialized = true;
         }
 
         if(scrollOptions.resizeX == true)
         {
-            scrollNode.layout.width = Dimension::fixed(std::clamp(persistentState.scrollAreaSize.x, scrollOptions.minimumSize.x, scrollOptions.maximumSize.x));
+            scrollNode.layout.width = Dimension::fixed(std::clamp(persistentState.scrollData().areaSize.x, scrollOptions.minimumSize.x, scrollOptions.maximumSize.x));
         }
 
         if(scrollOptions.resizeY == true)
         {
-            scrollNode.layout.height = Dimension::fixed(std::clamp(persistentState.scrollAreaSize.y, scrollOptions.minimumSize.y, scrollOptions.maximumSize.y));
+            scrollNode.layout.height = Dimension::fixed(std::clamp(persistentState.scrollData().areaSize.y, scrollOptions.minimumSize.y, scrollOptions.maximumSize.y));
         }
 
         Rect hitBounds;
@@ -5152,14 +6587,14 @@ namespace Mosaic
             }
         }
 
-        if(resizeEdges == 0 && pointer != nullptr && persistentState.verticalScrollbarTrack.contains(pointer->position) == true)
+        if(resizeEdges == 0 && pointer != nullptr && persistentState.scrollData().verticalTrack.contains(pointer->position) == true)
         {
-            hitBounds = persistentState.verticalScrollbarTrack;
+            hitBounds = persistentState.scrollData().verticalTrack;
             hitAxis = 2;
         }
-        else if(resizeEdges == 0 && pointer != nullptr && persistentState.horizontalScrollbarTrack.contains(pointer->position) == true)
+        else if(resizeEdges == 0 && pointer != nullptr && persistentState.scrollData().horizontalTrack.contains(pointer->position) == true)
         {
-            hitBounds = persistentState.horizontalScrollbarTrack;
+            hitBounds = persistentState.scrollData().horizontalTrack;
             hitAxis = 1;
         }
 
@@ -5167,52 +6602,52 @@ namespace Mosaic
 
         if(pointer != nullptr && response.pressed() == true && resizeEdges != 0 && pointer->buttonClickCount() >= 2)
         {
-            Vec2 content = persistentState.scrollContentSize;
+            Vec2 content = persistentState.scrollData().contentSize;
 
             if((resizeEdges & Detail::WindowResizeRight) != 0)
             {
-                persistentState.scrollAreaSize.x = std::clamp(content.x + scrollNode.layout.padding.left + scrollNode.layout.padding.right, scrollOptions.minimumSize.x, scrollOptions.maximumSize.x);
-                scrollNode.layout.width = Dimension::fixed(persistentState.scrollAreaSize.x);
+                persistentState.scrollData().areaSize.x = std::clamp(content.x + scrollNode.layout.padding.left + scrollNode.layout.padding.right, scrollOptions.minimumSize.x, scrollOptions.maximumSize.x);
+                scrollNode.layout.width = Dimension::fixed(persistentState.scrollData().areaSize.x);
             }
 
             if((resizeEdges & Detail::WindowResizeBottom) != 0)
             {
-                persistentState.scrollAreaSize.y = std::clamp(content.y + scrollNode.layout.padding.top + scrollNode.layout.padding.bottom, scrollOptions.minimumSize.y, scrollOptions.maximumSize.y);
-                scrollNode.layout.height = Dimension::fixed(persistentState.scrollAreaSize.y);
+                persistentState.scrollData().areaSize.y = std::clamp(content.y + scrollNode.layout.padding.top + scrollNode.layout.padding.bottom, scrollOptions.minimumSize.y, scrollOptions.maximumSize.y);
+                scrollNode.layout.height = Dimension::fixed(persistentState.scrollData().areaSize.y);
             }
 
-            persistentState.resizingScrollArea = false;
-            persistentState.scrollResizeEdges = 0;
+            persistentState.scrollData().resizingArea = false;
+            persistentState.scrollData().resizeEdges = 0;
             Detail::setFlag(response, 6);
         }
         else if(pointer != nullptr && response.pressed() == true && resizeEdges != 0)
         {
-            persistentState.resizingScrollArea = true;
-            persistentState.scrollResizeEdges = resizeEdges;
+            persistentState.scrollData().resizingArea = true;
+            persistentState.scrollData().resizeEdges = resizeEdges;
             persistentState.dragStartPosition = pointer->position;
-            persistentState.scrollResizeStartSize = {persistentState.lastBounds.width, persistentState.lastBounds.height};
+            persistentState.scrollData().resizeStartSize = {persistentState.lastBounds.width, persistentState.lastBounds.height};
         }
         else if(pointer != nullptr && response.pressed() == true && hitAxis != 0)
         {
             bool vertical = hitAxis == 2;
-            const Rect & thumb = vertical ? persistentState.verticalScrollbarThumb : persistentState.horizontalScrollbarThumb;
+            const Rect & thumb = vertical ? persistentState.scrollData().verticalThumb : persistentState.scrollData().horizontalThumb;
             bool clickedThumb = thumb.contains(pointer->position);
 
             if(clickedThumb == true)
             {
                 float thumbStart = vertical ? thumb.y : thumb.x;
                 float pointerPosition = vertical ? pointer->position.y : pointer->position.x;
-                persistentState.scrollbarDragOffset = pointerPosition - thumbStart;
-                persistentState.draggingScrollbar = true;
-                persistentState.draggingScrollAxis = hitAxis;
+                persistentState.scrollData().dragOffset = pointerPosition - thumbStart;
+                persistentState.scrollData().draggingScrollbar = true;
+                persistentState.scrollData().draggingAxis = hitAxis;
             }
             else
             {
                 float pointerPosition = vertical ? pointer->position.y : pointer->position.x;
                 float thumbStart = vertical ? thumb.y : thumb.x;
                 float page = vertical ? scrollNode.bounds.height : scrollNode.bounds.width;
-                float & position = vertical ? persistentState.scrollPosition.y : persistentState.scrollPosition.x;
-                float extent = vertical ? persistentState.scrollRange.y : persistentState.scrollRange.x;
+                float & position = vertical ? persistentState.scrollData().position.y : persistentState.scrollData().position.x;
+                float extent = vertical ? persistentState.scrollData().range.y : persistentState.scrollData().range.x;
 
                 if(ui->configuration.scrollbarScrollByPage == true)
                 {
@@ -5220,7 +6655,7 @@ namespace Mosaic
                 }
                 else
                 {
-                    const Rect & track = vertical ? persistentState.verticalScrollbarTrack : persistentState.horizontalScrollbarTrack;
+                    const Rect & track = vertical ? persistentState.scrollData().verticalTrack : persistentState.scrollData().horizontalTrack;
                     float trackStart = vertical ? track.y : track.x;
                     float trackExtent = vertical ? track.height : track.width;
                     float thumbExtent = vertical ? thumb.height : thumb.width;
@@ -5228,24 +6663,24 @@ namespace Mosaic
                     position = travel <= 0.f ? 0.f : std::clamp((pointerPosition - trackStart - thumbExtent * 0.5f) / travel, 0.f, 1.f) * extent;
                 }
 
-                persistentState.scrollTarget = persistentState.scrollPosition;
-                persistentState.scrollVelocity = {};
-                persistentState.scrollTargetInitialized = true;
+                persistentState.scrollData().target = persistentState.scrollData().position;
+                persistentState.scrollData().velocity = {};
+                persistentState.scrollData().targetInitialized = true;
                 Detail::setFlag(response, 6);
             }
         }
 
-        if(pointer != nullptr && ui->captured == scrollNode.id && persistentState.draggingScrollbar == true && pointer->isDown() == true)
+        if(pointer != nullptr && ui->captured == scrollNode.id && persistentState.scrollData().draggingScrollbar == true && pointer->isDown() == true)
         {
-            bool vertical = persistentState.draggingScrollAxis == 2;
-            const Rect & track = vertical ? persistentState.verticalScrollbarTrack : persistentState.horizontalScrollbarTrack;
-            const Rect & thumb = vertical ? persistentState.verticalScrollbarThumb : persistentState.horizontalScrollbarThumb;
-            float & position = vertical ? persistentState.scrollPosition.y : persistentState.scrollPosition.x;
+            bool vertical = persistentState.scrollData().draggingAxis == 2;
+            const Rect & track = vertical ? persistentState.scrollData().verticalTrack : persistentState.scrollData().horizontalTrack;
+            const Rect & thumb = vertical ? persistentState.scrollData().verticalThumb : persistentState.scrollData().horizontalThumb;
+            float & position = vertical ? persistentState.scrollData().position.y : persistentState.scrollData().position.x;
             float previous = position;
-            position = Detail::scrollbarScrollAtPointer(track, thumb, vertical ? persistentState.scrollRange.y : persistentState.scrollRange.x, vertical, persistentState.scrollbarDragOffset, pointer->position);
-            persistentState.scrollTarget = persistentState.scrollPosition;
-            persistentState.scrollVelocity = {};
-            persistentState.scrollTargetInitialized = true;
+            position = Detail::scrollbarScrollAtPointer(track, thumb, vertical ? persistentState.scrollData().range.y : persistentState.scrollData().range.x, vertical, persistentState.scrollData().dragOffset, pointer->position);
+            persistentState.scrollData().target = persistentState.scrollData().position;
+            persistentState.scrollData().velocity = {};
+            persistentState.scrollData().targetInitialized = true;
 
             if(position != previous)
             {
@@ -5253,20 +6688,20 @@ namespace Mosaic
             }
         }
 
-        if(pointer != nullptr && ui->captured == scrollNode.id && persistentState.resizingScrollArea == true && pointer->isDown() == true)
+        if(pointer != nullptr && ui->captured == scrollNode.id && persistentState.scrollData().resizingArea == true && pointer->isDown() == true)
         {
             Vec2 delta = pointer->position - persistentState.dragStartPosition;
 
-            if((persistentState.scrollResizeEdges & Detail::WindowResizeRight) != 0)
+            if((persistentState.scrollData().resizeEdges & Detail::WindowResizeRight) != 0)
             {
-                persistentState.scrollAreaSize.x = std::clamp(persistentState.scrollResizeStartSize.x + delta.x, scrollOptions.minimumSize.x, scrollOptions.maximumSize.x);
-                scrollNode.layout.width = Dimension::fixed(persistentState.scrollAreaSize.x);
+                persistentState.scrollData().areaSize.x = std::clamp(persistentState.scrollData().resizeStartSize.x + delta.x, scrollOptions.minimumSize.x, scrollOptions.maximumSize.x);
+                scrollNode.layout.width = Dimension::fixed(persistentState.scrollData().areaSize.x);
             }
 
-            if((persistentState.scrollResizeEdges & Detail::WindowResizeBottom) != 0)
+            if((persistentState.scrollData().resizeEdges & Detail::WindowResizeBottom) != 0)
             {
-                persistentState.scrollAreaSize.y = std::clamp(persistentState.scrollResizeStartSize.y + delta.y, scrollOptions.minimumSize.y, scrollOptions.maximumSize.y);
-                scrollNode.layout.height = Dimension::fixed(persistentState.scrollAreaSize.y);
+                persistentState.scrollData().areaSize.y = std::clamp(persistentState.scrollData().resizeStartSize.y + delta.y, scrollOptions.minimumSize.y, scrollOptions.maximumSize.y);
+                scrollNode.layout.height = Dimension::fixed(persistentState.scrollData().areaSize.y);
             }
 
             Detail::setFlag(response, 6);
@@ -5310,49 +6745,49 @@ namespace Mosaic
 
             if(ui->input.keyPressed(KeyCode::Home) == true)
             {
-                persistentState.scrollPosition = {};
-                persistentState.scrollTarget = {};
-                persistentState.scrollVelocity = {};
-                persistentState.scrollTargetInitialized = true;
+                persistentState.scrollData().position = {};
+                persistentState.scrollData().target = {};
+                persistentState.scrollData().velocity = {};
+                persistentState.scrollData().targetInitialized = true;
                 Detail::setFlag(response, 6);
             }
 
             if(ui->input.keyPressed(KeyCode::End) == true)
             {
-                persistentState.scrollPosition = persistentState.scrollRange;
-                persistentState.scrollTarget = persistentState.scrollPosition;
-                persistentState.scrollVelocity = {};
-                persistentState.scrollTargetInitialized = true;
+                persistentState.scrollData().position = persistentState.scrollData().range;
+                persistentState.scrollData().target = persistentState.scrollData().position;
+                persistentState.scrollData().velocity = {};
+                persistentState.scrollData().targetInitialized = true;
                 Detail::setFlag(response, 6);
             }
 
             if(delta != Vec2{})
             {
-                Vec2 updated = {std::clamp(persistentState.scrollPosition.x + delta.x, 0.f, persistentState.scrollRange.x), std::clamp(persistentState.scrollPosition.y + delta.y, 0.f, persistentState.scrollRange.y)};
-                Detail::setFlag(response, 6, updated != persistentState.scrollPosition);
-                persistentState.scrollPosition = updated;
-                persistentState.scrollTarget = updated;
-                persistentState.scrollVelocity = {};
-                persistentState.scrollTargetInitialized = true;
+                Vec2 updated = {std::clamp(persistentState.scrollData().position.x + delta.x, 0.f, persistentState.scrollData().range.x), std::clamp(persistentState.scrollData().position.y + delta.y, 0.f, persistentState.scrollData().range.y)};
+                Detail::setFlag(response, 6, updated != persistentState.scrollData().position);
+                persistentState.scrollData().position = updated;
+                persistentState.scrollData().target = updated;
+                persistentState.scrollData().velocity = {};
+                persistentState.scrollData().targetInitialized = true;
             }
         }
 
         if(response.released() == true)
         {
-            persistentState.draggingScrollbar = false;
-            persistentState.draggingScrollAxis = 0;
-            persistentState.resizingScrollArea = false;
-            persistentState.scrollResizeEdges = 0;
+            persistentState.scrollData().draggingScrollbar = false;
+            persistentState.scrollData().draggingAxis = 0;
+            persistentState.scrollData().resizingArea = false;
+            persistentState.scrollData().resizeEdges = 0;
         }
 
         if(response.changed() == true)
         {
-            persistentState.scroll = scrollOptions.axes != ScrollAxes::Horizontal ? persistentState.scrollPosition.y : persistentState.scrollPosition.x;
-            ui->frame.events.push_back({EventType::Change, scrollNode.id, ui->nodePath(scrollNode), scrollNode.file, scrollNode.line, ui->input.timestamp});
+            persistentState.scrollData().value = scrollOptions.axes != ScrollAxes::Horizontal ? persistentState.scrollData().position.y : persistentState.scrollData().position.x;
+            ui->frame.events.push_back({EventType::Change, scrollNode.id, ui->nodePath(scrollNode), scrollNode.debugData().file, scrollNode.debugData().line, ui->input.timestamp});
         }
 
         scrollNode.scrollResizeHovered = resizeEdges != 0;
-        scrollNode.scrollResizeEdges = persistentState.resizingScrollArea ? persistentState.scrollResizeEdges : resizeEdges;
+        scrollNode.scrollResizeEdges = persistentState.scrollData().resizingArea ? persistentState.scrollData().resizeEdges : resizeEdges;
         scrollNode.response = response;
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
@@ -5361,10 +6796,17 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope split(Context * ui, StringView label, Orientation orientation, float ratio, const LayoutOptions & options, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::split(ui, Key{}, label, orientation, ratio, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope split(Context * ui, const Key & key, StringView label, Orientation orientation, float ratio, const LayoutOptions & options, const SourceLocation & location)
+    {
         LayoutOptions layout = options;
         layout.orientation = orientation;
         layout.splitRatio = std::clamp(ratio, 0.05f, 0.95f);
-        size_t node = ui->addNode(Detail::NodeKind::Split, {}, label, layout, location, SemanticRole::Group);
+        size_t node = ui->addNode(Detail::NodeKind::Split, key, label, layout, location, SemanticRole::Group);
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
 
         return {ui, token, ui->nodes[node].id, true};
@@ -5372,13 +6814,20 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope split(Context * ui, StringView label, Orientation orientation, float * ratio, const SplitOptions & splitOptions, const LayoutOptions & options, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::split(ui, Key{}, label, orientation, ratio, splitOptions, options, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope split(Context * ui, const Key & key, StringView label, Orientation orientation, float * ratio, const SplitOptions & splitOptions, const LayoutOptions & options, const SourceLocation & location)
+    {
         LayoutOptions layout = options;
         layout.orientation = orientation;
         layout.splitRatio = std::clamp(ratio == nullptr ? 0.5f : *ratio, 0.f, 1.f);
-        size_t node = ui->addNode(Detail::NodeKind::Split, {}, label, layout, location, SemanticRole::Group);
+        size_t node = ui->addNode(Detail::NodeKind::Split, key, label, layout, location, SemanticRole::Group);
         Context::Node & splitNode = ui->nodes[node];
-        splitNode.splitMinimumFirst = std::max(0.f, splitOptions.minimumFirst);
-        splitNode.splitMinimumSecond = std::max(0.f, splitOptions.minimumSecond);
+        splitNode.valueData().splitMinimumFirst = std::max(0.f, splitOptions.minimumFirst);
+        splitNode.valueData().splitMinimumSecond = std::max(0.f, splitOptions.minimumSecond);
 
         Context::Persistent & persistentState = ui->state(splitNode);
         persistentState.splitterOrientation = orientation;
@@ -5415,8 +6864,8 @@ namespace Mosaic
                 float snapDistance = std::max(8.f, splitterWidth * 2.f);
                 float snappedCenter = Detail::snapSplitterCenter(ui, splitNode.id, orientation, splitOptions.snapIndex, pointerCenter, snapDistance);
                 float position = orientation == Orientation::Horizontal ? snappedCenter - persistentState.lastBounds.x - splitterWidth * 0.5f : snappedCenter - persistentState.lastBounds.y - splitterWidth * 0.5f;
-                float minimumRatio = std::clamp(splitNode.splitMinimumFirst / available, 0.f, 1.f);
-                float maximumRatio = std::clamp(1.f - splitNode.splitMinimumSecond / available, 0.f, 1.f);
+                float minimumRatio = std::clamp(splitNode.valueData().splitMinimumFirst / available, 0.f, 1.f);
+                float maximumRatio = std::clamp(1.f - splitNode.valueData().splitMinimumSecond / available, 0.f, 1.f);
                 float updated = std::clamp(position / available, std::min(minimumRatio, maximumRatio), std::max(minimumRatio, maximumRatio));
 
                 if(updated != *ratio)
@@ -5425,7 +6874,7 @@ namespace Mosaic
                     splitNode.layout.splitRatio = updated;
                     Detail::setFlag(response, 6);
                     splitNode.response = response;
-                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(splitNode), splitNode.file, splitNode.line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, response.id, ui->nodePath(splitNode), splitNode.debugData().file, splitNode.debugData().line, ui->input.timestamp});
                 }
             }
         }
@@ -5494,7 +6943,10 @@ namespace Mosaic
         const Theme * previousStyle = ui->currentStyle;
         size_t parent = ui->currentParent;
         uint64_t token = ui->pushScope(parent, previousStyle, ui->currentDisabled);
-        ui->currentStyle = ui->internStyle(theme);
+        Theme resolvedTheme = theme;
+        resolvedTheme.metrics.fontSize *= ui->mainFontScale;
+        resolvedTheme.metrics.lineHeight *= ui->mainFontScale;
+        ui->currentStyle = ui->internStyle(resolvedTheme);
 
         return {ui, token, ui->nodes[parent].id, true};
     }
@@ -5602,7 +7054,7 @@ namespace Mosaic
         {
             if(const Context::Persistent * persistentState = ui->findState(scrollArea); persistentState != nullptr)
             {
-                scroll = persistentState->scrollPosition.y;
+                scroll = persistentState->scrollData().position.y;
                 height = persistentState->lastBounds.height;
             }
         }
@@ -5654,7 +7106,7 @@ namespace Mosaic
         {
             if(const Context::Persistent * persistentState = ui->findState(scrollArea); persistentState != nullptr)
             {
-                scroll = options.orientation == Orientation::Vertical ? persistentState->scrollPosition.y : persistentState->scrollPosition.x;
+                scroll = options.orientation == Orientation::Vertical ? persistentState->scrollData().position.y : persistentState->scrollData().position.x;
                 float previousExtent = options.orientation == Orientation::Vertical ? persistentState->lastBounds.height : persistentState->lastBounds.width;
 
                 if(previousExtent > 0.f)
@@ -5704,34 +7156,34 @@ namespace Mosaic
     {
         Context::Persistent & persistentState = ui->state(scrollArea);
 
-        if(persistentState.scrollTargetInitialized == false)
+        if(persistentState.scrollData().targetInitialized == false)
         {
-            persistentState.scrollTarget = persistentState.scrollPosition;
+            persistentState.scrollData().target = persistentState.scrollData().position;
         }
 
-        float target = std::clamp(offset, 0.f, persistentState.scrollExtent);
+        float target = std::clamp(offset, 0.f, persistentState.scrollData().extent);
 
-        if(persistentState.scrollOrientation == Orientation::Vertical)
+        if(persistentState.scrollData().orientation == Orientation::Vertical)
         {
-            persistentState.scrollTarget.y = target;
-            persistentState.scrollToEndY = false;
+            persistentState.scrollData().target.y = target;
+            persistentState.scrollData().toEndY = false;
         }
         else
         {
-            persistentState.scrollTarget.x = target;
-            persistentState.scrollToEndX = false;
+            persistentState.scrollData().target.x = target;
+            persistentState.scrollData().toEndX = false;
         }
 
-        persistentState.scrollTargetInitialized = true;
+        persistentState.scrollData().targetInitialized = true;
     }
     //////////////////////////////////////////////////////////////////////////
     void scrollTo(Context * ui, Id scrollArea, const Vec2 & offset) noexcept
     {
         Context::Persistent & persistentState = ui->state(scrollArea);
-        persistentState.scrollToEndX = false;
-        persistentState.scrollToEndY = false;
-        persistentState.scrollTarget = {std::clamp(offset.x, 0.f, persistentState.scrollRange.x), std::clamp(offset.y, 0.f, persistentState.scrollRange.y)};
-        persistentState.scrollTargetInitialized = true;
+        persistentState.scrollData().toEndX = false;
+        persistentState.scrollData().toEndY = false;
+        persistentState.scrollData().target = {std::clamp(offset.x, 0.f, persistentState.scrollData().range.x), std::clamp(offset.y, 0.f, persistentState.scrollData().range.y)};
+        persistentState.scrollData().targetInitialized = true;
     }
     //////////////////////////////////////////////////////////////////////////
     void scrollToEnd(Context * ui, Id scrollArea, ScrollAxes axes) noexcept
@@ -5747,8 +7199,8 @@ namespace Mosaic
         }
 
         Context::Persistent & persistentState = ui->state(scrollArea);
-        persistentState.scrollToEndX = axes == ScrollAxes::Horizontal || axes == ScrollAxes::Both;
-        persistentState.scrollToEndY = axes == ScrollAxes::Vertical || axes == ScrollAxes::Both;
+        persistentState.scrollData().toEndX = axes == ScrollAxes::Horizontal || axes == ScrollAxes::Both;
+        persistentState.scrollData().toEndY = axes == ScrollAxes::Vertical || axes == ScrollAxes::Both;
     }
     //////////////////////////////////////////////////////////////////////////
     void scrollToItem(Context * ui, Id scrollArea, Id item) noexcept
@@ -5771,7 +7223,7 @@ namespace Mosaic
             return;
         }
 
-        Vec2 targetPosition = scroll.scrollPosition;
+        Vec2 targetPosition = scroll.scrollData().position;
 
         if(target->lastBounds.x < scroll.lastBounds.x)
         {
@@ -5791,8 +7243,8 @@ namespace Mosaic
             targetPosition.y += target->lastBounds.bottom() - scroll.lastBounds.bottom();
         }
 
-        scroll.scrollTarget = {std::clamp(targetPosition.x, 0.f, scroll.scrollRange.x), std::clamp(targetPosition.y, 0.f, scroll.scrollRange.y)};
-        scroll.scrollTargetInitialized = true;
+        scroll.scrollData().target = {std::clamp(targetPosition.x, 0.f, scroll.scrollData().range.x), std::clamp(targetPosition.y, 0.f, scroll.scrollData().range.y)};
+        scroll.scrollData().targetInitialized = true;
     }
     //////////////////////////////////////////////////////////////////////////
     void scrollToItem(Context * ui, Id scrollArea, Id item, const Vec2 & alignment) noexcept
@@ -5831,9 +7283,9 @@ namespace Mosaic
         }
 
         Vec2 resolvedAlignment = {std::clamp(alignment.x, 0.f, 1.f), std::clamp(alignment.y, 0.f, 1.f)};
-        Vec2 targetPosition = {scroll.scrollPosition.x + target->lastBounds.x - scroll.lastBounds.x - resolvedAlignment.x * std::max(0.f, scroll.lastBounds.width - target->lastBounds.width), scroll.scrollPosition.y + target->lastBounds.y - scroll.lastBounds.y - resolvedAlignment.y * std::max(0.f, scroll.lastBounds.height - target->lastBounds.height)};
-        scroll.scrollTarget = {std::clamp(targetPosition.x, 0.f, scroll.scrollRange.x), std::clamp(targetPosition.y, 0.f, scroll.scrollRange.y)};
-        scroll.scrollTargetInitialized = true;
+        Vec2 targetPosition = {scroll.scrollData().position.x + target->lastBounds.x - scroll.lastBounds.x - resolvedAlignment.x * std::max(0.f, scroll.lastBounds.width - target->lastBounds.width), scroll.scrollData().position.y + target->lastBounds.y - scroll.lastBounds.y - resolvedAlignment.y * std::max(0.f, scroll.lastBounds.height - target->lastBounds.height)};
+        scroll.scrollData().target = {std::clamp(targetPosition.x, 0.f, scroll.scrollData().range.x), std::clamp(targetPosition.y, 0.f, scroll.scrollData().range.y)};
+        scroll.scrollData().targetInitialized = true;
     }
     //////////////////////////////////////////////////////////////////////////
     void scrollToPosition(Context * ui, Id scrollArea, const Vec2 & position, const Vec2 & alignment) noexcept
@@ -5850,8 +7302,8 @@ namespace Mosaic
 
         Context::Persistent & scroll = ui->state(scrollArea);
         Vec2 resolvedAlignment = {std::clamp(alignment.x, 0.f, 1.f), std::clamp(alignment.y, 0.f, 1.f)};
-        scroll.scrollTarget = {std::clamp(position.x - resolvedAlignment.x * scroll.lastBounds.width, 0.f, scroll.scrollRange.x), std::clamp(position.y - resolvedAlignment.y * scroll.lastBounds.height, 0.f, scroll.scrollRange.y)};
-        scroll.scrollTargetInitialized = true;
+        scroll.scrollData().target = {std::clamp(position.x - resolvedAlignment.x * scroll.lastBounds.width, 0.f, scroll.scrollData().range.x), std::clamp(position.y - resolvedAlignment.y * scroll.lastBounds.height, 0.f, scroll.scrollData().range.y)};
+        scroll.scrollData().targetInitialized = true;
     }
     //////////////////////////////////////////////////////////////////////////
     bool scrollOffset(const Context * ui, Id scrollArea, Vec2 * const _out) noexcept
@@ -5873,7 +7325,7 @@ namespace Mosaic
             return false;
         }
 
-        *_out = persistentState->scrollPosition;
+        *_out = persistentState->scrollData().position;
 
         return true;
     }
@@ -5897,7 +7349,7 @@ namespace Mosaic
             return false;
         }
 
-        *_out = persistentState->scrollRange;
+        *_out = persistentState->scrollData().range;
 
         return true;
     }
@@ -5949,8 +7401,8 @@ namespace Mosaic
         }
 
         Context::Persistent & persistentState = ui->state(window);
-        persistentState.windowBounds = bounds;
-        persistentState.windowInitialized = true;
+        persistentState.windowData().bounds = bounds;
+        persistentState.windowData().initialized = true;
     }
     //////////////////////////////////////////////////////////////////////////
     bool windowBounds(const Context * ui, Id window, Rect * const _out) noexcept
@@ -5977,7 +7429,7 @@ namespace Mosaic
             return false;
         }
 
-        *_out = persistentState->windowBounds;
+        *_out = persistentState->windowData().bounds;
 
         return true;
     }
@@ -6320,6 +7772,56 @@ namespace Mosaic
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool fontAtlasConfiguration(const Context * ui, FontAtlasConfiguration * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(ui->fontProvider == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        bool returnedValue = ui->fontProvider->atlasConfiguration(_out);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool availableFonts(const Context * ui, FontInfoVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(ui->fontProvider == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        FontInfoVector entries;
+        if(ui->fontProvider->inspectFonts(&entries) == false)
+        {
+            return false;
+        }
+
+        *_out = std::move(entries);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool fontCacheEntries(const Context * ui, FontCacheEntryVector * const _out)
     {
         if(ui == nullptr)
@@ -6374,6 +7876,51 @@ namespace Mosaic
         *_out = std::move(entries);
 
         return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool fontAtlasRects(const Context * ui, FontAtlasRectInfoVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(ui->fontProvider == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        FontAtlasRectInfoVector entries;
+        if(ui->fontProvider->inspectAtlasRects(&entries) == false)
+        {
+            return false;
+        }
+
+        *_out = std::move(entries);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool fontCacheAction(Context * ui, FontCacheAction action)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(ui->fontProvider == nullptr)
+        {
+            return false;
+        }
+
+        bool returnedValue = ui->fontProvider->cacheAction(action);
+
+        return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
     DockModel & docking(Context * ui) noexcept
@@ -6454,26 +8001,43 @@ namespace Mosaic
         serializer.begin(2);
         for(const auto & [id, value] : ui->persistent)
         {
-            if(value.windowInitialized == true && value.windowSaveSettings == true)
+            if(value.windowData().initialized == true && value.windowData().saveSettings == true)
             {
-                writeNumber("windows", id, "x", value.windowBounds.x);
-                writeNumber("windows", id, "y", value.windowBounds.y);
-                writeNumber("windows", id, "width", value.windowBounds.width);
-                writeNumber("windows", id, "height", value.windowBounds.height);
+                writeNumber("windows", id, "x", value.windowData().bounds.x);
+                writeNumber("windows", id, "y", value.windowData().bounds.y);
+                writeNumber("windows", id, "width", value.windowData().bounds.width);
+                writeNumber("windows", id, "height", value.windowData().bounds.height);
+
+                if(ui->configuration.settingsSaveLastUsedDate == true)
+                {
+                    writeNumber("windows", id, "last_used_frame", value.windowData().visibleLastFrame);
+                }
+
+                if(ui->configuration.debugIniSettings == true)
+                {
+                    const Context::Node * node = ui->findFrameNode(id);
+
+                    if(node != nullptr)
+                    {
+                        serializer.write("debug", id, "label", node->label);
+                        serializer.write("debug", id, "file", node->debugData().file);
+                        writeNumber("debug", id, "line", node->debugData().line);
+                    }
+                }
             }
 
-            if(value.scrollPosition.x != 0.f)
+            if(value.scrollData().position.x != 0.f)
             {
-                writeNumber("scroll", id, "offset_x", value.scrollPosition.x);
+                writeNumber("scroll", id, "offset_x", value.scrollData().position.x);
             }
 
-            if(value.scrollPosition.y != 0.f)
+            if(value.scrollData().position.y != 0.f)
             {
-                writeNumber("scroll", id, "offset_y", value.scrollPosition.y);
+                writeNumber("scroll", id, "offset_y", value.scrollData().position.y);
             }
-            else if(value.scroll != 0.f)
+            else if(value.scrollData().value != 0.f)
             {
-                writeNumber("scroll", id, "offset", value.scroll);
+                writeNumber("scroll", id, "offset", value.scrollData().value);
             }
 
             if(value.expandedInitialized == true)
@@ -6613,23 +8177,23 @@ namespace Mosaic
 
                 if(section == "windows")
                 {
-                    state.windowInitialized = true;
+                    state.windowData().initialized = true;
 
                     if(key == "x")
                     {
-                        parseFloat(state.windowBounds.x);
+                        parseFloat(state.windowData().bounds.x);
                     }
                     else if(key == "y")
                     {
-                        parseFloat(state.windowBounds.y);
+                        parseFloat(state.windowData().bounds.y);
                     }
                     else if(key == "width")
                     {
-                        parseFloat(state.windowBounds.width);
+                        parseFloat(state.windowData().bounds.width);
                     }
                     else if(key == "height")
                     {
-                        parseFloat(state.windowBounds.height);
+                        parseFloat(state.windowData().bounds.height);
                     }
                 }
                 else if(section == "scroll" && (key == "offset" || key == "offset_x" || key == "offset_y"))
@@ -6640,16 +8204,16 @@ namespace Mosaic
 
                     if(key == "offset_x")
                     {
-                        state.scrollPosition.x = offset;
+                        state.scrollData().position.x = offset;
                     }
                     else if(key == "offset_y")
                     {
-                        state.scrollPosition.y = offset;
+                        state.scrollData().position.y = offset;
                     }
                     else
                     {
-                        state.scroll = offset;
-                        state.scrollPosition.y = offset;
+                        state.scrollData().value = offset;
+                        state.scrollData().position.y = offset;
                     }
                 }
                 else if(section == "tree" && key == "expanded")
@@ -6907,22 +8471,22 @@ namespace Mosaic
 
             if(section == "windows")
             {
-                value.windowInitialized = false;
-                value.windowContentWidthFitted = false;
-                value.windowContentHeightFitted = false;
-                value.windowBounds = {};
+                value.windowData().initialized = false;
+                value.windowData().contentWidthFitted = false;
+                value.windowData().contentHeightFitted = false;
+                value.windowData().bounds = {};
             }
             else if(section == "scroll")
             {
-                value.scroll = 0.f;
-                value.scrollExtent = 0.f;
-                value.scrollPosition = {};
-                value.scrollTarget = {};
-                value.scrollVelocity = {};
-                value.scrollRange = {};
-                value.scrollTargetInitialized = false;
-                value.scrollToEndX = false;
-                value.scrollToEndY = false;
+                value.scrollData().value = 0.f;
+                value.scrollData().extent = 0.f;
+                value.scrollData().position = {};
+                value.scrollData().target = {};
+                value.scrollData().velocity = {};
+                value.scrollData().range = {};
+                value.scrollData().targetInitialized = false;
+                value.scrollData().toEndX = false;
+                value.scrollData().toEndY = false;
             }
             else if(section == "tree")
             {
@@ -6945,7 +8509,6 @@ namespace Mosaic
             for(Detail::NumericState & numericState : ui->numericStates)
             {
                 numericState.temporaryInput = false;
-                numericState.temporaryReplace = false;
                 numericState.temporaryDoubleClickBlocked = false;
                 numericState.dragThresholdPassed = false;
                 numericState.dragAccumulator = 0.L;
@@ -7005,6 +8568,1087 @@ namespace Mosaic
         return false;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool debugBounds(const Context * ui, const ItemRef & item, Rect * const _out) noexcept
+    {
+        if(ui == nullptr || item.valid() == false || _out == nullptr)
+        {
+            return false;
+        }
+
+        const Context::Node * node = ui->findFrameNode(item);
+
+        if(node != nullptr && node->content.empty() == false)
+        {
+            *_out = node->content;
+
+            return true;
+        }
+
+        const Context::InteractionSnapshotItem * snapshot = ui->findInteractionSnapshot(item);
+
+        if(snapshot == nullptr || snapshot->bounds.empty() == true)
+        {
+            return false;
+        }
+
+        *_out = snapshot->bounds;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool windowDebugSnapshots(Context * ui, WindowDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        WindowDebugSnapshotVector output;
+        Id focusedWindow = InvalidId;
+        const Context::Node * focusedNode = ui->findFrameNode(ui->focused);
+
+        if(focusedNode != nullptr)
+        {
+            focusedWindow = focusedNode->windowOwner;
+        }
+
+        for(Context::Node & node : ui->nodes)
+        {
+            if(node.kind != Detail::NodeKind::Window)
+            {
+                continue;
+            }
+
+            WindowDebugSnapshot snapshot;
+            snapshot.id = node.id;
+            snapshot.owner = node.windowOwner;
+            snapshot.label = node.label;
+            snapshot.bounds = node.bounds;
+            snapshot.innerBounds = node.childrenClip;
+            snapshot.workBounds = node.content;
+            snapshot.content = node.content;
+            snapshot.clip = node.clip;
+            snapshot.outerRectClipped = Rect::intersection(node.bounds, node.clip);
+            snapshot.innerClipRect = node.childrenClip;
+            snapshot.contentRegionRect = node.content;
+            snapshot.titleBarRect = node.windowData().titleVisible == true ? Rect{node.bounds.x, node.bounds.y, node.bounds.width, node.style->metrics.windowTitleHeight} : Rect{};
+            snapshot.submission = node.windowSubmission;
+            snapshot.zOrder = node.windowData().zOrder;
+            snapshot.beginOrder = static_cast<uint32_t>(node.windowSubmission);
+            snapshot.dockGroup = node.windowData().dockGroup;
+            snapshot.dockNode = node.windowData().dockNode;
+            snapshot.active = node.visible;
+            snapshot.writeAccessed = node.firstChild != std::numeric_limits<size_t>::max();
+            snapshot.hidden = node.visible == false;
+            snapshot.skipped = node.windowData().collapsed;
+            snapshot.visible = node.visible;
+            snapshot.focused = focusedWindow == node.id;
+            snapshot.hovered = ui->pointerWindow == node.id;
+            snapshot.collapsed = node.windowData().collapsed;
+            snapshot.docked = node.windowData().docked;
+            snapshot.popup = node.windowData().popup;
+            size_t parentIndex = node.parent;
+
+            while(parentIndex != std::numeric_limits<size_t>::max())
+            {
+                const Context::Node & parentNode = ui->nodes[parentIndex];
+
+                if(parentNode.kind == Detail::NodeKind::Window)
+                {
+                    snapshot.parent = parentNode.id;
+                    break;
+                }
+
+                parentIndex = parentNode.parent;
+            }
+
+            for(size_t focusIndex = 0; focusIndex != ui->focusOrder.size(); ++focusIndex)
+            {
+                const Context::Node * focusNode = ui->findFrameNode(ui->focusOrder[focusIndex]);
+
+                if(focusNode == nullptr)
+                {
+                    continue;
+                }
+
+                if(focusNode->windowOwner != node.id)
+                {
+                    continue;
+                }
+
+                snapshot.focusOrder = static_cast<uint32_t>(focusIndex);
+                break;
+            }
+
+            for(size_t child = node.firstChild; child != std::numeric_limits<size_t>::max(); child = ui->nodes[child].nextSibling)
+            {
+                ++snapshot.childCount;
+            }
+            const Context::Persistent * persistent = ui->findState(node.id);
+
+            if(persistent != nullptr)
+            {
+                snapshot.scrollOffset = persistent->scrollData().position;
+                snapshot.scrollRange = persistent->scrollData().range;
+                snapshot.contentIdeal = {node.content.x, node.content.y, persistent->scrollData().contentSize.x, persistent->scrollData().contentSize.y};
+                snapshot.verticalScrollbar = persistent->scrollData().verticalTrack;
+                snapshot.horizontalScrollbar = persistent->scrollData().horizontalTrack;
+                snapshot.lastFrameActive = persistent->windowData().visibleLastFrame;
+                snapshot.scrollbarHorizontal = persistent->scrollData().range.x > 0.f;
+                snapshot.scrollbarVertical = persistent->scrollData().range.y > 0.f;
+                snapshot.acceptsInput = persistent->windowData().acceptsInput;
+
+                if(snapshot.bounds.empty() == true)
+                {
+                    snapshot.bounds = persistent->lastBounds;
+                }
+            }
+
+            output.emplace_back(std::move(snapshot));
+        }
+
+        std::sort(output.begin(), output.end(),
+                  [](const WindowDebugSnapshot & left, const WindowDebugSnapshot & right)
+                  {
+                      return left.zOrder < right.zOrder;
+                  });
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool drawListDebugSnapshots(const Context * ui, DrawListDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        DrawListDebugSnapshotVector output;
+        output.reserve(ui->frame.viewports.size());
+
+        for(const FrameViewport & viewport : ui->frame.viewports)
+        {
+            const DrawCommandVector * commands = Detail::FrameViewportAccess::commands(viewport);
+            const DrawCommandStorage * storage = Detail::FrameViewportAccess::storage(viewport);
+
+            if(commands == nullptr || storage == nullptr)
+            {
+                continue;
+            }
+
+            DrawListDebugSnapshot snapshot;
+            snapshot.viewport = viewport.id;
+            snapshot.owner = "Viewport";
+            snapshot.bounds = viewport.bounds;
+            snapshot.commandCount = commands->size();
+            snapshot.stateCount = ui->frame.renderStates.size();
+
+            for(const DrawCommand & command : *commands)
+            {
+                snapshot.channelCount = std::max(snapshot.channelCount, command.channel + 1);
+
+                if(command.type == DrawCommandType::CustomGeometry)
+                {
+                    snapshot.vertexCount += command.payload.custom.vertices.count;
+                    snapshot.indexCount += command.payload.custom.indices.count;
+                    continue;
+                }
+
+                if(command.type == DrawCommandType::TextGeometry)
+                {
+                    snapshot.vertexCount += command.payload.textGeometry.rectangles.size() * 4;
+                    snapshot.indexCount += command.payload.textGeometry.rectangles.size() * 6;
+                }
+            }
+
+            snapshot.triangleCount = snapshot.indexCount / 3;
+            output.emplace_back(snapshot);
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool drawCommandDebugSnapshots(const Context * ui, DrawCommandDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        DrawCommandDebugSnapshotVector output;
+        size_t vertexOffset = 0;
+        size_t indexOffset = 0;
+        for(const FrameViewport & viewport : ui->frame.viewports)
+        {
+            const DrawCommandVector * commands = Detail::FrameViewportAccess::commands(viewport);
+            const DrawCommandStorage * storage = Detail::FrameViewportAccess::storage(viewport);
+
+            if(commands == nullptr || storage == nullptr)
+            {
+                continue;
+            }
+
+            output.reserve(output.size() + commands->size());
+            for(size_t index = 0; index != commands->size(); ++index)
+            {
+                const DrawCommand & command = (*commands)[index];
+                DrawCommandDebugSnapshot snapshot;
+                snapshot.viewport = viewport.id;
+                snapshot.index = index;
+                snapshot.type = Detail::drawCommandName(command.type);
+                snapshot.renderKey = command.renderKey;
+                snapshot.channel = command.channel;
+                snapshot.vertexOffset = vertexOffset;
+                snapshot.indexOffset = indexOffset;
+                const RenderState * renderState = ui->frame.renderState(command.renderKey);
+
+                if(renderState != nullptr)
+                {
+                    snapshot.texture = renderState->texture;
+                    snapshot.clip = renderState->clip;
+                }
+
+                switch(command.type)
+                {
+                case DrawCommandType::Rect:
+                case DrawCommandType::RoundedRect:
+                case DrawCommandType::Image:
+                    snapshot.elementCount = 1;
+                    snapshot.bounds = command.payload.rectangle.bounds;
+                    break;
+                case DrawCommandType::Gradient:
+                    snapshot.elementCount = 1;
+                    snapshot.bounds = command.payload.gradient.bounds;
+                    break;
+                case DrawCommandType::Line:
+                {
+                    snapshot.elementCount = 1;
+                    const LineDrawCommand & line = command.payload.line;
+                    float minimumX = std::min(line.first.x, line.second.x);
+                    float minimumY = std::min(line.first.y, line.second.y);
+                    float maximumX = std::max(line.first.x, line.second.x);
+                    float maximumY = std::max(line.first.y, line.second.y);
+                    snapshot.bounds = {minimumX, minimumY, maximumX - minimumX, maximumY - minimumY};
+                    break;
+                }
+                case DrawCommandType::RectBatch:
+                    snapshot.elementCount = command.payload.rectBatch.instances.count;
+
+                    for(const RectInstance & instance : storage->rectangleSpan(command.payload.rectBatch.instances))
+                    {
+                        snapshot.bounds = Detail::unionBounds(snapshot.bounds, instance.bounds);
+                    }
+
+                    break;
+                case DrawCommandType::QuadBatch:
+                    snapshot.elementCount = command.payload.quadBatch.instances.count;
+
+                    for(const QuadInstance & instance : storage->quadSpan(command.payload.quadBatch.instances))
+                    {
+                        for(const Vertex & vertex : instance.vertices)
+                        {
+                            Rect point = {vertex.position.x, vertex.position.y, 0.001f, 0.001f};
+                            snapshot.bounds = Detail::unionBounds(snapshot.bounds, point);
+                        }
+                    }
+
+                    break;
+                case DrawCommandType::Polyline:
+                    snapshot.elementCount = command.payload.polyline.points.count;
+
+                    for(const Vec2 & pointValue : storage->pointSpan(command.payload.polyline.points))
+                    {
+                        Rect point = {pointValue.x, pointValue.y, 0.001f, 0.001f};
+                        snapshot.bounds = Detail::unionBounds(snapshot.bounds, point);
+                    }
+
+                    break;
+                case DrawCommandType::Path:
+                    snapshot.elementCount = command.payload.path.points.count;
+
+                    for(const Vec2 & pointValue : storage->pointSpan(command.payload.path.points))
+                    {
+                        Rect point = {pointValue.x, pointValue.y, 0.001f, 0.001f};
+                        snapshot.bounds = Detail::unionBounds(snapshot.bounds, point);
+                    }
+
+                    break;
+                case DrawCommandType::CustomGeometry:
+                    snapshot.elementCount = command.payload.custom.indices.count;
+                    snapshot.vertexCount = command.payload.custom.vertices.count;
+                    snapshot.indexCount = command.payload.custom.indices.count;
+
+                    for(const Vertex & vertex : storage->vertexSpan(command.payload.custom.vertices))
+                    {
+                        Rect point = {vertex.position.x, vertex.position.y, 0.001f, 0.001f};
+                        snapshot.bounds = Detail::unionBounds(snapshot.bounds, point);
+                    }
+
+                    break;
+                case DrawCommandType::TextGeometry:
+                {
+                    const TextGeometryDrawCommand & geometry = command.payload.textGeometry;
+                    snapshot.elementCount = geometry.rectangles.size();
+                    snapshot.vertexCount = geometry.rectangles.size() * 4;
+                    snapshot.indexCount = geometry.rectangles.size() * 6;
+
+                    for(const TexturedRectInstance & rectangle : geometry.rectangles)
+                    {
+                        Array<Vec2, 4> corners = {{{rectangle.bounds.x, rectangle.bounds.y}, {rectangle.bounds.right(), rectangle.bounds.y}, {rectangle.bounds.right(), rectangle.bounds.bottom()}, {rectangle.bounds.x, rectangle.bounds.bottom()}}};
+
+                        for(const Vec2 & corner : corners)
+                        {
+                            Vec2 pointValue;
+                            pointValue.x = geometry.translation.x + geometry.axisX.x * corner.x + geometry.axisY.x * corner.y;
+                            pointValue.y = geometry.translation.y + geometry.axisX.y * corner.x + geometry.axisY.y * corner.y;
+                            Rect point = {pointValue.x, pointValue.y, 0.001f, 0.001f};
+                            snapshot.bounds = Detail::unionBounds(snapshot.bounds, point);
+                        }
+                    }
+
+                    break;
+                }
+                case DrawCommandType::Box:
+                    snapshot.elementCount = 1;
+                    snapshot.bounds = command.payload.box.bounds;
+                    break;
+                case DrawCommandType::BeginChannels:
+                case DrawCommandType::SetChannel:
+                case DrawCommandType::EndChannels:
+                case DrawCommandType::PushClip:
+                case DrawCommandType::PopClip:
+                    snapshot.elementCount = 1;
+                    break;
+                }
+
+                snapshot.triangleCount = snapshot.indexCount / 3;
+                vertexOffset += snapshot.vertexCount;
+                indexOffset += snapshot.indexCount;
+
+                output.emplace_back(snapshot);
+            }
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool popupDebugSnapshots(const Context * ui, PopupDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        PopupDebugSnapshotVector output;
+        output.reserve(ui->popupStack.size());
+
+        for(const Context::PopupState & popup : ui->popupStack)
+        {
+            PopupDebugSnapshot snapshot;
+            snapshot.id = popup.id;
+            snapshot.owner = popup.owner;
+
+            if(popup.level != 0)
+            {
+                for(auto parent = output.rbegin(); parent != output.rend(); ++parent)
+                {
+                    if(parent->level < popup.level && parent->open == true)
+                    {
+                        snapshot.parent = parent->id;
+                        break;
+                    }
+                }
+            }
+
+            snapshot.restoreFocus = popup.restoreFocus;
+            snapshot.window = popup.node;
+            snapshot.bounds = popup.bounds;
+            snapshot.level = popup.level;
+            snapshot.open = popup.open;
+            snapshot.modal = popup.options.modal;
+            snapshot.focused = ui->focused == popup.node || ui->navigationFocused == popup.node;
+            snapshot.closeOnClickOutside = popup.options.closeOnClickOutside;
+            snapshot.closeOnSelection = popup.options.closeOnSelection;
+            output.emplace_back(snapshot);
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool tabBarDebugSnapshots(const Context * ui, TabBarDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        TabBarDebugSnapshotVector output;
+        output.reserve(ui->tabStates.size());
+
+        for(const auto & [id, state] : ui->tabStates)
+        {
+            TabBarDebugSnapshot snapshot;
+            snapshot.id = id;
+            snapshot.selected = state.selectedItem;
+            snapshot.scrollArea = state.scrollArea;
+            snapshot.itemCount = state.itemCount;
+            snapshot.visibleCount = state.visibleCount;
+            snapshot.draggingIndex = state.dragging;
+            snapshot.reorderable = state.options.reorderable;
+            snapshot.autoSelectNewTabs = state.options.autoSelectNewTabs;
+            snapshot.fittingScroll = state.options.fittingPolicy == TabFittingPolicy::Scroll;
+            snapshot.noCloseWithMiddleButton = state.options.closeWithMiddleMouse == false;
+            snapshot.order = state.orderIds;
+            snapshot.items.reserve(state.orderIds.size());
+            for(size_t index = 0; index != state.orderIds.size(); ++index)
+            {
+                Id itemId = state.orderIds[index];
+                TabItemDebugSnapshot item;
+                item.id = itemId;
+                item.order = static_cast<uint32_t>(index);
+                item.selected = itemId == state.selectedItem;
+                const Context::Node * node = ui->findFrameNode(itemId);
+
+                if(node != nullptr)
+                {
+                    item.bounds = node->bounds;
+                    item.width = node->bounds.width;
+                    item.visible = node->visible;
+
+                    if(index != 0)
+                    {
+                        const Context::Node * first = ui->findFrameNode(state.orderIds.front());
+
+                        if(first != nullptr)
+                        {
+                            item.offset = node->bounds.x - first->bounds.x;
+                        }
+                    }
+                }
+
+                snapshot.items.emplace_back(item);
+            }
+
+            const Context::Node * host = state.hostNode < ui->nodes.size() ? &ui->nodes[state.hostNode] : nullptr;
+
+            if(host != nullptr)
+            {
+                snapshot.bounds = host->bounds;
+            }
+
+            const Context::Persistent * scrollState = ui->findState(state.scrollArea);
+
+            if(scrollState != nullptr)
+            {
+                snapshot.scrollOffset = scrollState->scrollData().position;
+                snapshot.scrollRange = scrollState->scrollData().range;
+            }
+            output.emplace_back(snapshot);
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool selectionDebugSnapshots(const Context * ui, SelectionDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        SelectionDebugSnapshotVector output;
+        output.reserve(ui->selectionItems.size());
+
+        for(const Context::SelectionItem & item : ui->selectionItems)
+        {
+            SelectionDebugSnapshot snapshot;
+            snapshot.item = item.item;
+            snapshot.node = item.node;
+            snapshot.scope = item.scope;
+            const Context::Persistent * itemState = ui->findState(item.node);
+
+            if(itemState != nullptr)
+            {
+                snapshot.bounds = itemState->lastBounds;
+            }
+
+            snapshot.selected = item.model != nullptr && item.model->selected(item.item);
+            snapshot.boxSelecting = ui->activeBoxSelection == item.scope;
+
+            if(snapshot.boxSelecting == true)
+            {
+                snapshot.boxBounds = ui->boxSelectionBounds;
+            }
+
+            output.emplace_back(snapshot);
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool dockDebugSnapshots(const Context * ui, DockDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        DockDebugSnapshotVector output;
+        output.reserve(ui->dockModels.size());
+        for(const auto & [group, model] : ui->dockModels)
+        {
+            DockDebugSnapshot snapshot;
+            snapshot.group = group;
+            snapshot.root = model.root();
+            snapshot.central = model.centralNode();
+            DockNodeSpan nodes = model.nodes();
+            snapshot.nodes.assign(nodes.begin(), nodes.end());
+            auto area = ui->dockAreas.find(group);
+
+            if(area != ui->dockAreas.end())
+            {
+                snapshot.area = area->second;
+            }
+
+            for(const auto & [window, windowGroup] : ui->windowDockGroups)
+            {
+                (void)window;
+
+                if(windowGroup == group)
+                {
+                    ++snapshot.windowCount;
+                }
+            }
+
+            output.emplace_back(std::move(snapshot));
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool identityDebugEntries(Context * ui, IdentityDebugEntryVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        IdentityDebugEntryVector output;
+        output.reserve(ui->nodes.size());
+
+        for(size_t index = 0; index != ui->nodes.size(); ++index)
+        {
+            Context::Node & node = ui->nodes[index];
+
+            if(node.kind == Detail::NodeKind::Root)
+            {
+                continue;
+            }
+
+            IdentityDebugEntry entry;
+            entry.id = node.id;
+            entry.parent = node.identityParent;
+            entry.local = node.identityLocal;
+            entry.path = ui->nodePath(index);
+            entry.valueKind = node.debugData().identityValueKind;
+
+            if(node.debugData().identityValueKind == IdentityValueKind::String)
+            {
+                if(node.frameStringIndex < ui->frameNodeStringCount)
+                {
+                    entry.value = ui->frameNodeStrings[node.frameStringIndex].identityDebugValue;
+                }
+            }
+            else if(node.debugData().identityValueKind == IdentityValueKind::Integral)
+            {
+                (void)Detail::toString(node.debugData().identityIntegral, &entry.value);
+            }
+            else if(node.debugData().identityValueKind == IdentityValueKind::Hash)
+            {
+                (void)Detail::formatIntegral(node.identityLocal, "0x%016x", &entry.value);
+            }
+            else
+            {
+                entry.value.assign(node.debugData().file.begin(), node.debugData().file.end());
+                entry.value += ':';
+                String line;
+                (void)Detail::toString(node.debugData().line, &line);
+                entry.value += line;
+            }
+
+            entry.file = node.debugData().file;
+            entry.line = node.debugData().line;
+            entry.anonymous = node.anonymousIdentity;
+            entry.conflict = node.idConflict;
+            output.emplace_back(std::move(entry));
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool groupDebugSnapshots(const Context * ui, GroupDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        GroupDebugSnapshotVector output;
+        output.reserve(ui->nodes.size());
+
+        for(const Context::Node & node : ui->nodes)
+        {
+            bool group = node.kind == Detail::NodeKind::Scope;
+            group = group || node.kind == Detail::NodeKind::Row;
+            group = group || node.kind == Detail::NodeKind::Column;
+            group = group || node.kind == Detail::NodeKind::Grid;
+            group = group || node.kind == Detail::NodeKind::Overlay;
+
+            if(group == false)
+            {
+                continue;
+            }
+
+            GroupDebugSnapshot snapshot;
+            snapshot.id = node.id;
+            snapshot.parent = node.parentId;
+            snapshot.type = Detail::nodeKindName(node.kind);
+            snapshot.bounds = node.bounds;
+            snapshot.clip = node.clip;
+            snapshot.contentBounds = node.content;
+            snapshot.childrenClip = node.childrenClip;
+            snapshot.response = node.response;
+            snapshot.visible = node.visible;
+
+            const Context::Persistent * persistent = ui->findState(node.id);
+
+            if(persistent != nullptr)
+            {
+                snapshot.contentIdealBounds = {node.content.x, node.content.y, persistent->scrollData().contentSize.x, persistent->scrollData().contentSize.y};
+            }
+
+            for(size_t child = node.firstChild; child != std::numeric_limits<size_t>::max(); child = ui->nodes[child].nextSibling)
+            {
+                ++snapshot.childCount;
+            }
+
+            output.emplace_back(snapshot);
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool itemDebugSnapshots(Context * ui, ItemDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        ItemDebugSnapshotVector output;
+        output.reserve(ui->nodes.size());
+        for(size_t index = 1; index != ui->nodes.size(); ++index)
+        {
+            Context::Node & node = ui->nodes[index];
+            ItemDebugSnapshot snapshot;
+            snapshot.item = node.item;
+            snapshot.id = node.id;
+            snapshot.parent = node.parentId;
+            snapshot.identityScope = node.identityScope;
+            snapshot.window = node.windowOwner;
+            snapshot.label = node.label;
+            snapshot.path = ui->nodePath(index);
+            snapshot.type = Detail::nodeKindName(node.kind);
+            snapshot.file = node.debugData().file;
+            snapshot.line = node.debugData().line;
+            snapshot.bounds = node.bounds;
+            snapshot.clip = node.clip;
+            snapshot.response = node.response;
+            snapshot.role = node.semanticRole;
+            snapshot.submission = node.windowSubmission;
+            snapshot.visible = node.visible;
+            snapshot.disabled = node.disabled;
+            snapshot.readOnly = node.readOnly;
+            snapshot.anonymous = node.anonymousIdentity;
+            snapshot.conflict = node.idConflict;
+            output.emplace_back(std::move(snapshot));
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool itemDebugSnapshot(Context * ui, Id id, ItemDebugSnapshot * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(id == InvalidId)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        size_t index = ui->findFrameNodeIndex(id);
+
+        if(index == std::numeric_limits<size_t>::max())
+        {
+            return false;
+        }
+
+        Context::Node & node = ui->nodes[index];
+        ItemDebugSnapshot snapshot;
+        snapshot.item = node.item;
+        snapshot.id = node.id;
+        snapshot.parent = node.parentId;
+        snapshot.identityScope = node.identityScope;
+        snapshot.window = node.windowOwner;
+        snapshot.label = node.label;
+        snapshot.path = ui->nodePath(index);
+        snapshot.type = Detail::nodeKindName(node.kind);
+        snapshot.file = node.debugData().file;
+        snapshot.line = node.debugData().line;
+        snapshot.bounds = node.bounds;
+        snapshot.clip = node.clip;
+        snapshot.response = node.response;
+        snapshot.role = node.semanticRole;
+        snapshot.submission = node.windowSubmission;
+        snapshot.visible = node.visible;
+        snapshot.disabled = node.disabled;
+        snapshot.readOnly = node.readOnly;
+        snapshot.anonymous = node.anonymousIdentity;
+        snapshot.conflict = node.idConflict;
+        *_out = std::move(snapshot);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool itemDebugSnapshot(Context * ui, const ItemRef & item, ItemDebugSnapshot * const _out)
+    {
+        if(ui == nullptr || item.valid() == false || _out == nullptr)
+        {
+            return false;
+        }
+
+        size_t index = ui->findFrameNodeIndex(item);
+
+        if(index == std::numeric_limits<size_t>::max())
+        {
+            return false;
+        }
+
+        Context::Node & node = ui->nodes[index];
+        ItemDebugSnapshot snapshot;
+        snapshot.item = node.item;
+        snapshot.id = node.id;
+        snapshot.parent = node.parentId;
+        snapshot.identityScope = node.identityScope;
+        snapshot.window = node.windowOwner;
+        snapshot.label = node.label;
+        snapshot.path = ui->nodePath(index);
+        snapshot.type = Detail::nodeKindName(node.kind);
+        snapshot.file = node.debugData().file;
+        snapshot.line = node.debugData().line;
+        snapshot.bounds = node.bounds;
+        snapshot.clip = node.clip;
+        snapshot.response = node.response;
+        snapshot.role = node.semanticRole;
+        snapshot.submission = node.windowSubmission;
+        snapshot.visible = node.visible;
+        snapshot.disabled = node.disabled;
+        snapshot.readOnly = node.readOnly;
+        snapshot.anonymous = node.anonymousIdentity;
+        snapshot.conflict = node.idConflict;
+        *_out = std::move(snapshot);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool contextDebugSnapshot(const Context * ui, ContextDebugSnapshot * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        ContextDebugSnapshot snapshot;
+        snapshot.frameNumber = ui->frame.number;
+        snapshot.metrics = ui->frame.metrics;
+        snapshot.configuration = ui->configuration;
+        snapshot.activeItem = ui->active;
+        snapshot.pointerFocusedItem = ui->pointerFocused;
+        snapshot.keyboardFocusedItem = ui->focused;
+        snapshot.navigationFocusedItem = ui->navigationFocused;
+        snapshot.capturedItem = ui->captured;
+        snapshot.hoveredWindow = ui->pointerWindow;
+        snapshot.dockingDragWindow = ui->dockingDragWindow;
+        snapshot.wheelOwner = ui->wheelOwner;
+        snapshot.dragDropSource = ui->dragDrop.source();
+        snapshot.dragDropTarget = ui->dragDrop.target();
+        snapshot.dragDropPhase = ui->dragDrop.phase();
+        snapshot.persistentEntryCount = ui->persistent.size();
+        snapshot.dockModelCount = ui->dockModels.size();
+        snapshot.tabBarStateCount = ui->tabStates.size();
+        snapshot.textEditorStateCount = ui->textEditorStates.size();
+        snapshot.colorEditorStateCount = ui->colorEditorStates.size();
+        snapshot.selectionItemCount = ui->selectionItems.size();
+        snapshot.frameStyleCount = ui->frameStyleCount;
+        snapshot.textCacheEntryCount = ui->textCacheEntryCount;
+        snapshot.textCacheMemory = ui->textCacheMemory;
+
+        for(const auto & entry : ui->persistent)
+        {
+            const Context::Persistent & persistent = entry.second;
+
+            if(persistent.windowData().initialized == true)
+            {
+                ++snapshot.windowSettingCount;
+                SettingDebugSnapshot setting;
+                setting.id = entry.first;
+                setting.type = "Window";
+                setting.bounds = persistent.windowData().bounds;
+                setting.lastFrame = persistent.windowData().visibleLastFrame;
+                setting.memory = sizeof(Context::Persistent);
+                setting.active = persistent.windowData().visible;
+                snapshot.settings.emplace_back(setting);
+                snapshot.settingsMemory += setting.memory;
+            }
+
+            if(persistent.windowData().dragging == true && persistent.windowData().interaction == 3)
+            {
+                snapshot.movingWindow = entry.first;
+            }
+
+            if(persistent.windowData().dragging == true && persistent.windowData().interaction == 6)
+            {
+                snapshot.resizingWindow = entry.first;
+            }
+
+            if(persistent.table != nullptr)
+            {
+                ++snapshot.tableSettingCount;
+                SettingDebugSnapshot setting;
+                setting.id = entry.first;
+                setting.type = "Table";
+                setting.bounds = persistent.lastBounds;
+                setting.lastFrame = persistent.lastFrame;
+                setting.memory = sizeof(Context::TableState) + persistent.table->columns.capacity() * sizeof(Context::TableColumnState) + persistent.table->sortSpecs.capacity() * sizeof(TableSortSpec);
+                setting.active = persistent.lastFrame == ui->frame.number;
+                snapshot.settings.emplace_back(setting);
+                snapshot.settingsMemory += setting.memory;
+            }
+        }
+
+        *_out = snapshot;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void setItemPickerEnabled(Context * ui, bool enabled) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        ui->itemPickerEnabled = enabled;
+
+        if(enabled == false)
+        {
+            ui->itemPickerHovered = InvalidId;
+            ui->itemPickerHoveredBounds = {};
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void setItemPickerTarget(Context * ui, Id id) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        ui->itemPickerSelected = id;
+        ui->itemPickerSelectedBounds = {};
+
+        if(id == InvalidId)
+        {
+            return;
+        }
+
+        const Context::Node * node = ui->findFrameNode(id);
+
+        if(node != nullptr)
+        {
+            ui->itemPickerSelectedBounds = node->bounds;
+            return;
+        }
+
+        const Context::Persistent * persistent = ui->findState(id);
+
+        if(persistent != nullptr)
+        {
+            ui->itemPickerSelectedBounds = persistent->lastBounds;
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool itemPickerState(const Context * ui, ItemPickerState * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        _out->hovered = ui->itemPickerHovered;
+        _out->selected = ui->itemPickerSelected;
+        _out->hoveredBounds = ui->itemPickerHoveredBounds;
+        _out->selectedBounds = ui->itemPickerSelectedBounds;
+        _out->enabled = ui->itemPickerEnabled;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void clearItemPicker(Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return;
+        }
+
+        ui->itemPickerHovered = InvalidId;
+        ui->itemPickerSelected = InvalidId;
+        ui->itemPickerHoveredBounds = {};
+        ui->itemPickerSelectedBounds = {};
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool contentRegionAvailable(const Context * ui, Vec2 * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        if(ui->currentParent >= ui->nodes.size())
+        {
+            return false;
+        }
+
+        const Context::Node & parent = ui->nodes[ui->currentParent];
+        const Context::Persistent * state = ui->findState(parent.id);
+        Rect bounds = parent.content;
+
+        if(bounds.empty() == true && state != nullptr)
+        {
+            bounds = Detail::inset(state->lastBounds, parent.layout.padding);
+
+            if(parent.kind == Detail::NodeKind::Window && parent.windowData().titleVisible == true)
+            {
+                bounds.y += parent.style->metrics.windowTitleHeight;
+                bounds.height = std::max(0.f, bounds.height - parent.style->metrics.windowTitleHeight);
+            }
+        }
+
+        if(bounds.empty() == true)
+        {
+            return false;
+        }
+
+        float horizontalScrollbar = state != nullptr && state->scrollData().horizontalTrack.empty() == false ? state->scrollData().horizontalTrack.height + ui->gap(parent) : 0.f;
+        float verticalScrollbar = state != nullptr && state->scrollData().verticalTrack.empty() == false ? state->scrollData().verticalTrack.width + ui->gap(parent) : 0.f;
+        Vec2 available = {std::max(0.f, bounds.width - verticalScrollbar), std::max(0.f, bounds.height - horizontalScrollbar)};
+        *_out = available;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool debugClip(const Context * ui, Id id, Rect * const _out) noexcept
     {
         if(ui == nullptr)
@@ -7044,6 +9688,34 @@ namespace Mosaic
         return false;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool debugClip(const Context * ui, const ItemRef & item, Rect * const _out) noexcept
+    {
+        if(ui == nullptr || item.valid() == false || _out == nullptr)
+        {
+            return false;
+        }
+
+        const Context::Node * node = ui->findFrameNode(item);
+
+        if(node != nullptr && node->clip.empty() == false)
+        {
+            *_out = node->clip;
+
+            return true;
+        }
+
+        const Context::InteractionSnapshotItem * snapshot = ui->findInteractionSnapshot(item);
+
+        if(snapshot == nullptr || snapshot->clip.empty() == true)
+        {
+            return false;
+        }
+
+        *_out = snapshot->clip;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool itemResponse(const Context * ui, Id id, Response * const _out) noexcept
     {
         if(ui == nullptr)
@@ -7079,6 +9751,30 @@ namespace Mosaic
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool itemResponse(const Context * ui, const ItemRef & item, Response * const _out) noexcept
+    {
+        if(ui == nullptr || item.valid() == false || _out == nullptr)
+        {
+            return false;
+        }
+
+        const Context::Node * node = ui->findFrameNode(item);
+
+        if(node == nullptr)
+        {
+            Response response;
+            response.id = item.id;
+            response.item = item;
+            *_out = response;
+
+            return true;
+        }
+
+        *_out = node->response;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool itemVisible(const Context * ui, Id id) noexcept
     {
         if(ui == nullptr)
@@ -7093,23 +9789,56 @@ namespace Mosaic
 
         if(const Context::Node * node = ui->findFrameNode(id); node != nullptr)
         {
-            if(node->bounds.empty() == false)
+            bool visible = node->visible;
+
+            if(node->bounds.empty() == true)
             {
-                auto returnedValue = node->visible && node->bounds.empty() == false && node->clip.empty() == false && Rect::intersection(node->bounds, node->clip).empty() == false;
+                visible = false;
+            }
+
+            if(node->clip.empty() == true)
+            {
+                visible = false;
+            }
+
+            if(visible == true)
+            {
+                auto returnedValue = Rect::intersection(node->bounds, node->clip).empty() == false;
 
                 return returnedValue;
             }
 
-            if(node->clip.empty() == false)
-            {
-                auto returnedValue = node->visible && node->bounds.empty() == false && node->clip.empty() == false && Rect::intersection(node->bounds, node->clip).empty() == false;
-
-                return returnedValue;
-            }
+            return false;
         }
 
         const Context::Persistent * state = ui->findState(id);
         auto returnedValue = state != nullptr && state->lastBounds.empty() == false && state->lastClip.empty() == false && Rect::intersection(state->lastBounds, state->lastClip).empty() == false;
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool itemVisible(const Context * ui, const ItemRef & item) noexcept
+    {
+        if(ui == nullptr || item.valid() == false)
+        {
+            return false;
+        }
+
+        Rect bounds;
+
+        if(Mosaic::debugBounds(ui, item, &bounds) == false)
+        {
+            return false;
+        }
+
+        Rect clip;
+
+        if(Mosaic::debugClip(ui, item, &clip) == false)
+        {
+            return false;
+        }
+
+        bool returnedValue = Rect::intersection(bounds, clip).empty() == false;
 
         return returnedValue;
     }
@@ -7163,6 +9892,11 @@ namespace Mosaic
         if(state->lastClip.contains(pointer->position) == false)
         {
             return false;
+        }
+
+        if(options.rectOnly == true)
+        {
+            return true;
         }
 
         if(node != nullptr && node->disabled == true && options.allowWhenDisabled == false)
@@ -7252,6 +9986,108 @@ namespace Mosaic
 
         double duration = options.stationary ? state->stationaryHoverDuration : state->hoverDuration;
         auto returnedValue = duration >= static_cast<double>(std::max(0.f, options.delay));
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool itemHovered(const Context * ui, const ItemRef & item, const ItemQueryOptions & options) noexcept
+    {
+        if(ui == nullptr || item.valid() == false)
+        {
+            return false;
+        }
+
+        const Context::InteractionSnapshotItem * snapshot = ui->findInteractionSnapshot(item);
+        const PointerState * pointer = ui->input.primaryPointer();
+
+        if(snapshot == nullptr || pointer == nullptr)
+        {
+            return false;
+        }
+
+        if(pointer->type == PointerType::Touch)
+        {
+            return false;
+        }
+
+        if(snapshot->bounds.empty() == true || snapshot->clip.empty() == true)
+        {
+            return false;
+        }
+
+        if(snapshot->bounds.contains(pointer->position) == false || snapshot->clip.contains(pointer->position) == false)
+        {
+            return false;
+        }
+
+        if(options.rectOnly == true)
+        {
+            return true;
+        }
+
+        if(snapshot->disabled == true && options.allowWhenDisabled == false)
+        {
+            return false;
+        }
+
+        if(options.allowWhenBlockedByPopup == false)
+        {
+            Id blockingLayer = ui->blockingInputLayer != InvalidId ? ui->blockingInputLayer : ui->previousBlockingInputLayer;
+
+            if(blockingLayer != InvalidId && snapshot->inputLayer != blockingLayer && Detail::popupOwnerCanInteract(ui, item.id) == false)
+            {
+                return false;
+            }
+        }
+
+        if(options.allowWhenBlockedByActiveItem == false && ui->capturedItem.valid() == true && ui->capturedItem != item)
+        {
+            return false;
+        }
+
+        if(options.allowWhenOverlappedByWindow == false && ui->pointerWindow != InvalidId)
+        {
+            if(snapshot->windowOwner != ui->pointerWindow || snapshot->windowSubmission != ui->pointerWindowSubmission)
+            {
+                return false;
+            }
+        }
+
+        if(options.allowWhenOverlappedByItem == false)
+        {
+            for(auto iterator = ui->interactionSnapshot.rbegin(); iterator != ui->interactionSnapshot.rend(); ++iterator)
+            {
+                if(iterator->item == item)
+                {
+                    break;
+                }
+
+                if(iterator->visible == false || iterator->disabled == true || iterator->focusable == false)
+                {
+                    continue;
+                }
+
+                if(iterator->windowOwner != snapshot->windowOwner || iterator->windowSubmission != snapshot->windowSubmission)
+                {
+                    continue;
+                }
+
+                if(iterator->bounds.contains(pointer->position) == true && iterator->clip.contains(pointer->position) == true)
+                {
+                    return false;
+                }
+            }
+        }
+
+        const Context::Persistent * state = ui->findState(item.id);
+
+        if(state == nullptr)
+        {
+            return options.delay <= 0.f;
+        }
+
+        double duration = options.stationary == true ? state->stationaryHoverDuration : state->hoverDuration;
+        bool returnedValue = duration >= static_cast<double>(std::max(0.f, options.delay));
 
         return returnedValue;
     }
@@ -7691,57 +10527,30 @@ namespace Mosaic
         return ui->focused == id;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasRect(Context * ui, Id canvas, const Rect & bounds, const Color & color)
+    bool canvasRect(Context * ui, Id canvas, const Rect & bounds, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
-
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas && bounds.empty() == false && color.a > 0.f)
-        {
-            DrawCommandVector & commands = ui->canvasCommands(*node);
-            bool appendCommand = commands.empty() == true;
-
-            if(appendCommand == false)
-            {
-                const DrawCommand & lastCommand = commands.back();
-                appendCommand = lastCommand.type != DrawCommandType::RectBatch || lastCommand.channel != node->canvasChannel;
-            }
-
-            if(appendCommand == true)
-            {
-                DrawCommand command(DrawCommandType::RectBatch);
-                command.channel = node->canvasChannel;
-                commands.emplace_back(std::move(command));
-            }
-
-            DrawCommand & command = commands.back();
-            RectInstanceVector & instances = command.payload.rectBatch.instances;
-            RectInstance instance = {bounds, color};
-            instances.push_back(instance);
-        }
-    }
-    //////////////////////////////////////////////////////////////////////////
-    void canvasRects(Context * ui, Id canvas, RectInstanceSpan instances)
-    {
-        if(ui == nullptr)
-        {
-            return;
-        }
-
-        if(instances.empty() == true)
-        {
-            return;
-        }
-
-        Context::Node * node = ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas rectangle target is not a canvas");
+
+            return false;
+        }
+
+        if(bounds.empty() == true)
+        {
+            return true;
+        }
+
+        if(color.a <= 0.f)
+        {
+            return true;
         }
 
         DrawCommandVector & commands = ui->canvasCommands(*node);
@@ -7757,43 +10566,98 @@ namespace Mosaic
         {
             DrawCommand command(DrawCommandType::RectBatch);
             command.channel = node->canvasChannel;
+            command.payload.rectBatch.instances.offset = ui->drawCommandStorage.rectangles.size();
             commands.emplace_back(std::move(command));
         }
 
         DrawCommand & command = commands.back();
-        RectInstanceVector & destination = command.payload.rectBatch.instances;
-        destination.reserve(destination.size() + instances.size());
-        for(const RectInstance & instance : instances)
-        {
-            if(instance.bounds.empty() == false && instance.color.a > 0.f)
-            {
-                destination.push_back(instance);
-            }
-        }
+        DrawDataRange & instances = command.payload.rectBatch.instances;
+        RectInstance instance = {bounds, color};
+        ui->drawCommandStorage.rectangles.push_back(instance);
+        ++instances.count;
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasQuads(Context * ui, Id canvas, QuadInstanceSpan instances)
+    bool canvasRects(Context * ui, Id canvas, RectInstanceSpan instances)
     {
-        if(ui == nullptr)
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(instances.empty() == true)
         {
-            return;
-        }
-
-        Context::Node * node = ui->findFrameNode(canvas);
-
-        if(node == nullptr)
-        {
-            return;
+            return true;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas rectangle batch target is not a canvas");
+
+            return false;
+        }
+
+        DrawCommandVector & commands = ui->canvasCommands(*node);
+        bool appendCommand = commands.empty() == true;
+
+        if(appendCommand == false)
+        {
+            const DrawCommand & lastCommand = commands.back();
+            appendCommand = lastCommand.type != DrawCommandType::RectBatch || lastCommand.channel != node->canvasChannel;
+        }
+
+        if(appendCommand == true)
+        {
+            DrawCommand command(DrawCommandType::RectBatch);
+            command.channel = node->canvasChannel;
+            command.payload.rectBatch.instances.offset = ui->drawCommandStorage.rectangles.size();
+            commands.emplace_back(std::move(command));
+        }
+
+        DrawCommand & command = commands.back();
+        DrawDataRange & destination = command.payload.rectBatch.instances;
+        ui->drawCommandStorage.rectangles.reserve(ui->drawCommandStorage.rectangles.size() + instances.size());
+        for(const RectInstance & instance : instances)
+        {
+            if(instance.bounds.empty() == true)
+            {
+                continue;
+            }
+
+            if(instance.color.a <= 0.f)
+            {
+                continue;
+            }
+
+            ui->drawCommandStorage.rectangles.push_back(instance);
+            ++destination.count;
+        }
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasQuads(Context * ui, Id canvas, QuadInstanceSpan instances)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(instances.empty() == true)
+        {
+            return true;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas quad batch target is not a canvas");
+
+            return false;
         }
 
         DrawCommandVector & commands = ui->canvasCommands(*node);
@@ -7809,31 +10673,37 @@ namespace Mosaic
         {
             DrawCommand command(DrawCommandType::QuadBatch);
             command.channel = node->canvasChannel;
+            command.payload.quadBatch.instances.offset = ui->drawCommandStorage.quads.size();
             commands.emplace_back(std::move(command));
         }
 
         DrawCommand & command = commands.back();
-        QuadInstanceVector & destination = command.payload.quadBatch.instances;
-        destination.insert(destination.end(), instances.begin(), instances.end());
+        DrawDataRange & destination = command.payload.quadBatch.instances;
+        ui->drawCommandStorage.quads.insert(ui->drawCommandStorage.quads.end(), instances.begin(), instances.end());
+        destination.count += instances.size();
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasBox(Context * ui, Id canvas, const Rect & bounds, const BoxStyle & style)
+    bool canvasBox(Context * ui, Id canvas, const Rect & bounds, const BoxStyle & style)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas box target is not a canvas");
+
+            return false;
         }
 
         if(bounds.empty() == true)
         {
-            return;
+            return true;
         }
 
         DrawCommand command(DrawCommandType::Box);
@@ -7841,35 +10711,60 @@ namespace Mosaic
         command.payload.box.bounds = bounds;
         command.payload.box.style = style;
         ui->canvasCommands(*node).emplace_back(std::move(command));
-    }
-    //////////////////////////////////////////////////////////////////////////
-    void canvasRoundedRect(Context * ui, Id canvas, const Rect & bounds, float radius, const Color & color)
-    {
-        Context::Node * node = ui->findFrameNode(canvas);
 
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas)
-        {
-            DrawCommand command(DrawCommandType::RoundedRect);
-            command.channel = node->canvasChannel;
-            command.payload.rectangle.bounds = bounds;
-            command.payload.rectangle.radius = radius;
-            command.payload.rectangle.color = color;
-            ui->canvasCommands(*node).emplace_back(std::move(command));
-        }
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasGradient(Context * ui, Id canvas, const Rect & bounds, const Color & topLeft, const Color & topRight, const Color & bottomRight, const Color & bottomLeft)
+    bool canvasRoundedRect(Context * ui, Id canvas, const Rect & bounds, float radius, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas rounded rectangle target is not a canvas");
+
+            return false;
+        }
+
+        if(bounds.empty() == true)
+        {
+            return true;
+        }
+
+        if(color.a <= 0.f)
+        {
+            return true;
+        }
+
+        DrawCommand command(DrawCommandType::RoundedRect);
+        command.channel = node->canvasChannel;
+        command.payload.rectangle.bounds = bounds;
+        command.payload.rectangle.radius = radius;
+        command.payload.rectangle.color = color;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasGradient(Context * ui, Id canvas, const Rect & bounds, const Color & topLeft, const Color & topRight, const Color & bottomRight, const Color & bottomLeft)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas gradient target is not a canvas");
+
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Gradient);
@@ -7877,58 +10772,91 @@ namespace Mosaic
         command.payload.gradient.bounds = bounds;
         command.payload.gradient.colors = {topLeft, topRight, bottomRight, bottomLeft};
         ui->canvasCommands(*node).emplace_back(std::move(command));
-    }
-    //////////////////////////////////////////////////////////////////////////
-    void canvasLine(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, float thickness, const Color & color)
-    {
-        Context::Node * node = ui->findFrameNode(canvas);
 
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas)
-        {
-            DrawCommand command(DrawCommandType::Line);
-            command.channel = node->canvasChannel;
-            command.payload.line.first = first;
-            command.payload.line.second = second;
-            command.payload.line.thickness = thickness;
-            command.payload.line.color = color;
-            ui->canvasCommands(*node).emplace_back(std::move(command));
-        }
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasPolyline(Context * ui, Id canvas, Vec2Span points, float thickness, const Color & color, bool closed)
+    bool canvasLine(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, float thickness, const Color & color)
     {
-        Context::Node * node = ui->findFrameNode(canvas);
-
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas)
-        {
-            DrawCommand command(DrawCommandType::Polyline);
-            command.channel = node->canvasChannel;
-            PolylineDrawCommand & polyline = command.payload.polyline;
-            polyline.points.assign(points.begin(), points.end());
-            polyline.thickness = thickness;
-            polyline.color = color;
-            polyline.closed = closed;
-            ui->canvasCommands(*node).emplace_back(std::move(command));
-        }
-    }
-    //////////////////////////////////////////////////////////////////////////
-    void canvasCircle(Context * ui, Id canvas, const Vec2 & center, float radius, float thickness, const Color & color, uint32_t segments)
-    {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas line target is not a canvas");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::Line);
+        command.channel = node->canvasChannel;
+        command.payload.line.first = first;
+        command.payload.line.second = second;
+        command.payload.line.thickness = thickness;
+        command.payload.line.color = color;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasPolyline(Context * ui, Id canvas, Vec2Span points, float thickness, const Color & color, bool closed)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas polyline target is not a canvas");
+
+            return false;
+        }
+
+        if(points.size() < 2)
+        {
+            return true;
+        }
+
+        DrawCommand command(DrawCommandType::Polyline);
+        command.channel = node->canvasChannel;
+        PolylineDrawCommand & polyline = command.payload.polyline;
+        polyline.points.offset = ui->drawCommandStorage.points.size();
+        polyline.points.count = points.size();
+        ui->drawCommandStorage.points.insert(ui->drawCommandStorage.points.end(), points.begin(), points.end());
+        polyline.thickness = thickness;
+        polyline.color = color;
+        polyline.closed = closed;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasCircle(Context * ui, Id canvas, const Vec2 & center, float radius, float thickness, const Color & color, uint32_t segments)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas circle target is not a canvas");
+
+            return false;
         }
 
         if(radius <= 0.f)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -7940,82 +10868,98 @@ namespace Mosaic
         command.payload.path.thickness = thickness;
         command.payload.path.segments = segments;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasConvexPolygon(Context * ui, Id canvas, Vec2Span points, const Color & color)
+    bool canvasConvexPolygon(Context * ui, Id canvas, Vec2Span points, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas convex polygon target is not a canvas");
+
+            return false;
         }
 
         if(points.size() < 3)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
-        pathCommand.points.assign(points.begin(), points.end());
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = points.size();
+        ui->drawCommandStorage.points.insert(ui->drawCommandStorage.points.end(), points.begin(), points.end());
         pathCommand.color = color;
         pathCommand.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasGradientPolygon(Context * ui, Id canvas, ColoredPointSpan points)
+    bool canvasGradientPolygon(Context * ui, Id canvas, ColoredPointSpan points)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas gradient polygon target is not a canvas");
+
+            return false;
         }
 
         if(points.size() < 3)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
-        pathCommand.coloredPoints.assign(points.begin(), points.end());
+        pathCommand.coloredPoints.offset = ui->drawCommandStorage.coloredPoints.size();
+        pathCommand.coloredPoints.count = points.size();
+        ui->drawCommandStorage.coloredPoints.insert(ui->drawCommandStorage.coloredPoints.end(), points.begin(), points.end());
         pathCommand.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasCircleFilled(Context * ui, Id canvas, const Vec2 & center, float radius, const Color & color, uint32_t segments)
+    bool canvasCircleFilled(Context * ui, Id canvas, const Vec2 & center, float radius, const Color & color, uint32_t segments)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas filled circle target is not a canvas");
+
+            return false;
         }
 
         if(radius <= 0.f)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -8027,30 +10971,106 @@ namespace Mosaic
         command.payload.path.segments = segments;
         command.payload.path.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasEllipse(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, float thickness, const Color & color, uint32_t segments)
+    bool canvasArc(Context * ui, Id canvas, const Vec2 & center, float radius, float startAngle, float endAngle, float thickness, const Color & color, uint32_t segments)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas arc target is not a canvas");
+
+            return false;
+        }
+
+        if(radius <= 0.f)
+        {
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::Path);
+        command.channel = node->canvasChannel;
+        command.payload.path.shape = PathShape::Arc;
+        command.payload.path.center = center;
+        command.payload.path.radii = {radius, radius};
+        command.payload.path.startAngle = startAngle;
+        command.payload.path.endAngle = endAngle;
+        command.payload.path.color = color;
+        command.payload.path.thickness = thickness;
+        command.payload.path.segments = segments;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasArcFilled(Context * ui, Id canvas, const Vec2 & center, float radius, float startAngle, float endAngle, const Color & color, uint32_t segments)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas filled arc target is not a canvas");
+
+            return false;
+        }
+
+        if(radius <= 0.f)
+        {
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::Path);
+        command.channel = node->canvasChannel;
+        command.payload.path.shape = PathShape::Arc;
+        command.payload.path.center = center;
+        command.payload.path.radii = {radius, radius};
+        command.payload.path.startAngle = startAngle;
+        command.payload.path.endAngle = endAngle;
+        command.payload.path.color = color;
+        command.payload.path.segments = segments;
+        command.payload.path.filled = true;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasEllipse(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, float thickness, const Color & color, uint32_t segments)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas ellipse target is not a canvas");
+
+            return false;
         }
 
         if(radii.x <= 0.f)
         {
-            return;
+            return false;
         }
 
         if(radii.y <= 0.f)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -8063,30 +11083,34 @@ namespace Mosaic
         command.payload.path.thickness = thickness;
         command.payload.path.segments = segments;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasEllipseFilled(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, const Color & color, uint32_t segments)
+    bool canvasEllipseFilled(Context * ui, Id canvas, const Vec2 & center, const Vec2 & radii, float rotation, const Color & color, uint32_t segments)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas filled ellipse target is not a canvas");
+
+            return false;
         }
 
         if(radii.x <= 0.f)
         {
-            return;
+            return false;
         }
 
         if(radii.y <= 0.f)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -8099,30 +11123,34 @@ namespace Mosaic
         command.payload.path.segments = segments;
         command.payload.path.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasRegularPolygon(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, float thickness, const Color & color)
+    bool canvasRegularPolygon(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, float thickness, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas regular polygon target is not a canvas");
+
+            return false;
         }
 
         if(radius <= 0.f)
         {
-            return;
+            return false;
         }
 
         if(sideCount < 3)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -8135,30 +11163,34 @@ namespace Mosaic
         command.payload.path.thickness = thickness;
         command.payload.path.segments = sideCount;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasRegularPolygonFilled(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, const Color & color)
+    bool canvasRegularPolygonFilled(Context * ui, Id canvas, const Vec2 & center, float radius, uint32_t sideCount, float rotation, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas filled regular polygon target is not a canvas");
+
+            return false;
         }
 
         if(radius <= 0.f)
         {
-            return;
+            return false;
         }
 
         if(sideCount < 3)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -8171,35 +11203,39 @@ namespace Mosaic
         command.payload.path.segments = sideCount;
         command.payload.path.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasGradientRing(Context * ui, Id canvas, const Vec2 & center, float innerRadius, float outerRadius, float startAngle, ColorSpan colors)
+    bool canvasGradientRing(Context * ui, Id canvas, const Vec2 & center, float innerRadius, float outerRadius, float startAngle, ColorSpan colors)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas gradient ring target is not a canvas");
+
+            return false;
         }
 
         if(innerRadius < 0.f)
         {
-            return;
+            return false;
         }
 
         if(outerRadius <= innerRadius)
         {
-            return;
+            return false;
         }
 
         if(colors.empty() == true)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
@@ -8209,137 +11245,217 @@ namespace Mosaic
         pathCommand.center = center;
         pathCommand.radii = {innerRadius, outerRadius};
         pathCommand.rotation = startAngle;
-        pathCommand.colors.assign(colors.begin(), colors.end());
+        pathCommand.colors.offset = ui->drawCommandStorage.colors.size();
+        pathCommand.colors.count = colors.size();
+        ui->drawCommandStorage.colors.insert(ui->drawCommandStorage.colors.end(), colors.begin(), colors.end());
         pathCommand.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasConcavePolygon(Context * ui, Id canvas, Vec2Span points, const Color & color)
+    bool canvasConcavePolygon(Context * ui, Id canvas, Vec2Span points, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas concave polygon target is not a canvas");
+
+            return false;
         }
 
         if(points.size() < 3)
         {
-            return;
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
-        pathCommand.points.assign(points.begin(), points.end());
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = points.size();
+        ui->drawCommandStorage.points.insert(ui->drawCommandStorage.points.end(), points.begin(), points.end());
         pathCommand.color = color;
         pathCommand.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasTriangle(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, float thickness, const Color & color)
+    bool canvasTriangle(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, float thickness, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas triangle target is not a canvas");
+
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
-        command.payload.path.shape = PathShape::Polygon;
-        command.payload.path.points = {first, second, third};
-        command.payload.path.color = color;
-        command.payload.path.thickness = thickness;
+        PathDrawCommand & pathCommand = command.payload.path;
+        pathCommand.shape = PathShape::Polygon;
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = 3;
+        ui->drawCommandStorage.points.push_back(first);
+        ui->drawCommandStorage.points.push_back(second);
+        ui->drawCommandStorage.points.push_back(third);
+        pathCommand.color = color;
+        pathCommand.thickness = thickness;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasTriangleFilled(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, const Color & color)
+    bool canvasTriangleFilled(Context * ui, Id canvas, const Vec2 & first, const Vec2 & second, const Vec2 & third, const Color & color)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas filled triangle target is not a canvas");
+
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
-        command.payload.path.shape = PathShape::Polygon;
-        command.payload.path.points = {first, second, third};
-        command.payload.path.color = color;
-        command.payload.path.filled = true;
+        PathDrawCommand & pathCommand = command.payload.path;
+        pathCommand.shape = PathShape::Polygon;
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = 3;
+        ui->drawCommandStorage.points.push_back(first);
+        ui->drawCommandStorage.points.push_back(second);
+        ui->drawCommandStorage.points.push_back(third);
+        pathCommand.color = color;
+        pathCommand.filled = true;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasBezierCubic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & firstControl, const Vec2 & secondControl, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
+    bool canvasBezierCubic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & firstControl, const Vec2 & secondControl, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas cubic bezier target is not a canvas");
+
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
-        command.payload.path.shape = PathShape::CubicBezier;
-        command.payload.path.points = {first, firstControl, secondControl, second};
-        command.payload.path.color = color;
-        command.payload.path.thickness = thickness;
-        command.payload.path.segments = segments;
+        PathDrawCommand & pathCommand = command.payload.path;
+        pathCommand.shape = PathShape::CubicBezier;
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = 4;
+        ui->drawCommandStorage.points.push_back(first);
+        ui->drawCommandStorage.points.push_back(firstControl);
+        ui->drawCommandStorage.points.push_back(secondControl);
+        ui->drawCommandStorage.points.push_back(second);
+        pathCommand.color = color;
+        pathCommand.thickness = thickness;
+        pathCommand.segments = segments;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasBezierQuadratic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & control, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
+    bool canvasBezierQuadratic(Context * ui, Id canvas, const Vec2 & first, const Vec2 & control, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas quadratic bezier target is not a canvas");
+
+            return false;
         }
 
         DrawCommand command(DrawCommandType::Path);
         command.channel = node->canvasChannel;
-        command.payload.path.shape = PathShape::QuadraticBezier;
-        command.payload.path.points = {first, control, second};
-        command.payload.path.color = color;
-        command.payload.path.thickness = thickness;
-        command.payload.path.segments = segments;
+        PathDrawCommand & pathCommand = command.payload.path;
+        pathCommand.shape = PathShape::QuadraticBezier;
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = 3;
+        ui->drawCommandStorage.points.push_back(first);
+        ui->drawCommandStorage.points.push_back(control);
+        ui->drawCommandStorage.points.push_back(second);
+        pathCommand.color = color;
+        pathCommand.thickness = thickness;
+        pathCommand.segments = segments;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasBezierQuadraticFilled(Context * ui, Id canvas, const Vec2 & first, const Vec2 & control, const Vec2 & second, const Color & color, uint32_t segments)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas filled quadratic bezier target is not a canvas");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::Path);
+        command.channel = node->canvasChannel;
+        PathDrawCommand & pathCommand = command.payload.path;
+        pathCommand.shape = PathShape::QuadraticBezier;
+        pathCommand.points.offset = ui->drawCommandStorage.points.size();
+        pathCommand.points.count = 3;
+        ui->drawCommandStorage.points.push_back(first);
+        ui->drawCommandStorage.points.push_back(control);
+        ui->drawCommandStorage.points.push_back(second);
+        pathCommand.color = color;
+        pathCommand.segments = segments;
+        pathCommand.filled = true;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
     bool canvasText(Context * ui, Id canvas, const Vec2 & position, StringView value, const Color & color, Vec2 * const _out)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
@@ -8373,19 +11489,23 @@ namespace Mosaic
             return false;
         }
 
-        for(const Context::PreparedTextBatch & batch : text->batches)
+        uint64_t batchIndex = 0;
+        for(const Context::PreparedTextRunBatch & batch : text->batches)
         {
             RenderState state;
             state.texture = batch.texture;
             state.renderTarget = ui->viewport.renderTarget;
-            DrawCommand command(DrawCommandType::CachedGeometry);
+            DrawCommand command(DrawCommandType::TextGeometry);
             command.channel = node->canvasChannel;
             command.renderKey = ui->internRenderState(state);
-            command.payload.cached.vertices = batch.vertices;
-            command.payload.cached.indices = batch.indices;
-            command.payload.cached.translation = position;
-            command.payload.cached.tint = color;
+            TextGeometryDrawCommand & geometry = command.payload.textGeometry;
+            uint64_t batchKey = combineId(text->key, batchIndex);
+            geometry.cacheKey = combineId(batchKey, batch.texture);
+            geometry.rectangles = batch.rectangles;
+            geometry.translation = position;
+            geometry.tint = color;
             ui->canvasCommands(*node).emplace_back(std::move(command));
+            ++batchIndex;
         }
 
         *_out = text->size;
@@ -8393,109 +11513,294 @@ namespace Mosaic
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasPushClip(Context * ui, Id canvas, const Rect & bounds)
+    bool canvasPushClip(Context * ui, Id canvas, const Rect & bounds)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas clip target is not a canvas");
+
+            return false;
+        }
+
+        if(bounds.empty() == true)
+        {
+            return false;
         }
 
         DrawCommand command(DrawCommandType::PushClip);
         command.channel = node->canvasChannel;
         command.payload.rectangle.bounds = bounds;
         ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasPopClip(Context * ui, Id canvas)
+    bool canvasPopClip(Context * ui, Id canvas)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas clip target is not a canvas");
+
+            return false;
         }
 
         DrawCommand command(DrawCommandType::PopClip);
         command.channel = node->canvasChannel;
         ui->canvasCommands(*node).emplace_back(std::move(command));
-    }
-    //////////////////////////////////////////////////////////////////////////
-    void canvasImage(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint)
-    {
-        Context::Node * node = ui->findFrameNode(canvas);
 
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas)
-        {
-            RenderState state;
-            state.texture = texture;
-            state.renderTarget = ui->viewport.renderTarget;
-            DrawCommand command(DrawCommandType::Image);
-            command.channel = node->canvasChannel;
-            command.renderKey = ui->internRenderState(state);
-            command.payload.rectangle.bounds = bounds;
-            command.payload.rectangle.uv = uv;
-            command.payload.rectangle.color = tint;
-            ui->canvasCommands(*node).emplace_back(std::move(command));
-        }
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasCustom(Context * ui, Id canvas, VertexSpan vertices, IndexSpan indices, const RenderState & state)
+    bool canvasImage(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint, SamplerFilter sampler)
     {
-        RenderState canvasState = state;
-        Context::Node * node = ui->findFrameNode(canvas);
-
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas)
-        {
-            canvasState.renderTarget = ui->viewport.renderTarget;
-            DrawCommand command(DrawCommandType::CustomGeometry);
-            command.channel = node->canvasChannel;
-            command.renderKey = ui->internRenderState(canvasState);
-            CustomGeometryDrawCommand & custom = command.payload.custom;
-            custom.vertices.assign(vertices.begin(), vertices.end());
-            custom.indices.assign(indices.begin(), indices.end());
-            ui->canvasCommands(*node).emplace_back(std::move(command));
-        }
-    }
-    //////////////////////////////////////////////////////////////////////////
-    void canvasSetChannel(Context * ui, Id canvas, uint32_t channel) noexcept
-    {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
         if(node == nullptr)
         {
-            return;
+            return false;
         }
 
         if(node->kind != Detail::NodeKind::Canvas)
         {
-            return;
+            ui->frame.diagnostics.emplace_back("Canvas image target is not a canvas");
+
+            return false;
         }
 
-        constexpr uint32_t maximumCanvasChannel = 63;
-        node->canvasChannel = std::min(channel, maximumCanvasChannel);
-        node->canvasChannelCount = std::max(node->canvasChannelCount, node->canvasChannel + 1);
+        if(bounds.empty() == true)
+        {
+            return false;
+        }
+
+        RenderState state;
+        state.texture = texture;
+        state.sampler = sampler;
+        state.renderTarget = ui->viewport.renderTarget;
+        DrawCommand command(DrawCommandType::Image);
+        command.channel = node->canvasChannel;
+        command.renderKey = ui->internRenderState(state);
+        command.payload.rectangle.bounds = bounds;
+        command.payload.rectangle.uv = uv;
+        command.payload.rectangle.color = tint;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
-    void canvasSetLayer(Context * ui, Id canvas, CanvasLayer layer) noexcept
+    bool canvasCustom(Context * ui, Id canvas, VertexSpan vertices, IndexSpan indices, const RenderState & state)
     {
-        Context::Node * node = ui == nullptr ? nullptr : ui->findFrameNode(canvas);
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
 
-        if(node != nullptr && node->kind == Detail::NodeKind::Canvas)
+        if(node == nullptr)
         {
-            node->canvasLayer = layer;
+            return false;
         }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas custom geometry target is not a canvas");
+
+            return false;
+        }
+
+        if(vertices.empty() == true)
+        {
+            return false;
+        }
+
+        if(indices.empty() == true)
+        {
+            return false;
+        }
+
+        RenderState canvasState = state;
+        canvasState.renderTarget = ui->viewport.renderTarget;
+        DrawCommand command(DrawCommandType::CustomGeometry);
+        command.channel = node->canvasChannel;
+        command.renderKey = ui->internRenderState(canvasState);
+        CustomGeometryDrawCommand & custom = command.payload.custom;
+        custom.vertices.offset = ui->drawCommandStorage.vertices.size();
+        custom.vertices.count = vertices.size();
+        ui->drawCommandStorage.vertices.insert(ui->drawCommandStorage.vertices.end(), vertices.begin(), vertices.end());
+        custom.indices.offset = ui->drawCommandStorage.indices.size();
+        custom.indices.count = indices.size();
+        ui->drawCommandStorage.indices.insert(ui->drawCommandStorage.indices.end(), indices.begin(), indices.end());
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasSplitChannels(Context * ui, Id canvas, uint32_t count) noexcept
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            return false;
+        }
+
+        constexpr uint32_t maximumCanvasChannelCount = 64;
+
+        if(count == 0)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas channel count must be greater than zero");
+
+            return false;
+        }
+
+        if(count > maximumCanvasChannelCount)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas channel count exceeds Graphics capacity");
+
+            return false;
+        }
+
+        if(node->canvasChannelCount != 1)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas channel group is already active");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::BeginChannels);
+        command.payload.channelGroup.count = static_cast<uint8_t>(count);
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+        node->canvasChannel = 0;
+        node->canvasChannelCount = count;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasSetChannel(Context * ui, Id canvas, uint32_t channel) noexcept
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            return false;
+        }
+
+        if(channel >= node->canvasChannelCount)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas channel is outside the active channel group");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::SetChannel);
+        command.payload.channelSelection.channel = static_cast<uint8_t>(channel);
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+        node->canvasChannel = channel;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasMergeChannels(Context * ui, Id canvas, UInt32Span order) noexcept
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            return false;
+        }
+
+        if(node->canvasChannelCount == 1)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas channel group is not active");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::EndChannels);
+        ChannelGroupDrawCommand & channelGroup = command.payload.channelGroup;
+        Array<bool, 64> used = {};
+        uint8_t destination = 0;
+        for(uint32_t channel : order)
+        {
+            if(channel >= node->canvasChannelCount)
+            {
+                ui->frame.diagnostics.emplace_back("Canvas channel order contains an out-of-range channel");
+
+                return false;
+            }
+
+            if(used[channel] == true)
+            {
+                ui->frame.diagnostics.emplace_back("Canvas channel order contains a duplicate channel");
+
+                return false;
+            }
+
+            used[channel] = true;
+            channelGroup.order[destination] = static_cast<uint8_t>(channel);
+            ++destination;
+        }
+
+        for(uint32_t channel = 0; channel != node->canvasChannelCount; ++channel)
+        {
+            if(used[channel] == true)
+            {
+                continue;
+            }
+
+            channelGroup.order[destination] = static_cast<uint8_t>(channel);
+            ++destination;
+        }
+
+        channelGroup.count = destination;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+        node->canvasChannel = 0;
+        node->canvasChannelCount = 1;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasSetLayer(Context * ui, Id canvas, CanvasLayer layer) noexcept
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            return false;
+        }
+
+        node->canvasLayer = layer;
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
     void Detail::closeScope(Context * ui, uint64_t token) noexcept

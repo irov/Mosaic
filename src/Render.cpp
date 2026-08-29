@@ -148,26 +148,29 @@ namespace Mosaic
             return;
         }
 
-        emitPreparedText(drawList, node.textRun->batches, position, color, baseState, baseKey);
+        emitPreparedText(drawList, *node.textRun, position, color, baseState, baseKey);
     }
     //////////////////////////////////////////////////////////////////////////
     void Context::emitValueText(DrawList & drawList, const Node & node, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey)
     {
         if(node.valueTextRun != nullptr)
         {
-            emitPreparedText(drawList, node.valueTextRun->batches, position, color, baseState, baseKey);
+            emitPreparedText(drawList, *node.valueTextRun, position, color, baseState, baseKey);
         }
     }
     //////////////////////////////////////////////////////////////////////////
-    void Context::emitPreparedText(DrawList & drawList, const PreparedTextBatchVector & batches, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey, const Vec2 & axisX, const Vec2 & axisY)
+    void Context::emitPreparedText(DrawList & drawList, const CachedText & text, const Vec2 & position, const Color & color, const RenderState & baseState, uint64_t baseKey, const Vec2 & axisX, const Vec2 & axisY)
     {
         Vec2 translation = {Detail::snapToPixel(position.x, viewport.dpiScale), Detail::snapToPixel(position.y, viewport.dpiScale)};
-        for(const PreparedTextBatch & batch : batches)
+        uint64_t batchIndex = 0;
+        for(const PreparedTextRunBatch & batch : text.batches)
         {
             RenderState glyphState = baseState;
             glyphState.texture = batch.texture;
             uint64_t glyphKey = batch.texture == baseState.texture ? baseKey : internRenderState(glyphState);
-            drawList.cached(batch.vertices, batch.indices, translation, color, glyphKey, axisX, axisY);
+            uint64_t geometryKey = combineId(text.key, batchIndex);
+            drawList.textGeometry(geometryKey, batch.rectangles, translation, color, glyphKey, axisX, axisY);
+            ++batchIndex;
         }
     }
     //////////////////////////////////////////////////////////////////////////
@@ -222,7 +225,7 @@ namespace Mosaic
             if(frameCaptureOptions.debug == true)
             {
                 const Persistent * persistentState = findState(node.id);
-                frame.debug.push_back({node.id, node.parentId, Detail::nodeKindName(node.kind), node.label, nodePath(index), node.file, node.function, node.line, persistentState == nullptr ? frame.number : persistentState->firstFrame, persistentState == nullptr ? frame.number : persistentState->lastFrame, node.bounds, node.clip, node.response.hovered(), active == node.id, focused == node.id, node.disabled});
+                frame.debug.push_back({node.id, node.parentId, Detail::nodeKindName(node.kind), node.label, nodePath(index), node.debugData().file, node.debugData().function, node.debugData().line, persistentState == nullptr ? frame.number : persistentState->firstFrame, persistentState == nullptr ? frame.number : persistentState->lastFrame, node.windowData().zOrder, node.bounds, node.clip, node.response.hovered(), active == node.id, focused == node.id, node.disabled});
             }
         };
         auto emitChildren = [this, &node, &drawList, canvasPass]()
@@ -238,7 +241,7 @@ namespace Mosaic
                 }
                 for(size_t child : windowRenderOrder)
                 {
-                    if(nodes[child].windowPopup == false)
+                    if(nodes[child].windowData().popup == false)
                     {
                         emitNode(child, drawList, canvasPass);
                     }
@@ -252,7 +255,7 @@ namespace Mosaic
                 }
                 for(size_t child : windowRenderOrder)
                 {
-                    if(nodes[child].windowPopup)
+                    if(nodes[child].windowData().popup)
                     {
                         emitNode(child, drawList, canvasPass);
                     }
@@ -288,12 +291,30 @@ namespace Mosaic
 
         AlphaRestore alphaRestore = {drawList, drawList.alphaMultiplier()};
         float nodeAlpha = std::clamp(node.style->behavior.alpha, 0.f, 1.f) * (node.disabled ? std::clamp(node.style->behavior.disabledAlpha, 0.f, 1.f) : 1.f);
+
+        bool transparentDockingPayload = configuration.dockingTransparentPayload == true;
+        transparentDockingPayload = transparentDockingPayload == true && node.kind == Detail::NodeKind::Window;
+        transparentDockingPayload = transparentDockingPayload == true && dockingDragWindow == node.id;
+
+        if(transparentDockingPayload == true)
+        {
+            nodeAlpha *= 0.35f;
+        }
+
         drawList.setAlphaMultiplier(nodeAlpha);
         Color textColor = node.disabled ? node.style->colors.textDisabled : node.style->colors.text;
         RenderState baseState;
         baseState.clip = node.kind == Detail::NodeKind::Canvas && node.canvasLayer != CanvasLayer::Local ? viewport.bounds : node.visualClip;
         baseState.blend = BlendMode::PremultipliedAlpha;
         baseState.renderTarget = viewport.renderTarget;
+        float physicalPixel = 1.f / std::max(1.f, viewport.dpiScale);
+        baseState.linePenumbra = node.style->behavior.antiAliasedLines == true ? physicalPixel * 0.5f : 0.f;
+        baseState.fillFeather = node.style->behavior.antiAliasedFill == true ? physicalPixel * 0.75f : 0.f;
+        baseState.curveTessellationMaximumError = std::max(0.01f, node.style->behavior.curveTessellationMaximumError);
+        baseState.circleTessellationMaximumError = std::max(0.01f, node.style->behavior.circleTessellationMaximumError);
+        baseState.curveQuality = std::max<uint8_t>(1, node.style->behavior.curveTessellationQuality);
+        baseState.ellipseQuality = std::clamp<uint8_t>(node.style->behavior.ellipseTessellationQuality, 4, 252);
+        baseState.rectangleQuality = std::max<uint8_t>(1, node.style->behavior.rectangleTessellationQuality);
         uint64_t baseKey = internRenderState(baseState);
         Persistent * visualState = node.persistentState;
 
@@ -307,7 +328,7 @@ namespace Mosaic
         float selectionVisual = visualState == nullptr ? (node.checked || node.selected == true || node.expanded ? 1.f : 0.f) : visualState->selectionVisual;
         float focusVisual = visualState == nullptr ? (node.response.focused() ? 1.f : 0.f) : visualState->focusVisual;
         float navigationFocusVisual = navigationCursorVisible && navigationFocused == node.id ? focusVisual : 0.f;
-        float scalarVisual = visualState == nullptr ? node.scalar : visualState->scalarVisual;
+        float scalarVisual = visualState == nullptr ? node.valueData().scalar : visualState->scalarVisual;
         double hoverDuration = visualState == nullptr ? 0.0 : visualState->hoverDuration;
         Color controlColor = Detail::mixColor(node.style->colors.panel, node.style->colors.panelHovered, hoverVisual);
         controlColor = Detail::mixColor(controlColor, node.style->colors.selection, selectionVisual * 0.82f);
@@ -361,24 +382,33 @@ namespace Mosaic
         }
         case Detail::NodeKind::Window:
         {
-            float windowBorder = node.windowPopup ? node.style->metrics.popupBorderSize : node.style->metrics.windowBorderSize;
-            float windowRadius = node.windowDocked || node.windowAttachedPopup ? 0.f : (node.windowPopup ? node.style->metrics.popupCornerRadius : node.style->metrics.cornerRadius);
+            float windowBorder = node.windowData().popup ? node.style->metrics.popupBorderSize : node.style->metrics.windowBorderSize;
+            float windowRadius = node.windowData().docked || node.windowData().attachedPopup ? 0.f : (node.windowData().popup ? node.style->metrics.popupCornerRadius : node.style->metrics.cornerRadius);
 
-            if(node.windowBackgroundVisible == true)
+            if(node.windowData().backgroundVisible == true)
             {
                 Color background = node.style->colors.background;
                 Color border = node.style->colors.borderStrong;
-                background.a *= node.windowBackgroundAlpha;
-                border.a *= node.windowBackgroundAlpha;
+                background.a *= node.windowData().backgroundAlpha;
+                border.a *= node.windowData().backgroundAlpha;
                 Detail::drawFrame(drawList, node.bounds, windowRadius, windowBorder, background, border, 0.85f, baseKey);
             }
 
-            if(node.windowTitleVisible == true)
+            if(node.windowData().titleVisible == true)
             {
                 Rect titleBar = Detail::windowTitleBarBounds(node, node.bounds);
-                Color titleColor = node.windowCollapsed ? node.style->colors.titleBackgroundCollapsed : Detail::mixColor(node.style->colors.titleBackground, node.style->colors.titleBackgroundActive, focusVisual);
+                Color titleColor = node.windowData().collapsed ? node.style->colors.titleBackgroundCollapsed : Detail::mixColor(node.style->colors.titleBackground, node.style->colors.titleBackgroundActive, focusVisual);
 
-                if(node.windowDocked == true)
+                bool floatingDockingTab = configuration.dockingAlwaysTabBar == true;
+                floatingDockingTab = floatingDockingTab == true && node.windowData().dockGroup != 0;
+                floatingDockingTab = floatingDockingTab == true && node.windowData().docked == false;
+
+                if(floatingDockingTab == true)
+                {
+                    titleColor = Detail::mixColor(node.style->colors.tabSelected, node.style->colors.tabDimmedSelected, focusVisual < 0.5f ? 0.45f : 0.f);
+                }
+
+                if(node.windowData().docked == true)
                 {
                     drawList.rect(titleBar, titleColor, baseKey);
                 }
@@ -388,12 +418,18 @@ namespace Mosaic
                 }
 
                 drawList.line({titleBar.x, titleBar.bottom()}, {titleBar.right(), titleBar.bottom()}, windowBorder, node.style->colors.borderStrong, baseKey);
+
+                if(floatingDockingTab == true && node.style->metrics.tabOverlineSize > 0.f)
+                {
+                    drawList.rect({titleBar.x, titleBar.y, titleBar.width, node.style->metrics.tabOverlineSize}, node.style->colors.tabSelectedOverline, baseKey);
+                }
+
                 float buttonSide = std::max(12.f, node.style->metrics.windowTitleHeight - 8.f);
                 float buttonRight = titleBar.right() - 4.f;
-                const DockModel * dockModel = Detail::dockModel(this, node.windowDockGroup);
-                const DockNode * dockNode = dockModel == nullptr ? nullptr : dockModel->node(node.windowDockNode);
+                const DockModel * dockModel = Detail::dockModel(this, node.windowData().dockGroup);
+                const DockNode * dockNode = dockModel == nullptr ? nullptr : dockModel->node(node.windowData().dockNode);
 
-                if(dockNode != nullptr && dockNode->tabs.empty() == false && (node.windowDockAutoHideTabBar == false || dockNode->tabs.size() > 1))
+                if(dockNode != nullptr && dockNode->tabs.empty() == false && (node.windowData().dockAutoHideTabBar == false || dockNode->tabs.size() > 1))
                 {
                     const PointerState * pointer = input.primaryPointer();
                     for(size_t tabIndex = 0; tabIndex != dockNode->tabs.size(); ++tabIndex)
@@ -430,7 +466,7 @@ namespace Mosaic
                             drawList.pushClip(Rect::intersection(node.clip, textClip), baseKey);
                             emitText(drawList, *tabNode, {tabBounds.x + node.style->metrics.framePadding.left, tabBounds.y + (tabBounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
 
-                            if(tabNode->windowUnsavedDocument == true)
+                            if(tabNode->windowData().unsavedDocument == true)
                             {
                                 emitValueText(drawList, *tabNode, {tabBounds.right() - node.style->metrics.framePadding.right - node.style->metrics.fontSize * 0.5f, tabBounds.y + (tabBounds.height - node.style->metrics.lineHeight) * 0.5f}, node.style->colors.unsavedMarker, baseState, baseKey);
                             }
@@ -442,20 +478,20 @@ namespace Mosaic
                 else
                 {
                     drawList.roundedRect({titleBar.x + 1.f, titleBar.y + 4.f, 2.f, std::max(0.f, titleBar.height - 8.f)}, 1.f, node.style->colors.accent, baseKey);
-                    float leftControlsWidth = node.windowCollapseVisible && node.windowCollapsePlacement == WindowCollapsePlacement::Left ? buttonSide + 2.f : 0.f;
+                    float leftControlsWidth = node.windowData().collapseVisible && node.windowData().collapsePlacement == WindowCollapsePlacement::Left ? buttonSide + 2.f : 0.f;
                     float titleContentRight = titleBar.right() - 4.f;
 
-                    if(node.windowCloseVisible == true)
+                    if(node.windowData().closeVisible == true)
                     {
                         titleContentRight -= buttonSide + 2.f;
                     }
 
-                    if(node.windowCollapseVisible == true && node.windowCollapsePlacement == WindowCollapsePlacement::Right)
+                    if(node.windowData().collapseVisible == true && node.windowData().collapsePlacement == WindowCollapsePlacement::Right)
                     {
                         titleContentRight -= buttonSide + 2.f;
                     }
 
-                    float unsavedWidth = node.windowUnsavedDocument ? node.style->metrics.fontSize * 0.75f : 0.f;
+                    float unsavedWidth = node.windowData().unsavedDocument ? node.style->metrics.fontSize * 0.75f : 0.f;
                     float textLeft = node.bounds.x + node.style->metrics.padding + 3.f + leftControlsWidth;
                     Rect titleTextClip = {textLeft, titleBar.y, std::max(0.f, titleContentRight - unsavedWidth - textLeft), titleBar.height};
                     drawList.pushClip(Rect::intersection(node.clip, titleTextClip), baseKey);
@@ -463,32 +499,32 @@ namespace Mosaic
                     emitText(drawList, node, {textLeft + std::max(0.f, titleTextClip.width - node.textSize.x) * titleAlignment.x, titleBar.y + std::max(0.f, titleBar.height - node.style->metrics.lineHeight) * titleAlignment.y}, textColor, baseState, baseKey);
                     drawList.popClip(baseKey);
 
-                    if(node.windowUnsavedDocument == true)
+                    if(node.windowData().unsavedDocument == true)
                     {
                         emitValueText(drawList, node, {titleContentRight - unsavedWidth * 0.6f, titleBar.y + (titleBar.height - node.style->metrics.lineHeight) * 0.5f}, node.style->colors.unsavedMarker, baseState, baseKey);
                     }
                 }
 
-                if(node.windowCloseVisible == true)
+                if(node.windowData().closeVisible == true)
                 {
                     Rect button = {buttonRight - buttonSide, titleBar.y + (titleBar.height - buttonSide) * 0.5f, buttonSide, buttonSide};
 
-                    if(node.windowCloseHovered == true)
+                    if(node.windowData().closeHovered == true)
                     {
                         drawList.roundedRect(button, node.style->metrics.cornerRadius, Detail::colorWithAlpha(node.style->colors.error, 0.72f), baseKey);
                     }
 
-                    Color icon = node.windowCloseHovered ? Color{1.f, 1.f, 1.f, 1.f} : textColor;
+                    Color icon = node.windowData().closeHovered ? Color{1.f, 1.f, 1.f, 1.f} : textColor;
                     drawList.line({button.x + 5.f, button.y + 5.f}, {button.right() - 5.f, button.bottom() - 5.f}, 1.5f, icon, baseKey);
                     drawList.line({button.right() - 5.f, button.y + 5.f}, {button.x + 5.f, button.bottom() - 5.f}, 1.5f, icon, baseKey);
                     buttonRight = button.x - 2.f;
                 }
 
-                if(node.windowCollapseVisible == true)
+                if(node.windowData().collapseVisible == true)
                 {
-                    Rect button = node.windowCollapsePlacement == WindowCollapsePlacement::Left ? Rect{titleBar.x + 4.f, titleBar.y + (titleBar.height - buttonSide) * 0.5f, buttonSide, buttonSide} : Rect{buttonRight - buttonSide, titleBar.y + (titleBar.height - buttonSide) * 0.5f, buttonSide, buttonSide};
+                    Rect button = node.windowData().collapsePlacement == WindowCollapsePlacement::Left ? Rect{titleBar.x + 4.f, titleBar.y + (titleBar.height - buttonSide) * 0.5f, buttonSide, buttonSide} : Rect{buttonRight - buttonSide, titleBar.y + (titleBar.height - buttonSide) * 0.5f, buttonSide, buttonSide};
 
-                    if(node.windowCollapseHovered == true)
+                    if(node.windowData().collapseHovered == true)
                     {
                         drawList.roundedRect(button, node.style->metrics.cornerRadius, Detail::colorWithAlpha(node.style->colors.panelHovered, 0.92f), baseKey);
                     }
@@ -496,7 +532,7 @@ namespace Mosaic
                     float centerX = button.x + button.width * 0.5f;
                     float centerY = button.y + button.height * 0.5f;
 
-                    if(node.windowCollapsed == true)
+                    if(node.windowData().collapsed == true)
                     {
                         drawList.line({centerX - 4.f, centerY + 2.f}, {centerX, centerY - 2.f}, 1.5f, textColor, baseKey);
                         drawList.line({centerX, centerY - 2.f}, {centerX + 4.f, centerY + 2.f}, 1.5f, textColor, baseKey);
@@ -509,36 +545,36 @@ namespace Mosaic
                 }
             }
 
-            if(node.windowResizable == true)
+            if(node.windowData().resizable == true)
             {
-                float hover = node.windowResizeHovered ? 1.f : 0.f;
-                float active = visualState != nullptr && visualState->windowInteraction == 6 ? 1.f : 0.f;
+                float hover = node.windowData().resizeHovered ? 1.f : 0.f;
+                float active = visualState != nullptr && visualState->windowData().interaction == 6 ? 1.f : 0.f;
                 Color gripColor = Detail::mixColor(node.style->colors.resizeGrip, node.style->colors.resizeGripHovered, hover);
                 gripColor = Detail::mixColor(gripColor, node.style->colors.resizeGripActive, active);
-                Rect resizeBounds = node.windowResizeBounds.empty() == true ? node.bounds : node.windowResizeBounds;
+                Rect resizeBounds = node.windowData().resizeBounds.empty() == true ? node.bounds : node.windowData().resizeBounds;
                 float edgeThickness = active > 0.f ? 2.f : 1.f;
 
-                if((node.windowResizeEdges & Detail::WindowResizeLeft) != 0)
+                if((node.windowData().resizeEdges & Detail::WindowResizeLeft) != 0)
                 {
                     drawList.line({resizeBounds.x, node.bounds.y}, {resizeBounds.x, node.bounds.bottom()}, edgeThickness, gripColor, baseKey);
                 }
 
-                if((node.windowResizeEdges & Detail::WindowResizeRight) != 0)
+                if((node.windowData().resizeEdges & Detail::WindowResizeRight) != 0)
                 {
                     drawList.line({resizeBounds.right(), node.bounds.y}, {resizeBounds.right(), node.bounds.bottom()}, edgeThickness, gripColor, baseKey);
                 }
 
-                if((node.windowResizeEdges & Detail::WindowResizeTop) != 0)
+                if((node.windowData().resizeEdges & Detail::WindowResizeTop) != 0)
                 {
                     drawList.line({node.bounds.x, resizeBounds.y}, {node.bounds.right(), resizeBounds.y}, edgeThickness, gripColor, baseKey);
                 }
 
-                if((node.windowResizeEdges & Detail::WindowResizeBottom) != 0)
+                if((node.windowData().resizeEdges & Detail::WindowResizeBottom) != 0)
                 {
                     drawList.line({node.bounds.x, resizeBounds.bottom()}, {node.bounds.right(), resizeBounds.bottom()}, edgeThickness, gripColor, baseKey);
                 }
 
-                if(node.windowResizeGripVisible == true)
+                if(node.windowData().resizeGripVisible == true)
                 {
                     float side = std::max(12.f, node.style->metrics.controlHeight * 0.7f);
                     Rect grip = {resizeBounds.right() - side, resizeBounds.bottom() - side, side, side};
@@ -552,7 +588,7 @@ namespace Mosaic
             break;
         }
         case Detail::NodeKind::Text:
-            emitText(drawList, node, {node.bounds.x, node.bounds.y}, textColor, baseState, baseKey);
+            emitText(drawList, node, {node.bounds.x, node.bounds.y + (node.alignTextToFramePadding == true ? node.style->metrics.framePadding.top : 0.f)}, textColor, baseState, baseKey);
             break;
         case Detail::NodeKind::Bullet:
         {
@@ -577,8 +613,8 @@ namespace Mosaic
             bool tabNode = node.kind == Detail::NodeKind::Tab;
             bool dimmedTab = tabNode && node.windowOwner != InvalidId && Mosaic::windowFocused(this, node.windowOwner) == false;
             bool selectableNode = node.kind == Detail::NodeKind::Selectable || node.kind == Detail::NodeKind::TableRow;
-            bool angledHeader = node.kind == Detail::NodeKind::Selectable && node.tableHeader == true && node.tableColumnOptions.angledHeader;
-            bool sortedTableHeader = node.kind == Detail::NodeKind::Selectable && node.tableHeader == true && node.tableSortDirection != SortDirection::None;
+            bool angledHeader = node.kind == Detail::NodeKind::Selectable && node.tableItem().header == true && node.tableItem().columnOptions.angledHeader;
+            bool sortedTableHeader = node.kind == Detail::NodeKind::Selectable && node.tableItem().header == true && node.tableItem().sortDirection != SortDirection::None;
             bool menuNode = node.semanticRole == SemanticRole::MenuItem;
             float emphasis = std::max({hoverVisual, activeVisual, focusVisual});
             Color frameBorder = Detail::colorWithAlpha(controlBorder, 0.55f + emphasis * 0.45f);
@@ -635,7 +671,7 @@ namespace Mosaic
             float unsavedExtent = tabNode && node.tabUnsavedDocument ? node.style->metrics.fontSize * 0.75f : 0.f;
             float sortExtent = sortedTableHeader ? 12.f : 0.f;
             float menuCheckExtent = menuNode && node.menuPopupItem ? node.style->metrics.controlHeight * 0.75f : 0.f;
-            float menuShortcutExtent = menuNode && node.valueText.empty() == false ? node.valueTextSize.x + node.style->metrics.innerSpacing.x : 0.f;
+            float menuShortcutExtent = menuNode && node.valueText.empty() == false ? node.valueData().valueTextSize.x + node.style->metrics.innerSpacing.x : 0.f;
             float menuSubmenuExtent = menuNode && node.menuSubmenu ? node.style->metrics.controlHeight * 0.75f : 0.f;
             float contentWidth = std::max(0.f, frameBounds.width - node.style->metrics.padding * 2.f - closeExtent - unsavedExtent - sortExtent - menuCheckExtent - menuShortcutExtent - menuSubmenuExtent);
             Vec2 textAlignment = selectableNode && node.overrideTextAlignment ? node.textAlignment : selectableNode ? node.style->metrics.selectableTextAlignment : node.style->metrics.buttonTextAlignment;
@@ -705,9 +741,9 @@ namespace Mosaic
                     float availableWidth = std::max(0.f, frameBounds.width - node.style->metrics.framePadding.left - node.style->metrics.framePadding.right);
                     float availableHeight = std::max(0.f, frameBounds.height - node.style->metrics.framePadding.top - node.style->metrics.framePadding.bottom);
                     Vec2 position = {frameBounds.x + node.style->metrics.framePadding.left + std::max(0.f, availableWidth - footprintWidth) * alignment - minimumX, frameBounds.y + node.style->metrics.framePadding.top + std::max(0.f, availableHeight - footprintHeight) * alignment - minimumY};
-                    emitPreparedText(drawList, node.textRun->batches, position, textColor, baseState, baseKey, axisX, axisY);
+                    emitPreparedText(drawList, *node.textRun, position, textColor, baseState, baseKey, axisX, axisY);
                 }
-                else if(node.tableColumnOptions.headerLabelVisible == true || node.tableHeader == false)
+                else if(node.tableItem().columnOptions.headerLabelVisible == true || node.tableItem().header == false)
                 {
                     float verticalAlignment = std::clamp(textAlignment.y, 0.f, 1.f);
                     emitText(drawList, node, {textX, frameBounds.y + std::max(0.f, frameBounds.height - node.style->metrics.lineHeight) * verticalAlignment}, textColor, baseState, baseKey);
@@ -726,10 +762,10 @@ namespace Mosaic
                 float centerY = frameBounds.y + frameBounds.height * 0.5f;
                 constexpr float halfWidth = 3.5f;
                 constexpr float halfHeight = 2.5f;
-                bool ascending = node.tableSortDirection == SortDirection::Ascending;
+                bool ascending = node.tableItem().sortDirection == SortDirection::Ascending;
                 Vec2 tip = {centerX, centerY + (ascending ? -halfHeight : halfHeight)};
                 float baseY = centerY + (ascending ? halfHeight : -halfHeight);
-                Color indicatorColor = Detail::mixColor(textColor, node.style->colors.accent, std::min(0.75f, static_cast<float>(node.tableSortOrder) * 0.12f));
+                Color indicatorColor = Detail::mixColor(textColor, node.style->colors.accent, std::min(0.75f, static_cast<float>(node.tableItem().sortOrder) * 0.12f));
                 drawList.line({centerX - halfWidth, baseY}, tip, 1.5f, indicatorColor, baseKey);
                 drawList.line(tip, {centerX + halfWidth, baseY}, 1.5f, indicatorColor, baseKey);
             }
@@ -744,7 +780,7 @@ namespace Mosaic
 
             if(menuNode == true && node.valueText.empty() == false)
             {
-                emitValueText(drawList, node, {frameBounds.right() - node.style->metrics.padding - menuSubmenuExtent - node.valueTextSize.x, frameBounds.y + std::max(0.f, frameBounds.height - node.style->metrics.lineHeight) * 0.5f}, node.style->colors.textDisabled, baseState, baseKey);
+                emitValueText(drawList, node, {frameBounds.right() - node.style->metrics.padding - menuSubmenuExtent - node.valueData().valueTextSize.x, frameBounds.y + std::max(0.f, frameBounds.height - node.style->metrics.lineHeight) * 0.5f}, node.style->colors.textDisabled, baseState, baseKey);
             }
 
             if(menuNode == true && node.menuSubmenu == true)
@@ -795,16 +831,16 @@ namespace Mosaic
         {
             Rect headerBounds = {node.bounds.x, node.bounds.y, node.bounds.width, node.style->metrics.controlHeight};
             headerBounds.y += activeVisual * node.style->behavior.pressOffset;
-            Rect treeFrameBounds = node.treeFrameBounds.empty() == true ? headerBounds : node.treeFrameBounds;
+            Rect treeFrameBounds = node.treeData().frameBounds.empty() == true ? headerBounds : node.treeData().frameBounds;
             treeFrameBounds.y += activeVisual * node.style->behavior.pressOffset;
             RenderState treeFrameState = baseState;
-            treeFrameState.clip = node.treeFrameClip.empty() == true ? baseState.clip : node.treeFrameClip;
+            treeFrameState.clip = node.treeData().frameClip.empty() == true ? baseState.clip : node.treeData().frameClip;
             uint64_t treeFrameKey = internRenderState(treeFrameState);
             RenderState treeLabelState = baseState;
-            treeLabelState.clip = node.treeLabelClip.empty() == true ? baseState.clip : node.treeLabelClip;
+            treeLabelState.clip = node.treeData().labelClip.empty() == true ? baseState.clip : node.treeData().labelClip;
             uint64_t treeLabelKey = internRenderState(treeLabelState);
 
-            if(node.treeLines != TreeLineMode::None)
+            if(node.treeData().lines != TreeLineMode::None)
             {
                 size_t parent = node.parent;
                 while(parent != 0 && nodes[parent].kind != Detail::NodeKind::Tree)
@@ -816,33 +852,51 @@ namespace Mosaic
                 {
                     float branchX = headerBounds.x - node.style->metrics.indent * 0.5f;
                     float centerY = headerBounds.y + headerBounds.height * 0.5f;
-                    drawList.line({branchX, centerY}, {headerBounds.x + 5.f, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                    float branchEndX = headerBounds.x + 5.f;
 
-                    if(node.treeLines == TreeLineMode::Full)
+                    if(node.treeData().lines == TreeLineMode::Full)
                     {
                         Rect parentHeader = {nodes[parent].bounds.x, nodes[parent].bounds.y, nodes[parent].bounds.width, nodes[parent].style->metrics.controlHeight};
-                        drawList.line({branchX, parentHeader.bottom()}, {branchX, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                        float branchBeginY = parentHeader.bottom();
+                        float rounding = std::clamp(node.style->metrics.treeLinesRounding, 0.f, std::min(std::abs(centerY - branchBeginY), std::abs(branchEndX - branchX)));
+
+                        if(rounding > 0.f)
+                        {
+                            float verticalEndY = centerY - rounding;
+                            drawList.line({branchX, branchBeginY}, {branchX, verticalEndY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                            drawList.quadraticBezier({branchX, verticalEndY}, {branchX, centerY}, {branchX + rounding, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                            drawList.line({branchX + rounding, centerY}, {branchEndX, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                        }
+                        else
+                        {
+                            drawList.line({branchX, branchBeginY}, {branchX, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                            drawList.line({branchX, centerY}, {branchEndX, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
+                        }
+                    }
+                    else
+                    {
+                        drawList.line({branchX, centerY}, {branchEndX, centerY}, node.style->metrics.treeLinesSize, node.style->colors.treeLines, baseKey);
                     }
                 }
             }
 
-            if(node.treeFramed == true || node.selected == true || hoverVisual > 0.001f || activeVisual > 0.001f || focusVisual > 0.001f)
+            if(node.treeData().framed == true || node.selected == true || hoverVisual > 0.001f || activeVisual > 0.001f || focusVisual > 0.001f)
             {
-                Color idleFill = node.selected ? node.style->colors.selection : node.treeFramed ? node.style->colors.header : Detail::colorWithAlpha(node.style->colors.header, 0.f);
+                Color idleFill = node.selected ? node.style->colors.selection : node.treeData().framed ? node.style->colors.header : Detail::colorWithAlpha(node.style->colors.header, 0.f);
                 Color treeFill = Detail::mixColor(idleFill, node.style->colors.headerHovered, std::max(hoverVisual, focusVisual * 0.72f));
                 treeFill = Detail::mixColor(treeFill, node.style->colors.headerActive, activeVisual);
                 Color treeBorder = Detail::mixColor(node.style->colors.border, node.style->colors.accent, std::max(activeVisual, focusVisual * 0.5f));
-                Detail::drawFrame(drawList, treeFrameBounds, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, treeFill, treeBorder, node.treeFramed ? 0.08f : 0.f, treeFrameKey);
+                Detail::drawFrame(drawList, treeFrameBounds, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, treeFill, treeBorder, node.treeData().framed ? 0.08f : 0.f, treeFrameKey);
             }
 
             float centerY = headerBounds.y + headerBounds.height * 0.5f;
 
-            if(node.treeBullet == true)
+            if(node.treeData().bullet == true)
             {
                 constexpr float side = 4.f;
                 drawList.roundedRect({headerBounds.x + 10.f, centerY - side * 0.5f, side, side}, side * 0.5f, textColor, baseKey);
             }
-            else if(node.treeLeaf == false)
+            else if(node.treeData().leaf == false)
             {
                 Vec2 closedFirst = {headerBounds.x + 9.f, centerY - 4.f};
                 Vec2 closedMiddle = {headerBounds.x + 13.f, centerY};
@@ -857,13 +911,13 @@ namespace Mosaic
                 drawList.line(arrowMiddle, arrowLast, 1.5f, textColor, baseKey);
             }
 
-            emitText(drawList, node, {headerBounds.x + node.style->metrics.padding + (node.treeAlignLabelWithCurrentX ? 0.f : node.style->metrics.indent), headerBounds.y + (headerBounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, treeLabelState, treeLabelKey);
+            emitText(drawList, node, {headerBounds.x + node.style->metrics.padding + (node.treeData().alignLabelWithCurrentX ? 0.f : node.style->metrics.indent), headerBounds.y + (headerBounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, treeLabelState, treeLabelKey);
 
-            if(node.treeCloseVisible == true)
+            if(node.treeData().closeVisible == true)
             {
                 float side = treeFrameBounds.height;
                 Rect closeBounds = {treeFrameBounds.right() - side, treeFrameBounds.y, side, side};
-                Color closeColor = Detail::mixColor(textColor, node.style->colors.accent, node.treeCloseHovered ? 0.45f : 0.f);
+                Color closeColor = Detail::mixColor(textColor, node.style->colors.accent, node.treeData().closeHovered ? 0.45f : 0.f);
                 float centerX = closeBounds.x + closeBounds.width * 0.5f;
                 float centerY = closeBounds.y + closeBounds.height * 0.5f;
                 drawList.line({centerX - 4.f, centerY - 4.f}, {centerX + 4.f, centerY + 4.f}, 1.4f, closeColor, baseKey);
@@ -877,14 +931,15 @@ namespace Mosaic
         {
             Rect frameBounds = node.bounds;
             frameBounds.y += activeVisual * node.style->behavior.pressOffset;
-            Color imageBackground = node.imageBackgroundEnabled ? Detail::mixColor(node.imageBackground, node.style->colors.buttonHovered, hoverVisual * 0.2f) : controlColor;
+            Color imageBackground = node.imageData().backgroundEnabled ? Detail::mixColor(node.imageData().background, node.style->colors.buttonHovered, hoverVisual * 0.2f) : controlColor;
             Detail::drawFrame(drawList, frameBounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, imageBackground, controlBorder, 1.f - activeVisual * 0.75f, baseKey);
 
-            if(node.texture != 0)
+            if(node.imageData().texture != 0)
             {
                 RenderState imageState = baseState;
-                imageState.texture = node.texture;
-                drawList.image(frameBounds.inset(node.imagePadding), node.uv, node.tint, internRenderState(imageState));
+                imageState.texture = node.imageData().texture;
+                imageState.sampler = node.imageData().sampler;
+                drawList.image(frameBounds.inset(node.imageData().padding), node.imageData().uv, node.tint, internRenderState(imageState));
             }
 
             break;
@@ -992,7 +1047,7 @@ namespace Mosaic
 
                 if(node.showValueOnTrack == true && node.valueText.empty() == false)
                 {
-                    emitValueText(drawList, node, {node.bounds.x + (node.bounds.width - node.valueTextSize.x) * 0.5f, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
+                    emitValueText(drawList, node, {node.bounds.x + (node.bounds.width - node.valueData().valueTextSize.x) * 0.5f, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
                 }
 
                 break;
@@ -1000,11 +1055,11 @@ namespace Mosaic
 
             Detail::SliderGeometry geometry = Detail::sliderGeometry(node, node.bounds);
 
-            if(sliderNode == true && node.numericInput == true)
+            if(sliderNode == true && node.textEditData().numeric == true)
             {
                 Detail::drawFrame(drawList, geometry.control, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, node.style->colors.input, node.style->colors.accent, 0.72f, baseKey);
 
-                if(node.colorMarkerEnabled == true)
+                if(node.valueData().colorMarkerEnabled == true)
                 {
                     Rect marker = {geometry.control.x, geometry.control.y, std::min(3.f, geometry.control.width), geometry.control.height};
                     drawList.roundedRect(marker, std::min(node.style->metrics.frameCornerRadius, 1.5f), node.colorMarker, baseKey);
@@ -1023,7 +1078,7 @@ namespace Mosaic
             Rect track = sliderNode ? geometry.track : Rect{node.bounds.x, node.bounds.y + (node.bounds.height - progressHeight) * 0.5f, node.bounds.width, progressHeight};
             Detail::drawFrame(drawList, track, track.height * 0.5f, node.style->metrics.frameBorderSize, Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual), Detail::mixColor(controlBorder, accentColor, hoverVisual * 0.5f), sliderNode ? 0.45f : 0.25f, baseKey);
 
-            if(sliderNode == true && node.colorMarkerEnabled == true)
+            if(sliderNode == true && node.valueData().colorMarkerEnabled == true)
             {
                 Rect marker = {geometry.control.x, geometry.control.y, std::min(3.f, geometry.control.width), geometry.control.height};
                 drawList.roundedRect(marker, std::min(node.style->metrics.frameCornerRadius, 1.5f), node.colorMarker, baseKey);
@@ -1035,7 +1090,7 @@ namespace Mosaic
             {
                 float segment = track.width * 0.28f;
                 float travel = track.width + segment;
-                fill.x = track.x - segment + travel * std::clamp(node.secondaryScalar, 0.f, 1.f);
+                fill.x = track.x - segment + travel * std::clamp(node.valueData().secondaryScalar, 0.f, 1.f);
                 fill.width = segment;
                 Rect clipped = Rect::intersection(fill, track);
                 fill = clipped;
@@ -1063,7 +1118,7 @@ namespace Mosaic
 
                 if(node.showValueOnTrack == true && node.valueText.empty() == false)
                 {
-                    emitValueText(drawList, node, {geometry.control.x + (geometry.control.width - node.valueTextSize.x) * 0.5f, geometry.control.y + (geometry.control.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
+                    emitValueText(drawList, node, {geometry.control.x + (geometry.control.width - node.valueData().valueTextSize.x) * 0.5f, geometry.control.y + (geometry.control.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
                 }
 
                 float tooltipVisual = node.showValueTooltip && activeVisual <= 0.001f && hoverDuration >= static_cast<double>(node.tooltipDelay) ? std::clamp(static_cast<float>((hoverDuration - static_cast<double>(node.tooltipDelay)) / 0.12), 0.f, 1.f) * hoverVisual : 0.f;
@@ -1071,7 +1126,7 @@ namespace Mosaic
 
                 if(valuePopupVisual > 0.001f && node.valueText.empty() == false)
                 {
-                    float bubbleWidth = node.valueTextSize.x + 12.f;
+                    float bubbleWidth = node.valueData().valueTextSize.x + 12.f;
                     float bubbleHeight = node.style->metrics.lineHeight + 8.f;
                     float minimumX = baseState.clip.x + 2.f;
                     float maximumX = std::max(minimumX, baseState.clip.right() - bubbleWidth - 2.f);
@@ -1124,7 +1179,7 @@ namespace Mosaic
 
             Detail::drawFrame(drawList, node.bounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, inputFill, inputBorder, 0.55f + activeVisual * 0.25f, baseKey);
 
-            if(node.colorMarkerEnabled == true)
+            if(node.valueData().colorMarkerEnabled == true)
             {
                 float markerWidth = std::min(node.style->metrics.colorMarkerSize, node.bounds.width);
                 Rect marker = {node.bounds.x, node.bounds.y, markerWidth, node.bounds.height};
@@ -1136,16 +1191,39 @@ namespace Mosaic
                 drawList.line({node.bounds.x + 2.f, node.bounds.bottom() - 1.5f}, {node.bounds.right() - 2.f, node.bounds.bottom() - 1.5f}, 1.f, Detail::colorWithAlpha(node.style->colors.accent, activeVisual), baseKey);
             }
 
-            if(node.numericInput == true)
+            RenderState dragTextState = baseState;
+            uint64_t dragTextKey = baseKey;
+
+            if(node.textEditData().temporaryNumeric == true)
             {
-                emitValueText(drawList, node, {node.bounds.x + node.style->metrics.padding, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
+                dragTextState.clip = Rect::intersection(baseState.clip, node.bounds.inset(node.style->metrics.frameBorderSize + 1.f));
+                dragTextKey = internRenderState(dragTextState);
+
+                if(focused == node.id)
+                {
+                    Detail::drawTextSelection(this, drawList, node, Detail::colorWithAlpha(node.style->colors.textSelectionBackground, 0.82f), dragTextKey);
+                }
+            }
+
+            if(node.textEditData().numeric == true)
+            {
+                emitValueText(drawList, node, {node.bounds.x + node.style->metrics.padding, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, dragTextState, dragTextKey);
             }
             else
             {
-                emitText(drawList, node, {node.bounds.x + node.style->metrics.padding, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
+                emitText(drawList, node, {node.bounds.x + node.style->metrics.padding - node.textEditData().scrollX, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, dragTextState, dragTextKey);
             }
 
-            if(hoverVisual > 0.001f || activeVisual > 0.001f)
+            if(node.textEditData().temporaryNumeric == true && focused == node.id)
+            {
+                Vec2 cursorPosition = Detail::textCursorPosition(this, node, node.textEditData().cursor);
+                float blink = configuration.inputTextCursorBlink == false || std::fmod(static_cast<float>(input.timestamp), 1.f) < 0.58f ? 1.f : 0.18f;
+                float cursorTop = cursorPosition.y + 2.f;
+                float cursorBottom = std::min(node.bounds.bottom() - 3.f, cursorPosition.y + node.style->metrics.lineHeight - 2.f);
+                drawList.line({cursorPosition.x, cursorTop}, {cursorPosition.x, cursorBottom}, 1.f, Detail::colorWithAlpha(node.style->colors.textCursor, blink), dragTextKey);
+            }
+
+            if(node.textEditData().temporaryNumeric == false && (hoverVisual > 0.001f || activeVisual > 0.001f))
             {
                 float centerY = node.bounds.y + node.bounds.height * 0.5f;
                 Color arrows = Detail::colorWithAlpha(node.style->colors.textDisabled, std::max(hoverVisual * 0.8f, activeVisual));
@@ -1195,21 +1273,21 @@ namespace Mosaic
                 Detail::drawTextSelection(this, drawList, node, Detail::colorWithAlpha(node.style->colors.textSelectionBackground, 0.82f), inputTextKey);
             }
 
-            emitText(drawList, node, {node.bounds.x + node.style->metrics.padding - node.textScrollX, node.bounds.y + node.style->metrics.padding * 0.5f - node.textScrollY}, node.textHint ? node.style->colors.textDisabled : textColor, inputTextState, inputTextKey);
+            emitText(drawList, node, {node.bounds.x + node.style->metrics.padding - node.textEditData().scrollX, node.bounds.y + node.style->metrics.padding * 0.5f - node.textEditData().scrollY}, node.textEditData().hint ? node.style->colors.textDisabled : textColor, inputTextState, inputTextKey);
 
             if(focused == node.id)
             {
-                Vec2 cursorPosition = Detail::textCursorPosition(this, node, node.textCursor);
+                Vec2 cursorPosition = Detail::textCursorPosition(this, node, node.textEditData().cursor);
                 float blink = configuration.inputTextCursorBlink == false || std::fmod(static_cast<float>(input.timestamp), 1.f) < 0.58f ? 1.f : 0.18f;
                 float cursorTop = cursorPosition.y + 2.f;
                 float cursorBottom = std::min(node.bounds.bottom() - 3.f, cursorPosition.y + node.style->metrics.lineHeight - 2.f);
                 drawList.line({cursorPosition.x, cursorTop}, {cursorPosition.x, cursorBottom}, 1.f, Detail::colorWithAlpha(node.style->colors.textCursor, blink), inputTextKey);
             }
 
-            if(focused == node.id && node.compositionBegin != node.compositionEnd)
+            if(focused == node.id && node.textEditData().compositionBegin != node.textEditData().compositionEnd)
             {
-                Vec2 begin = Detail::textCursorPosition(this, node, node.compositionBegin);
-                Vec2 end = Detail::textCursorPosition(this, node, node.compositionEnd);
+                Vec2 begin = Detail::textCursorPosition(this, node, node.textEditData().compositionBegin);
+                Vec2 end = Detail::textCursorPosition(this, node, node.textEditData().compositionEnd);
                 float underlineY = begin.y + node.style->metrics.lineHeight - 2.f;
                 drawList.line({begin.x, underlineY}, {std::max(begin.x + 1.f, end.x), underlineY}, 1.f, node.style->colors.accent, inputTextKey);
             }
@@ -1242,7 +1320,7 @@ namespace Mosaic
 
                 if(colorText != nullptr && colorText->runs[channel] != nullptr)
                 {
-                    emitPreparedText(drawList, colorText->runs[channel]->batches, {channelBounds.x + std::max(4.f, (channelBounds.width - valueSize.x) * 0.5f), channelBounds.y + (channelBounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
+                    emitPreparedText(drawList, *colorText->runs[channel], {channelBounds.x + std::max(4.f, (channelBounds.width - valueSize.x) * 0.5f), channelBounds.y + (channelBounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
                 }
             }
 
@@ -1328,17 +1406,30 @@ namespace Mosaic
             break;
         }
         case Detail::NodeKind::Image:
-            if(node.imageBackgroundEnabled == true)
+            if(node.imageData().backgroundEnabled == true || node.imageData().borderSize > 0.f)
             {
-                drawList.rect(node.bounds, node.imageBackground, internRenderState(baseState));
+                Color background = node.imageData().backgroundEnabled == true ? node.imageData().background : Color{};
+                Detail::drawFrame(drawList, node.bounds, node.imageData().rounding, node.imageData().borderSize, background, node.imageData().borderColor, 0.f, baseKey);
             }
 
-            if(node.texture != 0)
+            if(node.imageData().texture != 0)
             {
                 RenderState imageState = baseState;
-                imageState.texture = node.texture;
-                Rect imageBounds = {node.bounds.x + node.imagePadding, node.bounds.y + node.imagePadding, std::max(0.f, node.bounds.width - node.imagePadding * 2.f), std::max(0.f, node.bounds.height - node.imagePadding * 2.f)};
-                drawList.image(imageBounds, node.uv, node.tint, internRenderState(imageState));
+                imageState.texture = node.imageData().texture;
+                imageState.sampler = node.imageData().sampler;
+                float imageInset = node.imageData().padding + std::max(0.f, node.imageData().borderSize);
+                Rect imageBounds = {node.bounds.x + imageInset, node.bounds.y + imageInset, std::max(0.f, node.bounds.width - imageInset * 2.f), std::max(0.f, node.bounds.height - imageInset * 2.f)};
+                float imageRadius = std::max(0.f, node.imageData().rounding - imageInset);
+                uint64_t imageKey = internRenderState(imageState);
+
+                if(imageRadius > 0.f)
+                {
+                    drawList.roundedImage(imageBounds, node.imageData().uv, imageRadius, node.tint, imageKey);
+                }
+                else
+                {
+                    drawList.image(imageBounds, node.imageData().uv, node.tint, imageKey);
+                }
             }
 
             break;
@@ -1357,6 +1448,12 @@ namespace Mosaic
                 else if(command.renderKey <= frame.renderStates.size())
                 {
                     RenderState state = frame.renderStates[static_cast<size_t>(command.renderKey - 1)];
+                    const RenderState & baseState = frame.renderStates[static_cast<size_t>(baseKey - 1)];
+                    state.linePenumbra = baseState.linePenumbra;
+                    state.fillFeather = baseState.fillFeather;
+                    state.curveQuality = baseState.curveQuality;
+                    state.ellipseQuality = baseState.ellipseQuality;
+                    state.rectangleQuality = baseState.rectangleQuality;
 
                     if(state.clip.empty() == true)
                     {
@@ -1376,14 +1473,14 @@ namespace Mosaic
                     command.payload.rectangle.bounds.y += offset.y;
                     break;
                 case DrawCommandType::RectBatch:
-                    for(RectInstance & instance : command.payload.rectBatch.instances)
+                    for(RectInstance & instance : drawCommandStorage.mutableRectangleSpan(command.payload.rectBatch.instances))
                     {
                         instance.bounds.x += offset.x;
                         instance.bounds.y += offset.y;
                     }
                     break;
                 case DrawCommandType::QuadBatch:
-                    for(QuadInstance & instance : command.payload.quadBatch.instances)
+                    for(QuadInstance & instance : drawCommandStorage.mutableQuadSpan(command.payload.quadBatch.instances))
                     {
                         for(Vertex & vertex : instance.vertices)
                         {
@@ -1415,46 +1512,45 @@ namespace Mosaic
                     command.payload.line.second = command.payload.line.second + offset;
                     break;
                 case DrawCommandType::Polyline:
-                    for(Vec2 & point : command.payload.polyline.points)
+                    for(Vec2 & point : drawCommandStorage.mutablePointSpan(command.payload.polyline.points))
                     {
                         point = point + offset;
                     }
                     break;
                 case DrawCommandType::Path:
                     command.payload.path.center = command.payload.path.center + offset;
-                    for(Vec2 & point : command.payload.path.points)
+                    for(Vec2 & point : drawCommandStorage.mutablePointSpan(command.payload.path.points))
                     {
                         point = point + offset;
                     }
-                    for(ColoredPoint & point : command.payload.path.coloredPoints)
+                    for(ColoredPoint & point : drawCommandStorage.mutableColoredPointSpan(command.payload.path.coloredPoints))
                     {
                         point.position = point.position + offset;
                     }
                     break;
                 case DrawCommandType::CustomGeometry:
-                    for(Vertex & vertex : command.payload.custom.vertices)
+                    for(Vertex & vertex : drawCommandStorage.mutableVertexSpan(command.payload.custom.vertices))
                     {
                         vertex.position = vertex.position + offset;
                     }
                     break;
-                case DrawCommandType::CachedGeometry:
-                    command.payload.cached.translation = command.payload.cached.translation + offset;
+                case DrawCommandType::TextGeometry:
+                    command.payload.textGeometry.translation = command.payload.textGeometry.translation + offset;
                     break;
+                case DrawCommandType::BeginChannels:
+                case DrawCommandType::SetChannel:
+                case DrawCommandType::EndChannels:
                 case DrawCommandType::PopClip:
                     break;
                 }
                 drawList.commands().emplace_back(std::move(command));
             };
-            for(uint32_t channel = 0; channel != node.canvasChannelCount; ++channel)
+
+            for(DrawCommand & command : commands)
             {
-                for(DrawCommand & command : commands)
-                {
-                    if(command.channel == channel)
-                    {
-                        emitCommand(command);
-                    }
-                }
+                emitCommand(command);
             }
+
             drawList.popClip(baseKey);
             break;
         }
@@ -1463,23 +1559,23 @@ namespace Mosaic
         {
             const Persistent & scrollState = state(node);
 
-            if(node.kind == Detail::NodeKind::Scroll && (node.scrollOptions.background == true || node.scrollOptions.framed == true))
+            if(node.kind == Detail::NodeKind::Scroll && (node.scrollOptions().background == true || node.scrollOptions().framed == true))
             {
-                Detail::drawFrame(drawList, node.bounds, node.style->metrics.childCornerRadius, node.scrollOptions.framed ? node.style->metrics.childBorderSize : 0.f, node.scrollOptions.frameStyle ? node.style->colors.frame : node.style->colors.background, node.scrollOptions.frameStyle ? node.style->colors.borderStrong : node.style->colors.border, node.scrollOptions.frameStyle ? 0.24f : 0.f, baseKey);
+                Detail::drawFrame(drawList, node.bounds, node.style->metrics.childCornerRadius, node.scrollOptions().framed ? node.style->metrics.childBorderSize : 0.f, node.scrollOptions().frameStyle ? node.style->colors.frame : node.style->colors.background, node.scrollOptions().frameStyle ? node.style->colors.borderStrong : node.style->colors.border, node.scrollOptions().frameStyle ? 0.24f : 0.f, baseKey);
             }
 
-            if(node.kind == Detail::NodeKind::Scroll && (node.scrollOptions.resizeX == true || node.scrollOptions.resizeY == true))
+            if(node.kind == Detail::NodeKind::Scroll && (node.scrollOptions().resizeX == true || node.scrollOptions().resizeY == true))
             {
-                Color grip = node.scrollResizeHovered || state(node).resizingScrollArea ? node.style->colors.resizeGripHovered : node.style->colors.resizeGrip;
+                Color grip = node.scrollResizeHovered || state(node).scrollData().resizingArea ? node.style->colors.resizeGripHovered : node.style->colors.resizeGrip;
 
-                if(node.scrollOptions.resizeX == true && node.scrollOptions.resizeY == true)
+                if(node.scrollOptions().resizeX == true && node.scrollOptions().resizeY == true)
                 {
                     for(float inset = 4.f; inset <= 10.f; inset += 3.f)
                     {
                         drawList.line({node.bounds.right() - inset, node.bounds.bottom() - 2.f}, {node.bounds.right() - 2.f, node.bounds.bottom() - inset}, 1.f, grip, baseKey);
                     }
                 }
-                else if(node.scrollOptions.resizeX == true)
+                else if(node.scrollOptions().resizeX == true)
                 {
                     drawList.rect({node.bounds.right() - 2.f, node.bounds.y + 4.f, 2.f, std::max(0.f, node.bounds.height - 8.f)}, grip, baseKey);
                 }
@@ -1494,7 +1590,7 @@ namespace Mosaic
                 const TableState & tableState = this->tableState(node.id);
                 Rect tableBounds = node.childrenClip.empty() == true ? node.bounds : node.childrenClip;
 
-                if(node.tableOptions.highlightHoveredColumn == true)
+                if(node.tableOptions().highlightHoveredColumn == true)
                 {
                     const PointerState * pointer = input.primaryPointer();
 
@@ -1525,36 +1621,36 @@ namespace Mosaic
                         continue;
                     }
 
-                    if(tableState.headersSubmitted == true && cell.tableRow == 0)
+                    if(tableState.headersSubmitted == true && cell.tableItem().row == 0)
                     {
                         drawList.rect(cell.bounds, node.style->colors.tableHeader, baseKey);
                     }
-                    else if(cell.tableRowBackgroundsEnabled[0])
+                    else if(cell.tableItem().rowBackgroundsEnabled[0])
                     {
-                        drawList.rect(cell.bounds, cell.tableRowBackgrounds[0], baseKey);
+                        drawList.rect(cell.bounds, cell.tableItem().rowBackgrounds[0], baseKey);
                     }
-                    else if(node.tableOptions.rowBackground == true && (cell.tableRow & 1U) != 0)
+                    else if(node.tableOptions().rowBackground == true && (cell.tableItem().row & 1U) != 0)
                     {
                         drawList.rect(cell.bounds, node.style->colors.tableRowAlternate, baseKey);
                     }
-                    else if(node.tableOptions.rowBackground == true)
+                    else if(node.tableOptions().rowBackground == true)
                     {
                         drawList.rect(cell.bounds, node.style->colors.tableRow, baseKey);
                     }
 
-                    if(cell.tableRowBackgroundsEnabled[1])
+                    if(cell.tableItem().rowBackgroundsEnabled[1])
                     {
-                        drawList.rect(cell.bounds, cell.tableRowBackgrounds[1], baseKey);
+                        drawList.rect(cell.bounds, cell.tableItem().rowBackgrounds[1], baseKey);
                     }
 
-                    if(cell.tableCellBackgroundEnabled == true)
+                    if(cell.tableItem().cellBackgroundEnabled == true)
                     {
-                        drawList.rect(cell.bounds, cell.tableCellBackground, baseKey);
+                        drawList.rect(cell.bounds, cell.tableItem().cellBackground, baseKey);
                     }
 
-                    bool drawBodyBorder = node.tableOptions.bordersInBody;
+                    bool drawBodyBorder = node.tableOptions().bordersInBody;
 
-                    if(node.tableOptions.bordersInBodyUntilResize == true)
+                    if(node.tableOptions().bordersInBodyUntilResize == true)
                     {
                         drawBodyBorder = std::any_of(tableState.columns.begin(), tableState.columns.end(),
                                                      [](const TableColumnState & column)
@@ -1563,13 +1659,13 @@ namespace Mosaic
                                                      });
                     }
 
-                    if(node.tableOptions.bordersInnerHorizontal == true && (cell.tableRow == 0 || drawBodyBorder == true))
+                    if(node.tableOptions().bordersInnerHorizontal == true && (cell.tableItem().row == 0 || drawBodyBorder == true))
                     {
                         drawList.line({cell.bounds.x, cell.bounds.bottom()}, {cell.bounds.right(), cell.bounds.bottom()}, node.style->metrics.borderWidth, node.style->colors.tableBorderLight, baseKey);
                     }
                 }
 
-                if(node.tableOptions.bordersInnerVertical == true)
+                if(node.tableOptions().bordersInnerVertical == true)
                 {
                     for(const TableColumnState & column : tableState.columns)
                     {
@@ -1592,20 +1688,20 @@ namespace Mosaic
                     }
                 }
 
-                if(node.tableOptions.bordersOuterHorizontal == true)
+                if(node.tableOptions().bordersOuterHorizontal == true)
                 {
                     drawList.line({tableBounds.x, tableBounds.y}, {tableBounds.right(), tableBounds.y}, node.style->metrics.borderWidth, node.style->colors.tableBorderStrong, baseKey);
                     drawList.line({tableBounds.x, tableBounds.bottom()}, {tableBounds.right(), tableBounds.bottom()}, node.style->metrics.borderWidth, node.style->colors.tableBorderStrong, baseKey);
                 }
 
-                if(node.tableOptions.bordersOuterVertical == true)
+                if(node.tableOptions().bordersOuterVertical == true)
                 {
                     drawList.line({tableBounds.x, tableBounds.y}, {tableBounds.x, tableBounds.bottom()}, node.style->metrics.borderWidth, node.style->colors.tableBorderStrong, baseKey);
                     drawList.line({tableBounds.right(), tableBounds.y}, {tableBounds.right(), tableBounds.bottom()}, node.style->metrics.borderWidth, node.style->colors.tableBorderStrong, baseKey);
                 }
             }
-            Detail::drawScrollbar(drawList, scrollState.verticalScrollbarTrack, scrollState.verticalScrollbarThumb, true, *node.style, hoverVisual, scrollState.draggingScrollAxis == 2 ? activeVisual : 0.f, baseKey);
-            Detail::drawScrollbar(drawList, scrollState.horizontalScrollbarTrack, scrollState.horizontalScrollbarThumb, false, *node.style, hoverVisual, scrollState.draggingScrollAxis == 1 ? activeVisual : 0.f, baseKey);
+            Detail::drawScrollbar(drawList, scrollState.scrollData().verticalTrack, scrollState.scrollData().verticalThumb, true, *node.style, hoverVisual, scrollState.scrollData().draggingAxis == 2 ? activeVisual : 0.f, baseKey);
+            Detail::drawScrollbar(drawList, scrollState.scrollData().horizontalTrack, scrollState.scrollData().horizontalThumb, false, *node.style, hoverVisual, scrollState.scrollData().draggingAxis == 1 ? activeVisual : 0.f, baseKey);
             break;
         }
 
@@ -1613,11 +1709,11 @@ namespace Mosaic
             break;
         }
 
-        if(node.kind == Detail::NodeKind::Window && node.windowScrollable == true)
+        if(node.kind == Detail::NodeKind::Window && node.windowData().scrollable == true)
         {
             const Persistent & scrollState = state(node);
-            Detail::drawScrollbar(drawList, scrollState.verticalScrollbarTrack, scrollState.verticalScrollbarThumb, true, *node.style, hoverVisual, scrollState.draggingScrollAxis == 2 ? activeVisual : 0.f, baseKey);
-            Detail::drawScrollbar(drawList, scrollState.horizontalScrollbarTrack, scrollState.horizontalScrollbarThumb, false, *node.style, hoverVisual, scrollState.draggingScrollAxis == 1 ? activeVisual : 0.f, baseKey);
+            Detail::drawScrollbar(drawList, scrollState.scrollData().verticalTrack, scrollState.scrollData().verticalThumb, true, *node.style, hoverVisual, scrollState.scrollData().draggingAxis == 2 ? activeVisual : 0.f, baseKey);
+            Detail::drawScrollbar(drawList, scrollState.scrollData().horizontalTrack, scrollState.scrollData().horizontalThumb, false, *node.style, hoverVisual, scrollState.scrollData().draggingAxis == 1 ? activeVisual : 0.f, baseKey);
         }
 
         DragPhase dragPhase = dragDrop.phase();
@@ -1631,6 +1727,19 @@ namespace Mosaic
             drawList.line({target.right(), target.y}, {target.right(), target.bottom()}, thickness, node.style->colors.dragDropTarget, baseKey);
             drawList.line({target.right(), target.bottom()}, {target.x, target.bottom()}, thickness, node.style->colors.dragDropTarget, baseKey);
             drawList.line({target.x, target.bottom()}, {target.x, target.y}, thickness, node.style->colors.dragDropTarget, baseKey);
+        }
+
+        if(configuration.debugHighlightIdConflicts == true && node.idConflict == true)
+        {
+            Rect conflictBounds = node.bounds.inset(1.f);
+            BoxStyle conflictStyle;
+            conflictStyle.borderWidth = 2.f;
+            conflictStyle.borderColor = node.style->colors.error;
+            conflictStyle.radii.topLeft = node.style->metrics.frameCornerRadius;
+            conflictStyle.radii.topRight = node.style->metrics.frameCornerRadius;
+            conflictStyle.radii.bottomRight = node.style->metrics.frameCornerRadius;
+            conflictStyle.radii.bottomLeft = node.style->metrics.frameCornerRadius;
+            drawList.box(conflictBounds, conflictStyle, baseKey);
         }
 
         emitMetadata();

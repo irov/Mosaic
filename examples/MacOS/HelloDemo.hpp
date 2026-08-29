@@ -10,6 +10,7 @@ namespace MosaicExample
         uint32_t uid = 0;
         uint32_t depth = 0;
         bool expanded = false;
+        bool hasData = false;
         bool enabled = true;
         Mosaic::String name;
         Mosaic::Array<int32_t, 4> integers = {};
@@ -18,9 +19,25 @@ namespace MosaicExample
 
     using PropertyDemoNodeVector = Mosaic::Vector<PropertyDemoNode>;
 
+    enum class DebugDemoCategory : uint8_t
+    {
+        Errors,
+        ActiveItem,
+        Clipper,
+        Docking,
+        Focus,
+        Font,
+        Popup,
+        Selection,
+        Table,
+        Viewport,
+        Count
+    };
+
     struct DebugDemoEvent
     {
-        Mosaic::EventType type = Mosaic::EventType::PointerDown;
+        DebugDemoCategory category = DebugDemoCategory::ActiveItem;
+        Mosaic::Id id = Mosaic::InvalidId;
         Mosaic::String text;
     };
 
@@ -40,8 +57,8 @@ namespace MosaicExample
         void drawAnotherWindow(Mosaic::Context * ui);
         void drawMenuBar(Mosaic::Context * ui);
         void drawExampleMenuFile(Mosaic::Context * ui);
-        void drawFontCacheInspector(Mosaic::Context * ui);
-        void drawImageViewerContents(Mosaic::Context * ui, float canvasHeight);
+        void drawFontAtlas(Mosaic::Context * ui);
+        void drawImageViewerContents(Mosaic::Context * ui);
         void drawHelp(Mosaic::Context * ui);
         void drawConfiguration(Mosaic::Context * ui);
         void drawWindowOptions(Mosaic::Context * ui);
@@ -67,9 +84,16 @@ namespace MosaicExample
         Mosaic::SelectionModel m_advancedSelection{Mosaic::SelectionMode::Multiple};
         Mosaic::SelectionModel m_assetSelection{Mosaic::SelectionMode::Multiple};
         Mosaic::SelectionModel m_propertySelection{Mosaic::SelectionMode::Single};
+        Mosaic::Array<Mosaic::SelectionModel, 2> m_dualListSelections = {Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}};
+        Mosaic::Array<Mosaic::SelectionModel, 3> m_scopeSelections = {Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}};
         Mosaic::Array<Mosaic::SelectionModel, 10> m_selectionModels = {Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}, Mosaic::SelectionModel{Mosaic::SelectionMode::Multiple}};
         Mosaic::Theme m_demoTheme;
+        Mosaic::Theme m_timelineThemeBase;
+        Mosaic::Array<Mosaic::Theme, 20> m_timelineButtonThemes;
+        bool m_timelineThemesInitialized = false;
         Mosaic::String m_singleLine = "Hello, world!";
+        Mosaic::String m_liveEditLine = "Hello, world!";
+        Mosaic::String m_miscTextLine = "Hello, world!";
         Mosaic::String m_hintInput;
         Mosaic::String m_multiline = "/*\n"
                                      " The Pentium F00F bug, shorthand for F0 0F C7 C8,\n"
@@ -78,9 +102,13 @@ namespace MosaicExample
                                      " instruction bug, is a design flaw in the majority of\n"
                                      " Intel Pentium, Pentium MMX, and Pentium OverDrive\n"
                                      " processors (all in the P5 microarchitecture).\n"
-                                     "*/";
+                                     "*/\n\n"
+                                     "label:\n"
+                                     "\tlock cmpxchg8b eax\n";
         Mosaic::String m_filter;
+        Mosaic::TextFilter m_textFilter;
         Mosaic::String m_comboFilter;
+        Mosaic::TextFilter m_comboTextFilter;
         Mosaic::String m_password = "password123";
         Mosaic::String m_utf8Input = "日本語";
         Mosaic::String m_filteredDefault;
@@ -97,24 +125,30 @@ namespace MosaicExample
         Mosaic::String m_resizeInput = "This text buffer grows as you type.";
         Mosaic::String m_elidePath = "/path/to/some/folder/with/long/filename.cpp";
         Mosaic::String m_contextLabel = "Label1";
-        Mosaic::String m_assetFilter;
         Mosaic::String m_consoleFilter;
         Mosaic::String m_logFilter;
+        Mosaic::TextFilter m_consoleTextFilter;
+        Mosaic::TextFilter m_logTextFilter;
         Mosaic::String m_longTextBuffer;
         Mosaic::String m_propertyFilter;
         Mosaic::String m_queryInput;
         Mosaic::Array<Mosaic::String, 5> m_tabbingInputs;
         Mosaic::Array<Mosaic::String, 3> m_focusInputs;
-        Mosaic::StringVector m_consoleItems = {"Welcome to Mosaic!", "Unknown command: 'HELLO'"};
+        Mosaic::StringVector m_consoleItems = {"Welcome to Mosaic!"};
         Mosaic::StringVector m_consoleHistory;
-        Mosaic::StringVector m_logItems = {"[info] Application started", "[debug] Renderer initialized"};
+        Mosaic::StringVector m_logItems;
         DebugDemoEventVector m_debugEventItems;
         size_t m_debugEventHead = 0;
         Mosaic::SizeVector m_consoleVisibleItems;
         Mosaic::SizeVector m_logVisibleItems;
+        Mosaic::SizeVector m_assetVisibleItems;
         Mosaic::SizeVector m_debugVisibleEvents;
+        bool m_debugVisibleEventsDirty = true;
         Mosaic::StringVector m_dragItems = {"Bobby", "Beatrice", "Betty", "Brianna", "Barry", "Bernard", "Bibi", "Blaine", "Bryn"};
-        Mosaic::UInt32Vector m_dynamicTabIds = {0, 1, 2, 3};
+        Mosaic::StringVector m_reorderItems = {"Bobby", "Beatrice", "Betty", "Brianna", "Barry", "Bernard", "Bibi", "Blaine", "Bryn"};
+        Mosaic::UInt32Vector m_dynamicTabIds = {0, 1, 2};
+        Mosaic::FontCacheAction m_pendingFontCacheAction = Mosaic::FontCacheAction::Compact;
+        bool m_fontCacheActionPending = false;
         Mosaic::Vec2Vector m_canvasPoints;
         Mosaic::Color m_clearColor = {0.45f, 0.55f, 0.60f, 1.f};
         Mosaic::Color m_color1 = {1.f, 0.f, 0.2f, 1.f};
@@ -127,31 +161,44 @@ namespace MosaicExample
         Mosaic::Color m_dragDropColor2 = {0.4f, 0.7f, 0.f, 0.5f};
         Mosaic::Color m_customColor = {1.f, 0.f, 0.2f, 1.f};
         Mosaic::Array<Mosaic::Color, 32> m_colorPalette = {};
-        Mosaic::Array<Mosaic::Color, 4> m_documentColors = {{{0.85f, 0.45f, 0.25f, 1.f}, {0.55f, 0.35f, 0.8f, 1.f}, {0.95f, 0.55f, 0.15f, 1.f}, {0.8f, 0.2f, 0.25f, 1.f}}};
+        Mosaic::Array<Mosaic::Color, 6> m_documentColors = {{{0.4f, 0.8f, 0.4f, 1.f}, {0.8f, 0.5f, 1.f, 1.f}, {1.f, 0.8f, 0.5f, 1.f}, {1.f, 0.3f, 0.4f, 1.f}, {0.4f, 0.8f, 0.8f, 1.f}, {0.8f, 0.8f, 1.f, 1.f}}};
         Mosaic::Array<float, 4> m_vector = {0.1f, 0.2f, 0.3f, 0.44f};
         Mosaic::Array<int32_t, 4> m_integerVector = {1, 5, 100, 255};
         Mosaic::Array<float, 90> m_plotValues = {};
         Mosaic::Array<float, 7> m_verticalSliders = {0.f, 0.6f, 0.35f, 0.9f, 0.7f, 0.2f, 0.f};
         Mosaic::Array<float, 4> m_verticalSmallSliders = {0.2f, 0.8f, 0.4f, 0.25f};
         int32_t m_verticalInteger = 0;
-        Mosaic::Array<bool, 16> m_selectableStates = {};
+        Mosaic::Array<bool, 8> m_selectableBasicStates = {false, true, false, false, false, false, false, false};
+        Mosaic::Array<bool, 3> m_selectableSameLineStates = {};
+        Mosaic::Array<bool, 5> m_selectableSameLineChecks = {};
+        Mosaic::Array<bool, 10> m_selectableTableCellStates = {};
+        Mosaic::Array<bool, 10> m_selectableTableRowStates = {};
+        Mosaic::Array<bool, 16> m_selectableGridStates = {true, false, false, false, false, true, false, false, false, false, true, false, false, false, false, true};
+        Mosaic::Array<bool, 9> m_selectableAlignmentStates = {};
+        Mosaic::Array<bool, 50> m_selectionCheckboxStates = {};
         Mosaic::Array<bool, 6> m_treeSelectableStates = {};
         Mosaic::Array<bool, 6> m_treeAdvancedSelectableStates = {};
         Mosaic::Array<bool, 32> m_configurationFlags = {};
         Mosaic::Array<bool, 5> m_popupToggles = {true, false, false, false, false};
         Mosaic::Array<bool, 4> m_tabOpen = {true, true, true, true};
-        Mosaic::Array<bool, 4> m_documentOpen = {true, true, true, true};
-        Mosaic::Array<bool, 4> m_documentDirty = {};
-        Mosaic::Array<Mosaic::String, 4> m_documentNames = {"Lettuce", "Eggplant", "Carrot", "Tomato"};
-        Mosaic::Array<bool, 12> m_configurationSecondary = {false, false, false, false, true, false, true, true, false, false, true, false};
+        Mosaic::Array<bool, 6> m_documentOpen = {true, true, true, false, false, false};
+        Mosaic::Array<bool, 6> m_documentDirty = {};
+        Mosaic::Array<Mosaic::String, 6> m_documentNames = {"Lettuce", "Eggplant", "Carrot", "Tomato", "A Rather Long Title", "Some Document"};
+        Mosaic::Array<bool, 13> m_configurationSecondary = {false, false, false, false, true, false, true, false, false, true, false, false, false};
         Mosaic::Array<bool, 8> m_backendFlags = {true, false, false, false, false, true, true, false};
         Mosaic::Array<bool, 4> m_richTextChecks = {true, false, true, false};
         Mosaic::Array<bool, 6> m_tableAdvancedFlags = {true, false, true, false, false, true};
-        Mosaic::Array<bool, 3> m_metricsOverlayFlags = {true, false, true};
-        Mosaic::Array<bool, 4> m_debugLogCategories = {true, true, true, true};
+        Mosaic::Array<bool, 5> m_metricsOverlayFlags = {true, false, true, false, false};
+        Mosaic::Array<bool, static_cast<size_t>(DebugDemoCategory::Count)> m_debugLogCategories = {true, true, true, true, true, true, true, true, true, true};
+        Mosaic::Array<size_t, 7> m_debugSnapshotCounts = {std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()};
+        Mosaic::Array<float, 120> m_metricsMemoryHistory = {};
         Mosaic::Id m_metricsSelectedNode = Mosaic::InvalidId;
         Mosaic::SizeVector m_metricsNodeIndices;
         Mosaic::Id m_itemPickerTarget = Mosaic::InvalidId;
+        uint64_t m_metricsMemoryFrame = 0;
+        size_t m_metricsMemoryOffset = 0;
+        double m_idStackCopyFeedbackUntil = 0.0;
+        Mosaic::String m_metricsEncodingInput = "Mosaic UTF-8: 日本語";
         Mosaic::SizeVector m_advancedTableOrder;
         Mosaic::Vector<int32_t> m_advancedTableQuantities;
         Mosaic::TableSortSpecVector m_tableSortCache;
@@ -159,15 +206,19 @@ namespace MosaicExample
         bool m_advancedTableDataDirty = true;
         Mosaic::IdVector m_advancedSelectionOrder;
         Mosaic::IdVector m_advancedSelectionNodes;
-        Mosaic::IdVector m_assetOrder;
+        Mosaic::Array<Mosaic::Id, 15> m_selectionTreeNodeIds = {};
+        Mosaic::IdVector m_assetVisibleOrder;
+        Mosaic::SizeVector m_documentCloseQueue;
         Mosaic::IdVector m_propertyOrder;
         Mosaic::SizeVector m_assetItems;
         Mosaic::SizeVector m_propertyVisibleNodes;
         PropertyDemoNodeVector m_propertyNodes;
         Mosaic::Array<Mosaic::IdVector, 10> m_selectionOrders;
+        Mosaic::Array<Mosaic::IdVector, 2> m_dualListItems;
         size_t m_deletionNextId = 1;
         size_t m_advancedSelectionNextId = 1;
         bool m_deletionInitialized = false;
+        bool m_dualListInitialized = false;
         bool m_initialized = false;
         bool m_themeInitialized = false;
         bool m_showDemoWindow = true;
@@ -192,7 +243,6 @@ namespace MosaicExample
         bool m_showMetrics = false;
         bool m_showDebugLog = false;
         bool m_showIdStack = false;
-        bool m_showItemPicker = false;
         bool m_itemPickerArmed = false;
         bool m_showAbout = false;
         bool m_showHorizontalContentsSizeWindow = false;
@@ -202,7 +252,6 @@ namespace MosaicExample
         bool m_assetAllowBoxSelectInsideSelection = false;
         bool m_assetAllowDragUnselected = false;
         bool m_assetStretchSpacing = true;
-        bool m_assetSortAscending = true;
         bool m_assetOrderDirty = true;
         bool m_assetUseScrollX = false;
         bool m_assetZoomScrollPending = false;
@@ -216,6 +265,7 @@ namespace MosaicExample
         bool m_customCanvasPanning = false;
         bool m_imageViewerPanning = false;
         bool m_imageViewerGrid = true;
+        bool m_imageViewerViewReset = true;
         bool m_horizontalShowScrollbar = true;
         bool m_horizontalShowButton = true;
         bool m_horizontalShowTreeNodes = true;
@@ -229,21 +279,20 @@ namespace MosaicExample
         bool m_debugLogAutoScroll = true;
         bool m_constrainedAutoResize = false;
         bool m_dockspaceFullscreen = true;
-        bool m_dockspaceInitialized = false;
-        bool m_dockspaceRedockRequested = false;
-        bool m_dockspaceUseWorkArea = true;
-        Mosaic::Array<bool, 3> m_dockspacePanels = {true, true, true};
         bool m_dockspaceNoResize = false;
         bool m_dockspaceNoUndocking = false;
         bool m_dockspaceNoDockingOverCentral = false;
         bool m_dockspacePassthruCentral = false;
         bool m_dockspaceAutoHideTabBar = false;
+        bool m_dockspaceModeChanged = false;
         bool m_demoCollapsed = false;
         bool m_helloCollapsed = false;
         bool m_anotherCollapsed = false;
         bool m_customCollapsed = false;
         bool m_consoleCollapsed = false;
         bool m_consoleAutoScroll = true;
+        bool m_consoleVisibleDirty = true;
+        bool m_logVisibleDirty = true;
         uint8_t m_consoleScrollToBottomFrames = 0;
         bool m_layoutCollapsed = false;
         bool m_enabled = true;
@@ -264,10 +313,14 @@ namespace MosaicExample
         bool m_documentsRedockRequested = false;
         bool m_dockspaceKeepPadding = false;
         bool m_propertyUseClipper = false;
-        bool m_dockspacePropertyVisible = true;
         bool m_constrainedWindowPadding = false;
+        bool m_fullscreenUseWorkArea = true;
         bool m_fullscreenNoBackground = false;
-        bool m_fullscreenNoDecoration = false;
+        bool m_fullscreenNoDecoration = true;
+        bool m_fullscreenNoTitleBar = false;
+        bool m_fullscreenNoCollapse = false;
+        bool m_fullscreenNoScrollbar = false;
+        bool m_fullscreenCollapsed = false;
         bool m_modalOpen = false;
         bool m_modalDontAsk = false;
         bool m_stackedModalFirst = false;
@@ -321,9 +374,9 @@ namespace MosaicExample
         bool m_dataClamp = false;
         bool m_dataInputSteps = true;
         bool m_dataReadOnly = false;
+        bool m_textMiscReadOnly = false;
         bool m_dataParseEmptyReference = false;
         bool m_dataDisplayEmptyReference = false;
-        bool m_sliderAlwaysClamp = false;
         bool m_sliderClampOnInput = false;
         bool m_sliderClampZeroRange = false;
         bool m_sliderLogarithmic = false;
@@ -392,7 +445,12 @@ namespace MosaicExample
         int m_comboOneLiner = 0;
         int m_comboArray = -1;
         int m_comboFunction = 0;
+        int m_basicListSelection = 1;
         int m_list = 1;
+        int m_queryListSelection = 1;
+        int m_groupListSelection = 1;
+        int m_legacyColumnSelection = 1;
+        int m_simpleLayoutSelection = 0;
         int m_listHovered = -1;
         int m_plotFunction = 0;
         int m_dragDropMode = 0;
@@ -404,16 +462,21 @@ namespace MosaicExample
         int m_shortcutRoute = 1;
         int m_documentTab = 0;
         int m_overlayCorner = 0;
-        int m_resizeType = 0;
-        int m_longTextMode = 1;
+        int m_resizeType = 6;
+        int m_longTextMode = 0;
         size_t m_propertySelectedNode = 0;
+        size_t m_logCounter = 0;
         int m_customTab = 0;
         int m_tooltipAlways = 0;
         int m_dockspaceMode = 0;
-        int m_documentOutput = 0;
+        int m_documentOutput = 1;
         int m_documentClosePending = -1;
         int m_documentRenamePending = -1;
+        int m_documentTabClosed = -1;
         Mosaic::String m_documentRenameValue;
+        Mosaic::Id m_documentRenameOwner = Mosaic::InvalidId;
+        Mosaic::Rect m_documentRenameAnchor;
+        bool m_documentCloseAllPending = false;
         int m_historyCallbackIndex = -1;
         int m_consoleHistoryPosition = -1;
         int32_t m_childLineCount = 3;
@@ -424,14 +487,14 @@ namespace MosaicExample
         int32_t m_autoResizeLines = 10;
         int32_t m_constrainedLines = 10;
         int32_t m_legacyColumnCount = 4;
-        int32_t m_longTextLines = 1000;
+        int32_t m_longTextLines = 0;
         int32_t m_longTextBufferLines = -1;
         int32_t m_consoleCommandCount = 0;
         int32_t m_editCallbackCount = 0;
         int32_t m_resizeCallbackCount = 0;
         int32_t m_assetIconSpacing = 10;
         int32_t m_assetIconHitSpacing = 4;
-        int32_t m_selectionItemCount = 20;
+        int32_t m_selectionItemCount = 1000;
         int32_t m_customNgonSides = 5;
         int32_t m_customCircleSegments = 12;
         int32_t m_customCurveSegments = 8;
@@ -469,20 +532,20 @@ namespace MosaicExample
         int32_t m_flagDragInt = 50;
         int32_t m_flagSliderInt = 50;
         size_t m_imagePressedCount = 0;
-        size_t m_assetCount = 100;
+        size_t m_assetCount = 10000;
         size_t m_assetNextSerial = 1;
         double m_double = 999999.00000001;
         double m_dataDouble = 90000.0123456789;
-        float m_splitRatio = 0.42f;
-        float m_propertySplitRatio = 0.43f;
+        float m_splitRatio = 0.30f;
+        float m_propertySplitRatio = 0.70f;
         float m_scrollOffsetRequest = 0.f;
         float m_scrollPositionRequest = 200.f;
-        float m_imageViewerZoom = 1.f;
+        float m_imageViewerZoom = 10.f;
         Mosaic::Vec2 m_imageViewerPan;
         Mosaic::Vec2 m_imageViewerPanStart;
         Mosaic::Vec2 m_customCanvasPan;
         Mosaic::Vec2 m_customCanvasPanStart;
-        float m_assetIconSize = 64.f;
+        float m_assetIconSize = 40.f;
         float m_assetZoomWheelAccumulator = 0.f;
         Mosaic::Vec2 m_assetZoomScrollTarget;
         Mosaic::Color m_propertyTint = {0.4f, 0.7f, 0.f, 0.5f};
@@ -497,10 +560,11 @@ namespace MosaicExample
         float m_styleFontSize = 13.f;
         Mosaic::Theme m_styleReference;
         Mosaic::String m_styleColorFilter;
-        Mosaic::String m_fontGlyphFilter;
-        Mosaic::FontCacheEntryVector m_fontCacheEntries;
-        Mosaic::GlyphCacheEntryVector m_glyphCacheEntries;
-        Mosaic::SizeVector m_fontGlyphIndices;
+        Mosaic::FontInfoVector m_availableFonts;
+        Mosaic::StringViewVector m_availableFontNames;
+        int m_fontPreviewSelection = 0;
+        size_t m_fontHoveredRect = std::numeric_limits<size_t>::max();
+        bool m_showFontAtlasPreview = true;
         int m_styleAlphaMode = 1;
         bool m_styleReferenceInitialized = false;
         float m_deltaTime = 1.f / 60.f;
@@ -512,7 +576,7 @@ namespace MosaicExample
         size_t m_basicButtonClicks = 0;
         size_t m_helloButtonClicks = 0;
         size_t m_plotOffset = 0;
-        uint32_t m_nextDynamicTabId = 4;
+        uint32_t m_nextDynamicTabId = 3;
         int32_t m_rangeIntBegin = 100;
         int32_t m_rangeIntEnd = 1000;
     };

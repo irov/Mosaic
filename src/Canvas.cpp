@@ -8,7 +8,14 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         void copyFillStops(Fill & fill, FillStopSpan stops) noexcept
         {
-            fill.stopCount = static_cast<uint32_t>(std::min(stops.size(), FillStopCapacity));
+            if(stops.size() > FillStopCapacity)
+            {
+                fill.stopCount = static_cast<uint32_t>(FillStopCapacity + 1U);
+
+                return;
+            }
+
+            fill.stopCount = static_cast<uint32_t>(stops.size());
             for(uint32_t index = 0; index != fill.stopCount; ++index)
             {
                 fill.stops[index] = stops[index];
@@ -161,196 +168,352 @@ namespace Mosaic
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::setChannel(uint32_t channel) noexcept
+    bool Canvas::splitChannels(uint32_t count) noexcept
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasSetChannel(m_context, m_id, channel);
+            return false;
         }
+
+        bool result = Mosaic::canvasSplitChannels(m_context, m_id, count);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::setLayer(CanvasLayer layer) noexcept
+    bool Canvas::setChannel(uint32_t channel) noexcept
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasSetLayer(m_context, m_id, layer);
+            return false;
         }
+
+        bool result = Mosaic::canvasSetChannel(m_context, m_id, channel);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::rect(const Rect & bounds, const Color & color)
+    bool Canvas::mergeChannels(UInt32Span order) noexcept
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasRect(m_context, m_id, bounds, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasMergeChannels(m_context, m_id, order);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::rects(RectInstanceSpan instances)
+    bool Canvas::setLayer(CanvasLayer layer) noexcept
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasRects(m_context, m_id, instances);
+            return false;
         }
+
+        bool result = Mosaic::canvasSetLayer(m_context, m_id, layer);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::quads(QuadInstanceSpan instances)
+    bool Canvas::rect(const Rect & bounds, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasQuads(m_context, m_id, instances);
+            return false;
         }
+
+        bool result = Mosaic::canvasRect(m_context, m_id, bounds, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::box(const Rect & bounds, const BoxStyle & style)
+    bool Canvas::rects(RectInstanceSpan instances)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasBox(m_context, m_id, bounds, style);
+            return false;
         }
+
+        bool result = Mosaic::canvasRects(m_context, m_id, instances);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::roundedRect(const Rect & bounds, float radius, const Color & color)
+    bool Canvas::quads(QuadInstanceSpan instances)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasRoundedRect(m_context, m_id, bounds, radius, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasQuads(m_context, m_id, instances);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::gradient(const Rect & bounds, const Color & topLeft, const Color & topRight, const Color & bottomRight, const Color & bottomLeft)
+    bool Canvas::box(const Rect & bounds, const BoxStyle & style)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasGradient(m_context, m_id, bounds, topLeft, topRight, bottomRight, bottomLeft);
+            return false;
         }
+
+        bool result = Mosaic::canvasBox(m_context, m_id, bounds, style);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::line(const Vec2 & first, const Vec2 & second, float thickness, const Color & color)
+    bool Canvas::roundedRect(const Rect & bounds, float radius, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasLine(m_context, m_id, first, second, thickness, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasRoundedRect(m_context, m_id, bounds, radius, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::polyline(Vec2Span points, float thickness, const Color & color, bool closed)
+    bool Canvas::gradient(const Rect & bounds, const Color & topLeft, const Color & topRight, const Color & bottomRight, const Color & bottomLeft)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasPolyline(m_context, m_id, points, thickness, color, closed);
+            return false;
         }
+
+        bool result = Mosaic::canvasGradient(m_context, m_id, bounds, topLeft, topRight, bottomRight, bottomLeft);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::circle(const Vec2 & center, float radius, float thickness, const Color & color, uint32_t segments)
+    bool Canvas::line(const Vec2 & first, const Vec2 & second, float thickness, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasCircle(m_context, m_id, center, radius, thickness, color, segments);
+            return false;
         }
+
+        bool result = Mosaic::canvasLine(m_context, m_id, first, second, thickness, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::circleFilled(const Vec2 & center, float radius, const Color & color, uint32_t segments)
+    bool Canvas::polyline(Vec2Span points, float thickness, const Color & color, bool closed)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasCircleFilled(m_context, m_id, center, radius, color, segments);
+            return false;
         }
+
+        bool result = Mosaic::canvasPolyline(m_context, m_id, points, thickness, color, closed);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::ellipse(const Vec2 & center, const Vec2 & radii, float rotation, float thickness, const Color & color, uint32_t segments)
+    bool Canvas::circle(const Vec2 & center, float radius, float thickness, const Color & color, uint32_t segments)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasEllipse(m_context, m_id, center, radii, rotation, thickness, color, segments);
+            return false;
         }
+
+        bool result = Mosaic::canvasCircle(m_context, m_id, center, radius, thickness, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::ellipseFilled(const Vec2 & center, const Vec2 & radii, float rotation, const Color & color, uint32_t segments)
+    bool Canvas::circleFilled(const Vec2 & center, float radius, const Color & color, uint32_t segments)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasEllipseFilled(m_context, m_id, center, radii, rotation, color, segments);
+            return false;
         }
+
+        bool result = Mosaic::canvasCircleFilled(m_context, m_id, center, radius, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::regularPolygon(const Vec2 & center, float radius, uint32_t sideCount, float rotation, float thickness, const Color & color)
+    bool Canvas::arc(const Vec2 & center, float radius, float startAngle, float endAngle, float thickness, const Color & color, uint32_t segments)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasRegularPolygon(m_context, m_id, center, radius, sideCount, rotation, thickness, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasArc(m_context, m_id, center, radius, startAngle, endAngle, thickness, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::regularPolygonFilled(const Vec2 & center, float radius, uint32_t sideCount, float rotation, const Color & color)
+    bool Canvas::arcFilled(const Vec2 & center, float radius, float startAngle, float endAngle, const Color & color, uint32_t segments)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasRegularPolygonFilled(m_context, m_id, center, radius, sideCount, rotation, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasArcFilled(m_context, m_id, center, radius, startAngle, endAngle, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::gradientRing(const Vec2 & center, float innerRadius, float outerRadius, float startAngle, ColorSpan colors)
+    bool Canvas::ellipse(const Vec2 & center, const Vec2 & radii, float rotation, float thickness, const Color & color, uint32_t segments)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasGradientRing(m_context, m_id, center, innerRadius, outerRadius, startAngle, colors);
+            return false;
         }
+
+        bool result = Mosaic::canvasEllipse(m_context, m_id, center, radii, rotation, thickness, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::triangle(const Vec2 & first, const Vec2 & second, const Vec2 & third, float thickness, const Color & color)
+    bool Canvas::ellipseFilled(const Vec2 & center, const Vec2 & radii, float rotation, const Color & color, uint32_t segments)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasTriangle(m_context, m_id, first, second, third, thickness, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasEllipseFilled(m_context, m_id, center, radii, rotation, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::triangleFilled(const Vec2 & first, const Vec2 & second, const Vec2 & third, const Color & color)
+    bool Canvas::regularPolygon(const Vec2 & center, float radius, uint32_t sideCount, float rotation, float thickness, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasTriangleFilled(m_context, m_id, first, second, third, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasRegularPolygon(m_context, m_id, center, radius, sideCount, rotation, thickness, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::convexPolygon(Vec2Span points, const Color & color)
+    bool Canvas::regularPolygonFilled(const Vec2 & center, float radius, uint32_t sideCount, float rotation, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasConvexPolygon(m_context, m_id, points, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasRegularPolygonFilled(m_context, m_id, center, radius, sideCount, rotation, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::gradientPolygon(ColoredPointSpan points)
+    bool Canvas::gradientRing(const Vec2 & center, float innerRadius, float outerRadius, float startAngle, ColorSpan colors)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasGradientPolygon(m_context, m_id, points);
+            return false;
         }
+
+        bool result = Mosaic::canvasGradientRing(m_context, m_id, center, innerRadius, outerRadius, startAngle, colors);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::concavePolygon(Vec2Span points, const Color & color)
+    bool Canvas::triangle(const Vec2 & first, const Vec2 & second, const Vec2 & third, float thickness, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasConcavePolygon(m_context, m_id, points, color);
+            return false;
         }
+
+        bool result = Mosaic::canvasTriangle(m_context, m_id, first, second, third, thickness, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::bezierQuadratic(const Vec2 & first, const Vec2 & control, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
+    bool Canvas::triangleFilled(const Vec2 & first, const Vec2 & second, const Vec2 & third, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasBezierQuadratic(m_context, m_id, first, control, second, thickness, color, segments);
+            return false;
         }
+
+        bool result = Mosaic::canvasTriangleFilled(m_context, m_id, first, second, third, color);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::bezierCubic(const Vec2 & first, const Vec2 & firstControl, const Vec2 & secondControl, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
+    bool Canvas::convexPolygon(Vec2Span points, const Color & color)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasBezierCubic(m_context, m_id, first, firstControl, secondControl, second, thickness, color, segments);
+            return false;
         }
+
+        bool result = Mosaic::canvasConvexPolygon(m_context, m_id, points, color);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::gradientPolygon(ColoredPointSpan points)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasGradientPolygon(m_context, m_id, points);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::concavePolygon(Vec2Span points, const Color & color)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasConcavePolygon(m_context, m_id, points, color);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::bezierQuadratic(const Vec2 & first, const Vec2 & control, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasBezierQuadratic(m_context, m_id, first, control, second, thickness, color, segments);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::bezierQuadraticFilled(const Vec2 & first, const Vec2 & control, const Vec2 & second, const Color & color, uint32_t segments)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasBezierQuadraticFilled(m_context, m_id, first, control, second, color, segments);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::bezierCubic(const Vec2 & first, const Vec2 & firstControl, const Vec2 & secondControl, const Vec2 & second, float thickness, const Color & color, uint32_t segments)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasBezierCubic(m_context, m_id, first, firstControl, secondControl, second, thickness, color, segments);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
     bool Canvas::text(const Vec2 & position, StringView value, const Color & color, Vec2 * const _out)
@@ -377,43 +540,64 @@ namespace Mosaic
             return false;
         }
 
-        Mosaic::canvasPushClip(m_context, m_id, clip);
-        bool result = Mosaic::canvasText(m_context, m_id, position, value, color, _out);
-        Mosaic::canvasPopClip(m_context, m_id);
+        if(Mosaic::canvasPushClip(m_context, m_id, clip) == false)
+        {
+            return false;
+        }
+
+        bool textResult = Mosaic::canvasText(m_context, m_id, position, value, color, _out);
+        bool clipResult = Mosaic::canvasPopClip(m_context, m_id);
+        bool result = textResult == true && clipResult == true;
 
         return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::pushClip(const Rect & bounds)
+    bool Canvas::pushClip(const Rect & bounds)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasPushClip(m_context, m_id, bounds);
+            return false;
         }
+
+        bool result = Mosaic::canvasPushClip(m_context, m_id, bounds);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::popClip()
+    bool Canvas::popClip()
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasPopClip(m_context, m_id);
+            return false;
         }
+
+        bool result = Mosaic::canvasPopClip(m_context, m_id);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::image(TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint)
+    bool Canvas::image(TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint, SamplerFilter sampler)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasImage(m_context, m_id, texture, bounds, uv, tint);
+            return false;
         }
+
+        bool result = Mosaic::canvasImage(m_context, m_id, texture, bounds, uv, tint, sampler);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
-    void Canvas::custom(VertexSpan vertices, IndexSpan indices, const RenderState & state)
+    bool Canvas::custom(VertexSpan vertices, IndexSpan indices, const RenderState & state)
     {
-        if(m_context != nullptr)
+        if(m_context == nullptr)
         {
-            Mosaic::canvasCustom(m_context, m_id, vertices, indices, state);
+            return false;
         }
+
+        bool result = Mosaic::canvasCustom(m_context, m_id, vertices, indices, state);
+
+        return result;
     }
     //////////////////////////////////////////////////////////////////////////
 } // namespace Mosaic

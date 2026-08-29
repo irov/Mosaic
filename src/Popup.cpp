@@ -84,7 +84,7 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         Id popupId(const Context * ui, const Key & key, Id owner) noexcept
         {
-            Id scope = owner == InvalidId ? ui->nodes[ui->currentParent].id : owner;
+            Id scope = owner == InvalidId ? ui->nodes[ui->currentParent].identityScope : owner;
             auto returnedValue = combineId(scope, key.value());
 
             return returnedValue;
@@ -118,7 +118,7 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         Rect placePopup(const Context::Node & node, const Vec2 & size, const Rect & workArea) noexcept
         {
-            Rect anchor = node.popupAnchor;
+            Rect anchor = node.windowData().popupAnchor;
 
             if(anchor.empty() == true)
             {
@@ -129,7 +129,7 @@ namespace Mosaic
             float availableAbove = std::max(0.f, anchor.y - workArea.y);
             float availableLeft = std::max(0.f, anchor.x - workArea.x);
             float availableRight = std::max(0.f, workArea.right() - anchor.right());
-            PopupPlacement placement = node.popupPlacement;
+            PopupPlacement placement = node.windowData().popupPlacement;
 
             if(placement == PopupPlacement::Automatic)
             {
@@ -137,7 +137,7 @@ namespace Mosaic
             }
 
             Rect result = {anchor.x, anchor.bottom(), std::min(size.x, workArea.width), std::min(size.y, workArea.height)};
-            float horizontal = node.popupHorizontalAlignment == PopupHorizontalAlignment::End ? anchor.right() - result.width : anchor.x;
+            float horizontal = node.windowData().popupHorizontalAlignment == PopupHorizontalAlignment::End ? anchor.right() - result.width : anchor.x;
             switch(placement)
             {
             case PopupPlacement::Automatic:
@@ -258,7 +258,50 @@ namespace Mosaic
     void openPopup(Context * ui, const Key & key, const PopupOptions & options)
     {
         Id id = Detail::popupId(ui, key, options.owner);
+        Id resolvedOwner = options.owner == InvalidId ? ui->focused : options.owner;
         Context::PopupState * lastPopup = ui->popupStack.empty() == true ? nullptr : &ui->popupStack.back();
+        bool existingPopupBlocksOpen = options.openOverExisting == false;
+
+        if(lastPopup == nullptr)
+        {
+            existingPopupBlocksOpen = false;
+        }
+
+        if(existingPopupBlocksOpen == true && lastPopup->open == false)
+        {
+            existingPopupBlocksOpen = false;
+        }
+
+        if(existingPopupBlocksOpen == true && lastPopup->id == id)
+        {
+            existingPopupBlocksOpen = false;
+        }
+
+        if(existingPopupBlocksOpen == true)
+        {
+            return;
+        }
+
+        if(options.openOverItems == false)
+        {
+            auto hoveredItem = std::find_if(ui->nodes.rbegin(), ui->nodes.rend(),
+                                            [resolvedOwner](const Context::Node & node)
+                                            {
+                                                return node.id != resolvedOwner && node.response.hovered() == true;
+                                            });
+
+            if(hoveredItem != ui->nodes.rend())
+            {
+                return;
+            }
+        }
+
+        Context::PopupState * existing = Detail::findPopup(ui, id);
+
+        if(options.reopen == false && existing != nullptr && existing->open == true)
+        {
+            return;
+        }
 
         if(options.allowSiblingOwners == true && lastPopup != nullptr && lastPopup->open == true && lastPopup->id != id && lastPopup->options.allowSiblingOwners == true)
         {
@@ -348,7 +391,7 @@ namespace Mosaic
                 submittedPopupWindow = false;
             }
 
-            if(ui->nodes[submittedNode].windowPopup == false)
+            if(ui->nodes[submittedNode].windowData().popup == false)
             {
                 submittedPopupWindow = false;
             }
@@ -435,17 +478,17 @@ namespace Mosaic
         Context::Node & node = ui->nodes.back();
         state->node = node.id;
         node.inputLayer = id;
-        node.windowAutoSize = true;
-        node.windowPopup = true;
+        node.mutableWindowData().autoSize = true;
+        node.mutableWindowData().popup = true;
         Context::Persistent & windowState = ui->state(node);
-        windowState.windowPopup = true;
-        windowState.windowZOrder = ui->nextWindowZOrder++;
-        node.windowZOrder = windowState.windowZOrder;
-        node.windowMinimumSize = state->options.minimumSize;
-        node.windowMaximumSize = state->options.maximumSize;
-        node.popupAnchor = state->options.anchor;
-        node.popupPlacement = state->options.placement;
-        node.popupHorizontalAlignment = state->options.horizontalAlignment;
+        windowState.windowData().popup = true;
+        windowState.windowData().zOrder = ui->nextWindowZOrder++;
+        node.mutableWindowData().zOrder = windowState.windowData().zOrder;
+        node.mutableWindowData().minimumSize = state->options.minimumSize;
+        node.mutableWindowData().maximumSize = state->options.maximumSize;
+        node.mutableWindowData().popupAnchor = state->options.anchor;
+        node.mutableWindowData().popupPlacement = state->options.placement;
+        node.mutableWindowData().popupHorizontalAlignment = state->options.horizontalAlignment;
         node.layout.width = SizeRule::Content;
         node.layout.height = SizeRule::Content;
         node.layout.minimum = state->options.minimumSize;
@@ -474,6 +517,53 @@ namespace Mosaic
     }
 
     //////////////////////////////////////////////////////////////////////////
+    WindowScope contextPopup(Context * ui, const Key & key, StringView label, const Response & item, const PopupOptions & options, const SourceLocation & location)
+    {
+        if(ui == nullptr)
+        {
+            return {};
+        }
+
+        PopupOptions resolvedOptions = options;
+        resolvedOptions.owner = item.id;
+        const PointerState * pointer = ui->input.primaryPointer();
+
+        if(pointer != nullptr && item.hovered() == true && pointer->isPressed(PointerButton::Secondary) == true)
+        {
+            resolvedOptions.anchor = {pointer->position.x, pointer->position.y, 1.f, 1.f};
+            resolvedOptions.placement = PopupPlacement::Cursor;
+            Mosaic::openPopup(ui, key, resolvedOptions);
+        }
+
+        return Mosaic::popup(ui, key, label, resolvedOptions, location);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    WindowScope contextWindowPopup(Context * ui, const Key & key, StringView label, const PopupOptions & options, const SourceLocation & location)
+    {
+        if(ui == nullptr)
+        {
+            return {};
+        }
+
+        if(ui->currentWindow == InvalidId)
+        {
+            return {};
+        }
+
+        PopupOptions resolvedOptions = options;
+        resolvedOptions.owner = ui->currentWindow;
+        const PointerState * pointer = ui->input.primaryPointer();
+
+        if(pointer != nullptr && ui->pointerWindow == ui->currentWindow && pointer->isPressed(PointerButton::Secondary) == true)
+        {
+            resolvedOptions.anchor = {pointer->position.x, pointer->position.y, 1.f, 1.f};
+            resolvedOptions.placement = PopupPlacement::Cursor;
+            Mosaic::openPopup(ui, key, resolvedOptions);
+        }
+
+        return Mosaic::popup(ui, key, label, resolvedOptions, location);
+    }
+    //////////////////////////////////////////////////////////////////////////
     void closeCurrentPopup(Context * ui) noexcept
     {
         if(ui->popupStack.empty() == true)
@@ -491,12 +581,40 @@ namespace Mosaic
             return;
         }
 
-        Detail::closePopupById(ui, Detail::popupId(ui, key, owner));
+        if(owner != InvalidId)
+        {
+            Detail::closePopupById(ui, Detail::popupId(ui, key, owner));
+
+            return;
+        }
+
+        auto iterator = std::find_if(ui->popupStack.rbegin(), ui->popupStack.rend(),
+            [&key](const Context::PopupState & popup)
+            {
+                return popup.open == true && popup.key == key.value();
+            });
+
+        if(iterator == ui->popupStack.rend())
+        {
+            return;
+        }
+
+        Detail::closePopupById(ui, iterator->id);
     }
     //////////////////////////////////////////////////////////////////////////
     bool isPopupOpen(const Context * ui, const Key & key) noexcept
     {
-        auto returnedValue = ui != nullptr && Detail::findPopup(ui, Detail::popupId(ui, key)) != nullptr;
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        auto iterator = std::find_if(ui->popupStack.rbegin(), ui->popupStack.rend(),
+            [&key](const Context::PopupState & popup)
+            {
+                return popup.open == true && popup.key == key.value();
+            });
+        bool returnedValue = iterator != ui->popupStack.rend();
 
         return returnedValue;
     }
@@ -511,6 +629,43 @@ namespace Mosaic
         const Context::PopupState * state = Detail::findPopup(ui, Detail::popupId(ui, key, owner));
 
         return state != nullptr && state->open;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool isAnyPopupOpen(const Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        auto iterator = std::find_if(ui->popupStack.begin(), ui->popupStack.end(),
+                                     [](const Context::PopupState & popup)
+                                     {
+                                         return popup.open == true;
+                                     });
+        auto returnedValue = iterator != ui->popupStack.end();
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    uint32_t popupLevel(const Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return 0;
+        }
+
+        uint32_t level = 0;
+
+        for(const Context::PopupState & popup : ui->popupStack)
+        {
+            if(popup.open == true)
+            {
+                ++level;
+            }
+        }
+
+        return level;
     }
     //////////////////////////////////////////////////////////////////////////
 } // namespace Mosaic

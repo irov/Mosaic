@@ -99,6 +99,13 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope columns(Context * ui, StringView label, uint32_t count, const ColumnsOptions & options, const LayoutOptions & layout, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::columns(ui, Key{}, label, count, options, layout, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope columns(Context * ui, const Key & key, StringView label, uint32_t count, const ColumnsOptions & options, const LayoutOptions & layout, const SourceLocation & location)
+    {
         TableOptions tableOptions;
         tableOptions.headers = false;
         tableOptions.resizable = options.resizable;
@@ -111,7 +118,8 @@ namespace Mosaic
         tableOptions.bordersOuterVertical = options.border;
         tableOptions.clipCells = options.clip;
         tableOptions.saveSettings = true;
-        Scope result = Mosaic::table(ui, label, std::max(1U, count), tableOptions, layout, location);
+        Scope result = Mosaic::table(ui, key, label, std::max(1U, count), tableOptions, layout, location);
+        ui->nodes[ui->currentParent].legacyColumns = true;
         for(uint32_t column = 0; column != std::max(1U, count); ++column)
         {
             TableColumnOptions columnOptions;

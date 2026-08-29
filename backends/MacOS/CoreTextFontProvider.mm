@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #import <CoreText/CoreText.h>
 #import <Foundation/Foundation.h>
@@ -318,6 +319,7 @@ namespace Mosaic
             m_renderer.destroyTexture(page.texture);
         }
         m_atlasPages.clear();
+        m_atlasRegions.clear();
     }
     //////////////////////////////////////////////////////////////////////////
     void CoreTextFontProvider::clearResolvedFonts() noexcept
@@ -794,7 +796,9 @@ namespace Mosaic
         size_t pageIndex = 0;
         uint32_t atlasX = 0;
         uint32_t atlasY = 0;
-        if(allocateAtlasRegion(width, height, &pageIndex, &atlasX, &atlasY) == true)
+        bool atlasRegionAllocated = allocateAtlasRegion(width, height, &pageIndex, &atlasX, &atlasY);
+
+        if(atlasRegionAllocated == true)
         {
             const AtlasPage & page = m_atlasPages[pageIndex];
             bool updated = false;
@@ -815,6 +819,28 @@ namespace Mosaic
                 result.uv = {static_cast<float>(atlasX) / static_cast<float>(page.width), static_cast<float>(atlasY) / static_cast<float>(page.height), static_cast<float>(width) / static_cast<float>(page.width), static_cast<float>(height) / static_cast<float>(page.height)};
                 atlas = true;
             }
+
+            AtlasRegion region;
+            region.page = pageIndex;
+            region.bounds = {static_cast<float>(atlasX), static_cast<float>(atlasY), static_cast<float>(width), static_cast<float>(height)};
+            region.font = font;
+            region.size = size;
+            region.face = shaped.face;
+            region.glyph = shaped.glyph;
+            region.packed = updated;
+            m_atlasRegions.emplace_back(std::move(region));
+        }
+        else
+        {
+            AtlasRegion region;
+            region.page = std::numeric_limits<size_t>::max();
+            region.bounds = {0.f, 0.f, static_cast<float>(width), static_cast<float>(height)};
+            region.font = font;
+            region.size = size;
+            region.face = shaped.face;
+            region.glyph = shaped.glyph;
+            region.packed = false;
+            m_atlasRegions.emplace_back(std::move(region));
         }
 
         if(atlas == false)
@@ -881,9 +907,95 @@ namespace Mosaic
             return false;
         }
 
-        FontAtlasPage output = {page.texture, {static_cast<float>(page.width), static_cast<float>(page.height)}, page.mask};
+        FontAtlasPage output;
+        output.texture = page.texture;
+        output.size = {static_cast<float>(page.width), static_cast<float>(page.height)};
+        output.mask = page.mask;
+        output.active = page.texture != 0;
+
+        for(const AtlasRegion & region : m_atlasRegions)
+        {
+            if(region.page != index)
+            {
+                continue;
+            }
+
+            if(region.packed == true)
+            {
+                ++output.packedRectCount;
+                output.packedArea += static_cast<size_t>(region.bounds.width * region.bounds.height);
+                output.used.width = std::max(output.used.width, region.bounds.right());
+                output.used.height = std::max(output.used.height, region.bounds.bottom());
+            }
+            else
+            {
+                ++output.discardedRectCount;
+                output.discardedArea += static_cast<size_t>(region.bounds.width * region.bounds.height);
+            }
+        }
 
         *_out = output;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool CoreTextFontProvider::atlasConfiguration(FontAtlasConfiguration * const _out) const noexcept
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        FontAtlasConfiguration configuration;
+        configuration.pageSize = {static_cast<float>(Detail::AtlasPageSize), static_cast<float>(Detail::AtlasPageSize)};
+        configuration.glyphSpacing = Detail::AtlasSpacing;
+        configuration.dynamicCoverage = true;
+        configuration.mask = true;
+        for(const AtlasPage & page : m_atlasPages)
+        {
+            if(page.mask == false)
+            {
+                configuration.mask = false;
+
+                break;
+            }
+        }
+        *_out = configuration;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool CoreTextFontProvider::inspectFonts(FontInfoVector * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        FontInfoVector output;
+        uint32_t loaderFlags = FontLoaderScalable | FontLoaderDynamicFallback | FontLoaderMaskAtlas;
+        FontInfo system;
+        system.font = DefaultFont;
+        system.name = "System UI";
+        system.loader = "CoreText";
+        system.source = "macOS system user-interface font";
+        system.effectiveScale = m_scale;
+        system.loaderFlags = loaderFlags;
+        system.sources.emplace_back("macOS system user-interface font");
+        system.glyphRanges.push_back({0x20U, 0x10ffffU});
+        output.push_back(std::move(system));
+        FontInfo monospace;
+        monospace.font = MonospaceFont;
+        monospace.name = "System Monospace";
+        monospace.loader = "CoreText";
+        monospace.source = "macOS system fixed-pitch font";
+        monospace.effectiveScale = m_scale;
+        monospace.loaderFlags = loaderFlags;
+        monospace.monospace = true;
+        monospace.sources.emplace_back("macOS system fixed-pitch font");
+        monospace.glyphRanges.push_back({0x20U, 0x10ffffU});
+        output.push_back(std::move(monospace));
+        *_out = std::move(output);
 
         return true;
     }
@@ -899,7 +1011,37 @@ namespace Mosaic
         output.reserve(m_fonts.size());
         for(const auto & [key, cached] : m_fonts)
         {
-            output.push_back({key.font, static_cast<float>(key.size) / 64.f, cached.metrics});
+            float size = static_cast<float>(key.size) / 64.f;
+            FontCacheEntry entry;
+            entry.font = key.font;
+            entry.size = size;
+            entry.effectiveSize = size * m_scale;
+            entry.metrics = cached.metrics;
+            bool firstGlyph = true;
+            for(const auto & [glyphKey, glyph] : m_glyphs)
+            {
+                static_cast<void>(glyphKey);
+
+                if(glyph.font != key.font || std::abs(glyph.size - size) > 0.0001f)
+                {
+                    continue;
+                }
+
+                ++entry.glyphCount;
+
+                if(firstGlyph == true)
+                {
+                    entry.firstGlyph = glyph.glyph;
+                    entry.lastGlyph = glyph.glyph;
+                    firstGlyph = false;
+                }
+                else
+                {
+                    entry.firstGlyph = std::min(entry.firstGlyph, glyph.glyph);
+                    entry.lastGlyph = std::max(entry.lastGlyph, glyph.glyph);
+                }
+            }
+            output.push_back(entry);
         }
         std::sort(output.begin(), output.end(),
                   [](const FontCacheEntry & left, const FontCacheEntry & right)
@@ -924,7 +1066,24 @@ namespace Mosaic
         for(const auto & [key, cached] : m_glyphs)
         {
             static_cast<void>(key);
-            output.push_back({cached.font, cached.size, cached.face, cached.glyph, cached.value, cached.atlas});
+            GlyphCacheEntry entry;
+            entry.font = cached.font;
+            entry.size = cached.size;
+            entry.face = cached.face;
+            entry.glyph = cached.glyph;
+            entry.value = cached.value;
+            entry.atlas = cached.atlas;
+            for(size_t rectIndex = 0; rectIndex != m_atlasRegions.size(); ++rectIndex)
+            {
+                const AtlasRegion & region = m_atlasRegions[rectIndex];
+
+                if(region.font == cached.font && std::abs(region.size - cached.size) <= 0.0001f && region.face == cached.face && region.glyph == cached.glyph)
+                {
+                    entry.atlasRect = rectIndex;
+                    break;
+                }
+            }
+            output.push_back(entry);
         }
         std::sort(output.begin(), output.end(),
                   [](const GlyphCacheEntry & left, const GlyphCacheEntry & right)
@@ -948,6 +1107,77 @@ namespace Mosaic
                   });
 
         *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool CoreTextFontProvider::inspectAtlasRects(FontAtlasRectInfoVector * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        FontAtlasRectInfoVector output;
+        output.reserve(m_atlasRegions.size());
+
+        for(size_t index = 0; index != m_atlasRegions.size(); ++index)
+        {
+            const AtlasRegion & region = m_atlasRegions[index];
+            FontAtlasRectInfo entry;
+            entry.page = region.page;
+            entry.bounds = region.bounds;
+            entry.font = region.font;
+            entry.size = region.size;
+            entry.face = region.face;
+            entry.glyph = region.glyph;
+            entry.packed = region.packed;
+            entry.index = index;
+            output.push_back(entry);
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool CoreTextFontProvider::cacheAction(FontCacheAction action)
+    {
+        switch(action)
+        {
+        case FontCacheAction::Clear:
+            clearGlyphs();
+            clearFonts();
+            clearResolvedFonts();
+            break;
+        case FontCacheAction::Compact:
+        case FontCacheAction::Rebuild:
+            clearGlyphs();
+            break;
+        case FontCacheAction::Grow:
+        {
+            ByteVector emptyPixels(static_cast<size_t>(Detail::AtlasPageSize) * Detail::AtlasPageSize, std::byte{0});
+            bool mask = true;
+            TextureHandle texture = m_renderer.createMaskTexture(Detail::AtlasPageSize, Detail::AtlasPageSize, emptyPixels);
+
+            if(texture == 0)
+            {
+                mask = false;
+                emptyPixels.assign(static_cast<size_t>(Detail::AtlasPageSize) * Detail::AtlasPageSize * 4, std::byte{0});
+                texture = m_renderer.createTexture(Detail::AtlasPageSize, Detail::AtlasPageSize, emptyPixels);
+            }
+
+            if(texture == 0)
+            {
+                return false;
+            }
+
+            m_atlasPages.push_back({texture, Detail::AtlasPageSize, Detail::AtlasPageSize, 0, 0, 0, mask});
+            break;
+        }
+        }
+
+        ++m_revision;
 
         return true;
     }

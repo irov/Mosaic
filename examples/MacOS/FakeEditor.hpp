@@ -80,6 +80,7 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::Id drawViewport(Mosaic::Context * ui);
         [[nodiscard]] Mosaic::Id drawInspector(Mosaic::Context * ui);
         void drawGeneratedWidgets(Mosaic::Context * ui);
+        void drawFontDiagnostics(Mosaic::Context * ui);
         [[nodiscard]] Mosaic::Id drawConsole(Mosaic::Context * ui);
         [[nodiscard]] Mosaic::Id drawContentBrowser(Mosaic::Context * ui);
         void drawTransientWindows(Mosaic::Context * ui);
@@ -134,6 +135,13 @@ namespace MosaicExample
         float m_hierarchyRatio = 0.55f;
         float m_viewportRatio = 0.70f;
         float m_inspectorRatio = 0.70f;
+        float m_layoutGap = 4.f;
+        float m_popupPadding = 7.f;
+        float m_minimumPopupWidth = 180.f;
+        float m_windowTitleHeight = 27.f;
+        float m_controlHeight = 23.f;
+        float m_minimumControlWidth = 64.f;
+        uint8_t m_roundedRectangleQuality = 8;
         int m_selectedTool = 1;
         int m_selectedEntity = 2;
         int m_inspectorTab = 0;
@@ -151,6 +159,13 @@ namespace MosaicExample
         bool m_animations = true;
         bool m_touchMode = false;
         bool m_modalOpen = false;
+        bool m_windowOptionsLabOpen = false;
+        bool m_windowOptionsNavigationInputs = true;
+        bool m_windowOptionsNavigationFocus = true;
+        bool m_windowOptionsPointerInput = true;
+        bool m_windowOptionsAutoResize = false;
+        bool m_windowOptionsHorizontalScrollbar = false;
+        bool m_windowOptionsVerticalScrollbar = false;
         bool m_dockModelInitialized = false;
         Mosaic::Id m_addComponentOwner = Mosaic::InvalidId;
     };

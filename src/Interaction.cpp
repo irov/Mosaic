@@ -289,9 +289,31 @@ namespace Mosaic
             state.lastInputLayer = node.inputLayer;
             Response response;
             response.id = node.id;
+            response.item = node.item;
             InteractionDetail::setFlag(response, 13, node.disabled);
             const PointerState * pointer = InteractionDetail::pointer(ui);
-            Rect hitBounds = interactionBounds == nullptr ? state.lastBounds : *interactionBounds;
+            const Context::InteractionSnapshotItem * snapshot = ui->findInteractionSnapshot(node.item);
+
+            if(snapshot != nullptr && (snapshot->kind != node.kind || snapshot->identityParent != node.identityParent))
+            {
+                snapshot = nullptr;
+            }
+
+            Rect hitBounds;
+            Rect hitClip;
+
+            if(snapshot != nullptr && snapshot->visible == true)
+            {
+                hitBounds = snapshot->bounds;
+                hitClip = snapshot->clip;
+
+                if(interactionBounds != nullptr)
+                {
+                    hitBounds = *interactionBounds;
+                    hitBounds.x += snapshot->bounds.x - snapshot->capturedBounds.x;
+                    hitBounds.y += snapshot->bounds.y - snapshot->capturedBounds.y;
+                }
+            }
 
             if(pointer != nullptr && pointer->type == PointerType::Touch)
             {
@@ -299,13 +321,17 @@ namespace Mosaic
                 hitBounds = {hitBounds.x - extra.x, hitBounds.y - extra.y, hitBounds.width + extra.x * 2.f, hitBounds.height + extra.y * 2.f};
             }
 
-            bool hit = pointer != nullptr && hitBounds.empty() == false && state.lastClip.empty() == false && hitBounds.contains(pointer->position) && state.lastClip.contains(pointer->position);
-            bool canInteract = node.disabled == false && node.inputBlocked == false && InteractionDetail::inputLayerBlocked(ui, node) == false && (ui->pointerWindow == InvalidId || node.windowOwner == ui->pointerWindow || ui->captured == node.id);
-            bool pointerCapturedElsewhere = ui->captured != InvalidId && ui->captured != node.id;
+            bool hit = pointer != nullptr && hitBounds.empty() == false && hitClip.empty() == false && hitBounds.contains(pointer->position) && hitClip.contains(pointer->position);
+            bool canInteract = node.disabled == false && node.inputBlocked == false && InteractionDetail::inputLayerBlocked(ui, node) == false;
+            bool acceptsPointerInput = snapshot == nullptr || snapshot->windowAcceptsPointerInput;
+            bool exactCapture = ui->capturedItem.valid() == true;
+            bool pointerCapturedElsewhere = exactCapture == true ? ui->capturedItem != node.item : ui->captured != InvalidId && ui->captured != node.id;
             bool pointerAvailable = pointerCapturedElsewhere == false || options.allowOverlap;
-            bool canPoint = canInteract && pointerAvailable;
+            bool matchingWindowSubmission = ui->pointerWindowSubmission == 0 || node.windowSubmission == ui->pointerWindowSubmission;
+            bool pointerWindowMatches = ui->pointerWindow == InvalidId || (node.windowOwner == ui->pointerWindow && matchingWindowSubmission == true) || ui->capturedItem == node.item;
+            bool canPoint = canInteract && acceptsPointerInput == true && pointerWindowMatches == true && pointerAvailable;
             bool hovered = canPoint && hit == true && node.style->behavior.hoverEnabled == true && pointer != nullptr && pointer->type != PointerType::Touch;
-            bool tooltipHovered = node.inputBlocked == false && InteractionDetail::inputLayerBlocked(ui, node) == false && (ui->pointerWindow == InvalidId || node.windowOwner == ui->pointerWindow) && pointerAvailable == true && hit == true && node.style->behavior.hoverEnabled == true && pointer != nullptr && pointer->type != PointerType::Touch;
+            bool tooltipHovered = node.inputBlocked == false && acceptsPointerInput == true && InteractionDetail::inputLayerBlocked(ui, node) == false && (ui->pointerWindow == InvalidId || node.windowOwner == ui->pointerWindow) && pointerAvailable == true && hit == true && node.style->behavior.hoverEnabled == true && pointer != nullptr && pointer->type != PointerType::Touch;
             InteractionDetail::setFlag(response, 0, hovered);
 
             if(tooltipHovered == true)
@@ -339,13 +365,20 @@ namespace Mosaic
             {
                 bool focusChanged = ui->focused != node.id;
                 ui->active = node.id;
+                ui->activeItem = node.item;
                 ui->captured = node.id;
+                ui->capturedItem = node.item;
                 ui->capturedPointer = pointer->id;
                 ui->pointerFocused = node.id;
                 ui->focused = node.id;
-                ui->navigationFocused = node.id;
+
+                if(node.navigationBlocked == false)
+                {
+                    ui->navigationFocused = node.id;
+                }
+
                 state.pressBounds = hitBounds;
-                state.pressClip = state.lastClip;
+                state.pressClip = hitClip;
                 state.pressStartedTimestamp = ui->input.timestamp;
                 state.lastRepeatTimestamp = ui->input.timestamp;
                 InteractionDetail::setFlag(response, 3);
@@ -372,16 +405,16 @@ namespace Mosaic
                     InteractionDetail::setFlag(response, 5);
                 }
 
-                ui->frame.events.push_back({EventType::PointerDown, node.id, ui->nodePath(node), node.file, node.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::PointerDown, node.id, ui->nodePath(node), node.debugData().file, node.debugData().line, ui->input.timestamp});
 
                 if(focusChanged == true)
                 {
-                    ui->frame.events.push_back({EventType::FocusChanged, node.id, ui->nodePath(node), node.file, node.line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::FocusChanged, node.id, ui->nodePath(node), node.debugData().file, node.debugData().line, ui->input.timestamp});
                 }
             }
 
             InteractionDetail::setFlag(response, 2, canInteract && ui->focused == node.id);
-            bool ownsPointer = ui->captured == node.id || ui->active == node.id;
+            bool ownsPointer = ui->capturedItem == node.item || ui->activeItem == node.item;
             InteractionDetail::setFlag(response, 1, ownsPointer && pointer != nullptr && pointer->isDown(options.pointerButton));
 
             bool repeatPressed = options.repeat;
@@ -426,13 +459,15 @@ namespace Mosaic
                 if(options.pressPolicy == ItemPressPolicy::Release)
                 {
                     bool pressedRegionHit = state.pressBounds.empty() == false && state.pressClip.empty() == false && state.pressBounds.contains(pointer->position) && state.pressClip.contains(pointer->position);
-                    bool releaseCanInteract = node.disabled == false && node.inputBlocked == false && InteractionDetail::inputLayerBlocked(ui, node) == false && (ui->pointerWindow == InvalidId || node.windowOwner == ui->pointerWindow || ui->captured == node.id);
+                    bool releaseCanInteract = node.disabled == false && node.inputBlocked == false && acceptsPointerInput == true && InteractionDetail::inputLayerBlocked(ui, node) == false && (ui->pointerWindow == InvalidId || (node.windowOwner == ui->pointerWindow && matchingWindowSubmission == true) || ui->capturedItem == node.item);
                     InteractionDetail::setFlag(response, 5, releaseCanInteract && (hit == true || pressedRegionHit == true));
                 }
 
-                ui->frame.events.push_back({EventType::PointerUp, node.id, ui->nodePath(node), node.file, node.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::PointerUp, node.id, ui->nodePath(node), node.debugData().file, node.debugData().line, ui->input.timestamp});
                 ui->active = InvalidId;
+                ui->activeItem = {};
                 ui->captured = InvalidId;
+                ui->capturedItem = {};
                 ui->capturedPointer = 0;
                 state.pressBounds = {};
                 state.pressClip = {};
@@ -484,7 +519,7 @@ namespace Mosaic
 
             node.response = response;
 
-            if(node.focusable == true && node.navigationBlocked == false && state.lastClip.empty() == false)
+            if(node.focusable == true && node.navigationBlocked == false && hitClip.empty() == false)
             {
                 ui->focusOrder.push_back(node.id);
             }
@@ -532,7 +567,7 @@ namespace Mosaic
                 {
                     const Context::Persistent * state = ui->findState(candidate);
 
-                    if(state != nullptr && state->windowVisible == true && state->windowAcceptsInput == true && state->windowPopup == false)
+                    if(state != nullptr && state->windowData().visible == true && state->windowData().acceptsNavigationFocus == true && state->windowData().popup == false)
                     {
                         windows.push_back(candidate);
                     }
@@ -565,9 +600,9 @@ namespace Mosaic
                     ui->navigationFocused = selectedWindow;
                     Context::Persistent & selectedState = ui->state(selectedWindow);
 
-                    if(selectedState.windowBringToFront == true)
+                    if(selectedState.windowData().bringToFront == true)
                     {
-                        selectedState.windowZOrder = ui->nextWindowZOrder++;
+                        selectedState.windowData().zOrder = ui->nextWindowZOrder++;
                     }
                 }
 
@@ -611,9 +646,9 @@ namespace Mosaic
 
             if(focusedState != nullptr)
             {
-                bool scrollable = focusedState->scrollRange.x > 0.f;
+                bool scrollable = focusedState->scrollData().range.x > 0.f;
 
-                if(focusedState->scrollRange.y > 0.f)
+                if(focusedState->scrollData().range.y > 0.f)
                 {
                     scrollable = true;
                 }

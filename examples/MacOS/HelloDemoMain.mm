@@ -47,7 +47,7 @@
     (void)notification;
     // The large host viewport lets the demo use stable first-use positions and sizes for all
     // floating windows without constraining them to a smaller native window.
-    NSRect frame = NSMakeRect(0, 0, 1200, 800);
+    NSRect frame = NSMakeRect(0, 0, 1280, 800);
     self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     self.window.title = NSProcessInfo.processInfo.processName;
     self.window.minSize = NSMakeSize(800, 600);

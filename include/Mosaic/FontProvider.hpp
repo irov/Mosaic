@@ -6,6 +6,10 @@
 
 namespace Mosaic
 {
+    inline constexpr uint32_t FontLoaderScalable = 1U << 0U;
+    inline constexpr uint32_t FontLoaderDynamicFallback = 1U << 1U;
+    inline constexpr uint32_t FontLoaderMaskAtlas = 1U << 2U;
+
     struct FontMetrics
     {
         float ascent = 0.f;
@@ -57,17 +61,60 @@ namespace Mosaic
     {
         TextureHandle texture = 0;
         Vec2 size;
+        Rect used;
+        size_t packedRectCount = 0;
+        size_t discardedRectCount = 0;
+        size_t packedArea = 0;
+        size_t discardedArea = 0;
         bool mask = false;
+        bool active = false;
     };
 
     struct FontCacheEntry
     {
         FontHandle font = DefaultFont;
         float size = 0.f;
+        float effectiveSize = 0.f;
         FontMetrics metrics;
+        size_t glyphCount = 0;
+        uint32_t firstGlyph = 0;
+        uint32_t lastGlyph = 0;
     };
 
     using FontCacheEntryVector = Vector<FontCacheEntry>;
+
+    struct FontGlyphRange
+    {
+        uint32_t first = 0;
+        uint32_t last = 0;
+    };
+
+    using FontGlyphRangeVector = Vector<FontGlyphRange>;
+
+    struct FontInfo
+    {
+        FontHandle font = DefaultFont;
+        String name;
+        String loader;
+        String source;
+        float effectiveScale = 1.f;
+        uint32_t loaderFlags = 0;
+        bool monospace = false;
+        StringVector sources;
+        FontGlyphRangeVector glyphRanges;
+        uint32_t fallbackGlyph = 0xfffdU;
+        uint32_t ellipsisGlyph = 0x2026U;
+    };
+
+    using FontInfoVector = Vector<FontInfo>;
+
+    struct FontAtlasConfiguration
+    {
+        Vec2 pageSize;
+        uint32_t glyphSpacing = 0;
+        bool dynamicCoverage = false;
+        bool mask = false;
+    };
 
     struct GlyphCacheEntry
     {
@@ -77,9 +124,32 @@ namespace Mosaic
         uint32_t glyph = 0;
         Glyph value;
         bool atlas = false;
+        size_t atlasRect = std::numeric_limits<size_t>::max();
     };
 
     using GlyphCacheEntryVector = Vector<GlyphCacheEntry>;
+
+    struct FontAtlasRectInfo
+    {
+        size_t page = 0;
+        Rect bounds;
+        FontHandle font = DefaultFont;
+        float size = 0.f;
+        uint32_t face = 0;
+        uint32_t glyph = 0;
+        bool packed = false;
+        size_t index = 0;
+    };
+
+    using FontAtlasRectInfoVector = Vector<FontAtlasRectInfo>;
+
+    enum class FontCacheAction : uint8_t
+    {
+        Clear,
+        Compact,
+        Grow,
+        Rebuild
+    };
 
     class FontProvider
     {
@@ -168,6 +238,30 @@ namespace Mosaic
             return true;
         }
 
+        virtual bool inspectFonts(FontInfoVector * const _out) const
+        {
+            if(_out == nullptr)
+            {
+                return false;
+            }
+
+            _out->clear();
+
+            return false;
+        }
+
+        [[nodiscard]] virtual bool atlasConfiguration(FontAtlasConfiguration * const _out) const noexcept
+        {
+            if(_out == nullptr)
+            {
+                return false;
+            }
+
+            *_out = {};
+
+            return false;
+        }
+
         virtual bool inspectGlyphCache(GlyphCacheEntryVector * const _out) const
         {
             if(_out == nullptr)
@@ -178,6 +272,23 @@ namespace Mosaic
             _out->clear();
 
             return true;
+        }
+
+        virtual bool inspectAtlasRects(FontAtlasRectInfoVector * const _out) const
+        {
+            if(_out == nullptr)
+            {
+                return false;
+            }
+
+            _out->clear();
+
+            return true;
+        }
+
+        virtual bool cacheAction(FontCacheAction)
+        {
+            return false;
         }
 
         // Advance this value whenever cached font, shaping or glyph resources become invalid.

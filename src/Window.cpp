@@ -23,7 +23,7 @@ namespace Mosaic
         {
             WindowScrollResult result;
 
-            if(node.windowScrollable == false)
+            if(node.windowData().scrollable == false)
             {
                 return result;
             }
@@ -35,34 +35,34 @@ namespace Mosaic
                 return result;
             }
 
-            bool verticalHit = state.verticalScrollbarTrack.empty() == false && state.verticalScrollbarTrack.contains(pointer->position);
-            bool horizontalHit = state.horizontalScrollbarTrack.empty() == false && state.horizontalScrollbarTrack.contains(pointer->position);
+            bool verticalHit = state.scrollData().verticalTrack.empty() == false && state.scrollData().verticalTrack.contains(pointer->position);
+            bool horizontalHit = state.scrollData().horizontalTrack.empty() == false && state.scrollData().horizontalTrack.contains(pointer->position);
             result.hovered = canPoint && (verticalHit || horizontalHit == true);
-            bool ownsScrollbar = ui->captured == node.id && (state.windowInteraction == 7 || state.windowInteraction == 8);
+            bool ownsScrollbar = ui->captured == node.id && (state.windowData().interaction == 7 || state.windowData().interaction == 8);
 
             if(canPoint == true && pointer->isPressed() == true && (verticalHit == true || horizontalHit == true))
             {
                 bool vertical = verticalHit;
-                const Rect & track = vertical ? state.verticalScrollbarTrack : state.horizontalScrollbarTrack;
-                const Rect & thumb = vertical ? state.verticalScrollbarThumb : state.horizontalScrollbarThumb;
+                const Rect & track = vertical ? state.scrollData().verticalTrack : state.scrollData().horizontalTrack;
+                const Rect & thumb = vertical ? state.scrollData().verticalThumb : state.scrollData().horizontalThumb;
                 float pointerPosition = vertical ? pointer->position.y : pointer->position.x;
                 float thumbStart = vertical ? thumb.y : thumb.x;
                 float thumbExtent = vertical ? thumb.height : thumb.width;
-                float & position = vertical ? state.scrollPosition.y : state.scrollPosition.x;
-                float extent = vertical ? state.scrollRange.y : state.scrollRange.x;
+                float & position = vertical ? state.scrollData().position.y : state.scrollData().position.x;
+                float extent = vertical ? state.scrollData().range.y : state.scrollData().range.x;
 
                 ui->captured = node.id;
                 ui->capturedPointer = pointer->id;
                 ui->active = node.id;
                 ui->focused = node.id;
-                state.windowInteraction = vertical ? 7 : 8;
-                state.draggingScrollbar = true;
-                state.draggingScrollAxis = vertical ? 2 : 1;
+                state.windowData().interaction = vertical ? 7 : 8;
+                state.scrollData().draggingScrollbar = true;
+                state.scrollData().draggingAxis = vertical ? 2 : 1;
                 result.consumedPress = true;
 
                 if(thumb.contains(pointer->position) == true)
                 {
-                    state.scrollbarDragOffset = pointerPosition - thumbStart;
+                    state.scrollData().dragOffset = pointerPosition - thumbStart;
                 }
                 else
                 {
@@ -81,26 +81,26 @@ namespace Mosaic
                         position = travel <= 0.f ? 0.f : std::clamp((pointerPosition - trackStart - thumbExtent * 0.5f) / travel, 0.f, 1.f) * extent;
                     }
 
-                    state.scrollbarDragOffset = thumbExtent * 0.5f;
+                    state.scrollData().dragOffset = thumbExtent * 0.5f;
                     result.changed = position != previous;
                 }
 
-                state.scrollTarget = state.scrollPosition;
-                state.scrollVelocity = {};
-                state.scrollTargetInitialized = true;
+                state.scrollData().target = state.scrollData().position;
+                state.scrollData().velocity = {};
+                state.scrollData().targetInitialized = true;
             }
 
             if((ownsScrollbar == true || result.consumedPress == true) && pointer->isDown() == true)
             {
-                bool vertical = state.windowInteraction == 7;
-                const Rect & track = vertical ? state.verticalScrollbarTrack : state.horizontalScrollbarTrack;
-                const Rect & thumb = vertical ? state.verticalScrollbarThumb : state.horizontalScrollbarThumb;
-                float & position = vertical ? state.scrollPosition.y : state.scrollPosition.x;
+                bool vertical = state.windowData().interaction == 7;
+                const Rect & track = vertical ? state.scrollData().verticalTrack : state.scrollData().horizontalTrack;
+                const Rect & thumb = vertical ? state.scrollData().verticalThumb : state.scrollData().horizontalThumb;
+                float & position = vertical ? state.scrollData().position.y : state.scrollData().position.x;
                 float previous = position;
-                position = Detail::scrollbarScrollAtPointer(track, thumb, vertical ? state.scrollRange.y : state.scrollRange.x, vertical, state.scrollbarDragOffset, pointer->position);
-                state.scrollTarget = state.scrollPosition;
-                state.scrollVelocity = {};
-                state.scrollTargetInitialized = true;
+                position = Detail::scrollbarScrollAtPointer(track, thumb, vertical ? state.scrollData().range.y : state.scrollData().range.x, vertical, state.scrollData().dragOffset, pointer->position);
+                state.scrollData().target = state.scrollData().position;
+                state.scrollData().velocity = {};
+                state.scrollData().targetInitialized = true;
                 result.changed = result.changed || position != previous;
             }
 
@@ -108,8 +108,8 @@ namespace Mosaic
 
             if(result.changed == true)
             {
-                state.scroll = node.scrollOptions.axes != ScrollAxes::Horizontal ? state.scrollPosition.y : state.scrollPosition.x;
-                ui->frame.events.push_back({EventType::Change, node.id, ui->nodePath(node), node.file, node.line, ui->input.timestamp});
+                state.scrollData().value = node.scrollOptions().axes != ScrollAxes::Horizontal ? state.scrollData().position.y : state.scrollData().position.x;
+                ui->frame.events.push_back({EventType::Change, node.id, ui->nodePath(node), node.debugData().file, node.debugData().line, ui->input.timestamp});
             }
 
             return result;
@@ -188,7 +188,7 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         Rect windowTitleBarBounds(const Context::Node & window, const Rect & bounds) noexcept
         {
-            float border = std::max(0.f, window.windowPopup ? window.style->metrics.popupBorderSize : window.style->metrics.windowBorderSize);
+            float border = std::max(0.f, window.windowData().popup ? window.style->metrics.popupBorderSize : window.style->metrics.windowBorderSize);
             Rect result = {bounds.x + border, bounds.y + border, std::max(0.f, bounds.width - border * 2.f), std::max(0.f, window.style->metrics.windowTitleHeight - border)};
 
             return result;
@@ -212,8 +212,8 @@ namespace Mosaic
             }
 
             float buttonSide = std::max(12.f, window.style->metrics.windowTitleHeight - 8.f);
-            float leftControlsWidth = window.windowCollapseVisible && window.windowCollapsePlacement == WindowCollapsePlacement::Left ? buttonSide + 2.f : 0.f;
-            float rightControlsWidth = (window.windowCloseVisible ? buttonSide + 2.f : 0.f) + (window.windowCollapseVisible && window.windowCollapsePlacement == WindowCollapsePlacement::Right ? buttonSide + 2.f : 0.f) + 4.f;
+            float leftControlsWidth = window.windowData().collapseVisible && window.windowData().collapsePlacement == WindowCollapsePlacement::Left ? buttonSide + 2.f : 0.f;
+            float rightControlsWidth = (window.windowData().closeVisible ? buttonSide + 2.f : 0.f) + (window.windowData().collapseVisible && window.windowData().collapsePlacement == WindowCollapsePlacement::Right ? buttonSide + 2.f : 0.f) + 4.f;
             float maximumX = titleBar.right() - rightControlsWidth;
             float tabX = titleBar.x + 4.f + leftControlsWidth;
             float tabTop = titleBar.y + 2.f;
@@ -224,7 +224,7 @@ namespace Mosaic
                 auto label = ui->windowLabels.find(tab);
                 StringView visibleLabel = label == ui->windowLabels.end() ? StringView("Panel") : StringView(label->second);
                 const Context::Node * tabNode = ui->findFrameNode(tab);
-                float unsavedWidth = tabNode != nullptr && tabNode->windowUnsavedDocument ? window.style->metrics.fontSize * 0.75f : 0.f;
+                float unsavedWidth = tabNode != nullptr && tabNode->windowData().unsavedDocument ? window.style->metrics.fontSize * 0.75f : 0.f;
                 float tabWidth = std::min(std::max(ui->estimateText(visibleLabel, *window.style).x + window.style->metrics.framePadding.left + window.style->metrics.framePadding.right + unsavedWidth, window.style->metrics.tabMinimumWidthBase), std::max(0.f, maximumX - tabX));
 
                 if(index == tabIndex)
@@ -388,7 +388,7 @@ namespace Mosaic
                 return true;
             case Condition::Once:
                 return onceApplied == false;
-            case Condition::FirstUseEver:
+            case Condition::FirstUse:
                 return firstUse;
             case Condition::Appearing:
                 return appearing;
@@ -397,12 +397,14 @@ namespace Mosaic
             return false;
         }
         //////////////////////////////////////////////////////////////////////////
-        void markWindowCondition(Condition condition, bool & onceApplied) noexcept
+        [[nodiscard]] bool markWindowCondition(Condition condition, bool onceApplied) noexcept
         {
             if(condition == Condition::Once)
             {
                 onceApplied = true;
             }
+
+            return onceApplied;
         }
         //////////////////////////////////////////////////////////////////////////
     } // namespace Detail
@@ -474,67 +476,94 @@ namespace Mosaic
     {
         Context::NextWindowData nextWindow = ui->nextWindow;
         ui->nextWindow = {};
+        Id requestedId = combineId(RootId, ui->localId(Detail::NodeKind::Window, key, location, false));
+        size_t existingIndex = ui->findFrameNodeIndex(requestedId);
+
+        if(existingIndex < ui->nodes.size() && ui->nodes[existingIndex].kind == Detail::NodeKind::Window)
+        {
+            Context::Node & existingWindow = ui->nodes[existingIndex];
+            uint64_t windowSubmission = ui->nextWindowSubmission++;
+            (void)ui->addWindowFrameInstance(existingIndex, windowSubmission);
+            bool previousNavigationBlocked = ui->currentNavigationBlocked;
+            uint64_t token = ui->pushScope(existingIndex, ui->currentStyle, ui->currentDisabled);
+            ui->currentWindow = existingWindow.id;
+            ui->currentWindowSubmission = windowSubmission;
+            ui->currentNavigationBlocked = previousNavigationBlocked || existingWindow.navigationBlocked;
+            bool visible = existingWindow.visible == true && existingWindow.windowData().collapsed == false;
+
+            return {ui, token, existingWindow.id, visible};
+        }
+
+        bool fitContentWidth = options.alwaysAutoResize == true || options.fitContentWidth == true;
+        bool fitContentHeight = options.alwaysAutoResize == true || options.fitContentHeight == true;
+        bool acceptsPointerInput = options.input == true && options.pointerInput == true;
+        bool acceptsNavigationInputs = options.input == true && options.navigation == true && options.navigationInputs == true;
+        bool acceptsNavigationFocus = options.input == true && options.navigation == true && options.navigationFocus == true;
         LayoutOptions layout;
         layout.orientation = options.scroll.contentOrientation;
-        layout.width = options.fitContentWidth ? Dimension(SizeRule::Content) : Dimension::fixed(options.initialBounds.width);
+        layout.width = fitContentWidth == true ? Dimension(SizeRule::Content) : Dimension::fixed(options.initialBounds.width);
         bool collapsed = options.collapsed != nullptr && *options.collapsed;
-        layout.height = collapsed ? Dimension::fixed(ui->currentStyle->metrics.windowTitleHeight) : (options.fitContentHeight ? Dimension(SizeRule::Content) : Dimension::fixed(options.initialBounds.height));
+        layout.height = collapsed ? Dimension::fixed(ui->currentStyle->metrics.windowTitleHeight) : (fitContentHeight == true ? Dimension(SizeRule::Content) : Dimension::fixed(options.initialBounds.height));
         size_t node = ui->addNode(Detail::NodeKind::Window, key, label, layout, location, SemanticRole::Window);
         Context::Node & windowNode = ui->nodes[node];
+        uint64_t windowSubmission = ui->nextWindowSubmission++;
+        windowNode.windowSubmission = windowSubmission;
+        windowNode.item = ui->addWindowFrameInstance(node, windowSubmission);
         Context::Persistent & persistentState = ui->state(windowNode);
 
-        if(persistentState.windowSettingsPolicyInitialized == false)
+        if(persistentState.windowData().settingsPolicyInitialized == false)
         {
             if(options.saveSettings == false)
             {
-                persistentState.windowInitialized = false;
-                persistentState.windowBounds = {};
+                persistentState.windowData().initialized = false;
+                persistentState.windowData().bounds = {};
             }
 
-            persistentState.windowSettingsPolicyInitialized = true;
+            persistentState.windowData().settingsPolicyInitialized = true;
         }
 
-        persistentState.windowSaveSettings = options.saveSettings;
-        bool firstUse = persistentState.windowInitialized == false;
-        bool appearing = persistentState.windowVisibleLastFrame + 1 < ui->frame.number;
+        persistentState.windowData().saveSettings = options.saveSettings;
+        bool firstUse = persistentState.windowData().initialized == false;
+        bool appearing = persistentState.windowData().visibleLastFrame + 1 < ui->frame.number;
 
-        if(persistentState.windowCollapsedInitialized == false)
+        if(persistentState.windowData().collapsedInitialized == false)
         {
-            persistentState.windowCollapsedValue = collapsed;
-            persistentState.windowCollapsedInitialized = true;
+            persistentState.windowData().collapsedValue = collapsed;
+            persistentState.windowData().collapsedInitialized = true;
         }
         else if(options.collapsed != nullptr)
         {
-            persistentState.windowCollapsedValue = *options.collapsed;
+            persistentState.windowData().collapsedValue = *options.collapsed;
         }
 
         if(nextWindow.collapsedPending == true)
         {
-            bool conditionApplies = Detail::windowConditionApplies(nextWindow.collapsedCondition, persistentState.windowCollapsedConditionApplied, firstUse, appearing == true);
+            bool conditionApplies = Detail::windowConditionApplies(nextWindow.collapsedCondition, persistentState.windowData().collapsedConditionApplied, firstUse, appearing == true);
 
             if(conditionApplies == true)
             {
-                persistentState.windowCollapsedValue = nextWindow.collapsed;
+                persistentState.windowData().collapsedValue = nextWindow.collapsed;
 
                 if(options.collapsed != nullptr)
                 {
                     *options.collapsed = nextWindow.collapsed;
                 }
 
-                Detail::markWindowCondition(nextWindow.collapsedCondition, persistentState.windowCollapsedConditionApplied);
+                persistentState.windowData().collapsedConditionApplied = Detail::markWindowCondition(nextWindow.collapsedCondition, persistentState.windowData().collapsedConditionApplied);
             }
         }
 
-        collapsed = persistentState.windowCollapsedValue;
-        windowNode.layout.height = collapsed ? Dimension::fixed(ui->currentStyle->metrics.windowTitleHeight) : (options.fitContentHeight ? Dimension(SizeRule::Content) : Dimension::fixed(options.initialBounds.height));
+        collapsed = persistentState.windowData().collapsedValue;
+        windowNode.layout.height = collapsed ? Dimension::fixed(ui->currentStyle->metrics.windowTitleHeight) : (fitContentHeight == true ? Dimension(SizeRule::Content) : Dimension::fixed(options.initialBounds.height));
         ui->windowLabels[windowNode.id] = String(label);
         windowNode.visible = options.open == nullptr || *options.open;
         windowNode.inputBlocked = windowNode.inputBlocked || options.input == false;
-        windowNode.navigationBlocked = windowNode.navigationBlocked || options.navigation == false || options.input == false;
-        windowNode.windowTitleVisible = options.titleBar;
-        windowNode.windowBackgroundVisible = options.background;
-        windowNode.windowBackgroundAlpha = std::clamp(options.backgroundAlpha, 0.f, 1.f);
-        windowNode.windowUnsavedDocument = options.unsavedDocument;
+        windowNode.navigationBlocked = windowNode.navigationBlocked || acceptsNavigationInputs == false;
+        windowNode.mutableWindowData().titleVisible = options.titleBar;
+        windowNode.mutableWindowData().menuBar = options.menuBar;
+        windowNode.mutableWindowData().backgroundVisible = options.background;
+        windowNode.mutableWindowData().backgroundAlpha = std::clamp(options.backgroundAlpha, 0.f, 1.f);
+        windowNode.mutableWindowData().unsavedDocument = options.unsavedDocument;
 
         if(options.unsavedDocument == true)
         {
@@ -574,7 +603,7 @@ namespace Mosaic
         }
 
         ui->windowDockGroups[windowNode.id] = dockGroup;
-        windowNode.windowDockGroup = dockGroup;
+        windowNode.mutableWindowData().dockGroup = dockGroup;
         DockModel * dockModel = Detail::dockModel(ui, dockGroup, dockGroup != 0);
         const DockSpaceOptions * dockSpace = Detail::dockSpaceOptions(ui, dockGroup);
         bool dockSpaceNoResize = dockSpace != nullptr && dockSpace->noResize;
@@ -582,107 +611,154 @@ namespace Mosaic
         DockNodeId dockNodeId = dockModel == nullptr ? 0 : dockModel->nodeForWindow(windowNode.id);
         const DockNode * dockNode = dockModel == nullptr ? nullptr : dockModel->node(dockNodeId);
         bool dockActive = dockNode == nullptr || dockNode->activeTab == windowNode.id;
-        windowNode.windowDockNode = dockNodeId;
-        windowNode.windowDocked = dockNodeId != 0 || (dockGroup != 0 && options.movable == false && options.resizable == false);
-        windowNode.windowDockAutoHideTabBar = options.dockAutoHideTabBar || dockSpaceAutoHideTabBar;
-        windowNode.windowCollapsed = collapsed;
-        windowNode.windowCloseVisible = options.titleBar && options.open != nullptr && (windowNode.windowDocked == false || windowNode.style->metrics.dockingNodeHasCloseButton == true);
-        windowNode.windowCollapseVisible = options.titleBar && options.collapsed != nullptr;
-        windowNode.windowCollapsePlacement = options.collapsePlacement;
-        windowNode.windowMinimumSize = options.minimumSize;
-        windowNode.windowMaximumSize = options.maximumSize;
-        windowNode.windowFitContentWidth = options.fitContentWidth;
-        windowNode.windowFitContentHeight = options.fitContentHeight;
-        windowNode.windowScrollable = options.scrollable;
-        windowNode.scrollOptions = options.scroll;
-        windowNode.windowBringToFront = options.bringToFront;
-        const PointerState * pointer = ui->input.primaryPointer();
+        windowNode.mutableWindowData().dockNode = dockNodeId;
+        windowNode.mutableWindowData().docked = dockNodeId != 0 || (dockGroup != 0 && options.movable == false && options.resizable == false);
+        windowNode.mutableWindowData().dockAutoHideTabBar = options.dockAutoHideTabBar || dockSpaceAutoHideTabBar;
+        windowNode.mutableWindowData().collapsed = collapsed;
+        windowNode.mutableWindowData().closeVisible = options.titleBar && options.open != nullptr && (windowNode.mutableWindowData().docked == false || windowNode.style->metrics.dockingNodeHasCloseButton == true);
+        WindowCollapsePlacement collapsePlacement = options.collapsePlacement;
+        bool styleCollapseVisible = true;
 
-        if(persistentState.windowZOrder == 0)
+        if(collapsePlacement == WindowCollapsePlacement::Style)
         {
-            persistentState.windowZOrder = ui->nextWindowZOrder++;
+            WindowMenuButtonPosition position = windowNode.style->metrics.windowMenuButtonPosition;
+            styleCollapseVisible = position != WindowMenuButtonPosition::None;
+            collapsePlacement = position == WindowMenuButtonPosition::Left ? WindowCollapsePlacement::Left : WindowCollapsePlacement::Right;
         }
 
-        persistentState.windowVisible = windowNode.visible && dockActive;
-        persistentState.windowAcceptsInput = options.input;
-        persistentState.windowBringToFront = options.bringToFront;
-        persistentState.windowPopup = windowNode.windowPopup;
+        windowNode.mutableWindowData().collapseVisible = options.titleBar && options.collapsed != nullptr && styleCollapseVisible == true;
+        windowNode.mutableWindowData().collapsePlacement = collapsePlacement;
+        windowNode.mutableWindowData().minimumSize = options.minimumSize;
+        windowNode.mutableWindowData().maximumSize = options.maximumSize;
+        windowNode.mutableWindowData().alwaysAutoResize = options.alwaysAutoResize;
+        windowNode.mutableWindowData().fitContentWidth = fitContentWidth;
+        windowNode.mutableWindowData().fitContentHeight = fitContentHeight;
+        windowNode.mutableWindowData().scrollable = options.scrollable;
+        windowNode.mutableScrollOptions() = options.scroll;
+        windowNode.mutableWindowData().bringToFront = options.bringToFront;
+        const PointerState * pointer = ui->input.primaryPointer();
+
+        if(persistentState.windowData().zOrder == 0)
+        {
+            persistentState.windowData().zOrder = ui->nextWindowZOrder++;
+        }
+
+        persistentState.windowData().visible = windowNode.visible && dockActive;
+        persistentState.windowData().acceptsInput = options.input;
+        persistentState.windowData().acceptsPointerInput = acceptsPointerInput;
+        persistentState.windowData().acceptsNavigationFocus = acceptsNavigationFocus;
+        persistentState.windowData().bringToFront = options.bringToFront;
+        persistentState.windowData().popup = windowNode.mutableWindowData().popup;
         persistentState.windowOwner = windowNode.id;
         windowNode.windowOwner = windowNode.id;
         ui->visibleWindowIds.push_back(windowNode.id);
 
-        if(pointer != nullptr && pointer->isPressed() == true && ui->pointerWindow == windowNode.id && options.bringToFront == true)
+        if(fitContentWidth == false)
         {
-            persistentState.windowZOrder = ui->nextWindowZOrder++;
+            persistentState.windowData().contentWidthFitted = false;
         }
 
-        windowNode.windowZOrder = persistentState.windowZOrder;
+        if(fitContentHeight == false)
+        {
+            persistentState.windowData().contentHeightFitted = false;
+        }
+
+        if(pointer != nullptr && pointer->isPressed() == true && ui->pointerWindow == windowNode.id && options.bringToFront == true)
+        {
+            persistentState.windowData().zOrder = ui->nextWindowZOrder++;
+        }
+
+        windowNode.mutableWindowData().zOrder = persistentState.windowData().zOrder;
 
         if(forcedUndock == true && persistentState.lastBounds.empty() == false)
         {
-            persistentState.windowBounds = persistentState.lastBounds;
-            persistentState.windowInitialized = true;
+            persistentState.windowData().bounds = persistentState.lastBounds;
+            persistentState.windowData().initialized = true;
         }
 
-        if(persistentState.windowInitialized == false || (options.movable == false && options.resizable == false))
+        if(persistentState.windowData().initialized == false || (options.movable == false && options.resizable == false))
         {
-            persistentState.windowBounds = options.initialBounds;
-            persistentState.windowInitialized = true;
+            persistentState.windowData().bounds = options.initialBounds;
+            persistentState.windowData().initialized = true;
         }
 
         if(nextWindow.positionPending == true)
         {
-            bool conditionApplies = Detail::windowConditionApplies(nextWindow.positionCondition, persistentState.windowPositionConditionApplied, firstUse, appearing == true);
+            bool conditionApplies = Detail::windowConditionApplies(nextWindow.positionCondition, persistentState.windowData().positionConditionApplied, firstUse, appearing == true);
 
             if(conditionApplies == true)
             {
-                persistentState.windowBounds.x = nextWindow.position.x;
-                persistentState.windowBounds.y = nextWindow.position.y;
-                Detail::markWindowCondition(nextWindow.positionCondition, persistentState.windowPositionConditionApplied);
+                persistentState.windowData().bounds.x = nextWindow.position.x;
+                persistentState.windowData().bounds.y = nextWindow.position.y;
+                persistentState.windowData().positionConditionApplied = Detail::markWindowCondition(nextWindow.positionCondition, persistentState.windowData().positionConditionApplied);
             }
         }
 
         if(nextWindow.sizePending == true)
         {
-            bool conditionApplies = Detail::windowConditionApplies(nextWindow.sizeCondition, persistentState.windowSizeConditionApplied, firstUse, appearing == true);
+            bool conditionApplies = Detail::windowConditionApplies(nextWindow.sizeCondition, persistentState.windowData().sizeConditionApplied, firstUse, appearing == true);
 
             if(conditionApplies == true)
             {
-                persistentState.windowBounds.width = std::max(0.f, nextWindow.size.x);
-                persistentState.windowBounds.height = std::max(0.f, nextWindow.size.y);
-                Detail::markWindowCondition(nextWindow.sizeCondition, persistentState.windowSizeConditionApplied);
+                if(nextWindow.size.x > 0.f)
+                {
+                    persistentState.windowData().bounds.width = nextWindow.size.x;
+                }
+
+                if(nextWindow.size.y > 0.f)
+                {
+                    persistentState.windowData().bounds.height = nextWindow.size.y;
+                }
+
+                persistentState.windowData().sizeConditionApplied = Detail::markWindowCondition(nextWindow.sizeCondition, persistentState.windowData().sizeConditionApplied);
             }
         }
 
         if(nextWindow.contentSizePending == true)
         {
-            bool conditionApplies = Detail::windowConditionApplies(nextWindow.contentSizeCondition, persistentState.windowContentSizeConditionApplied, firstUse, appearing == true);
+            bool conditionApplies = Detail::windowConditionApplies(nextWindow.contentSizeCondition, persistentState.windowData().contentSizeConditionApplied, firstUse, appearing == true);
 
             if(conditionApplies == true)
             {
-                windowNode.windowContentSizeExplicit = true;
-                windowNode.windowContentSize = {std::max(0.f, nextWindow.contentSize.x), std::max(0.f, nextWindow.contentSize.y)};
-                Detail::markWindowCondition(nextWindow.contentSizeCondition, persistentState.windowContentSizeConditionApplied);
+                windowNode.mutableWindowData().contentSizeExplicit = true;
+                windowNode.mutableWindowData().contentSize = {std::max(0.f, nextWindow.contentSize.x), std::max(0.f, nextWindow.contentSize.y)};
+                persistentState.windowData().contentSizeConditionApplied = Detail::markWindowCondition(nextWindow.contentSizeCondition, persistentState.windowData().contentSizeConditionApplied);
             }
         }
 
         if((nextWindow.focusPending == true || (options.focusOnAppearing == true && appearing == true)) && windowNode.visible == true && dockActive == true)
         {
-            persistentState.windowZOrder = ui->nextWindowZOrder++;
+            persistentState.windowData().zOrder = ui->nextWindowZOrder++;
             ui->focused = windowNode.id;
             ui->pointerFocused = windowNode.id;
-            ui->navigationFocused = windowNode.id;
-            windowNode.windowZOrder = persistentState.windowZOrder;
+
+            if(acceptsNavigationFocus == true)
+            {
+                ui->navigationFocused = windowNode.id;
+            }
+            windowNode.mutableWindowData().zOrder = persistentState.windowData().zOrder;
         }
 
         Rect available = ui->viewport.workArea.empty() == true ? ui->viewport.bounds : ui->viewport.workArea;
-        persistentState.windowBounds = Detail::resizedWindowBounds(persistentState.windowBounds, static_cast<uint8_t>(Detail::WindowResizeRight | Detail::WindowResizeBottom), {}, options.minimumSize, options.maximumSize, available);
-        persistentState.windowBounds = Detail::constrainResizedWindowBounds(persistentState.windowBounds, static_cast<uint8_t>(Detail::WindowResizeRight | Detail::WindowResizeBottom), persistentState.windowBounds, options, available);
-        persistentState.windowBounds = Detail::constrainWindowBounds(persistentState.windowBounds, available);
+        Rect windowAvailable = available;
+
+        if(dockNodeId == 0)
+        {
+            float horizontalPadding = std::clamp(windowNode.style->metrics.displayWindowPadding.x, 0.f, available.width * 0.5f);
+            float verticalPadding = std::clamp(windowNode.style->metrics.displayWindowPadding.y, 0.f, available.height * 0.5f);
+            windowAvailable.x += horizontalPadding;
+            windowAvailable.y += verticalPadding;
+            windowAvailable.width = std::max(0.f, windowAvailable.width - horizontalPadding * 2.f);
+            windowAvailable.height = std::max(0.f, windowAvailable.height - verticalPadding * 2.f);
+        }
+
+        persistentState.windowData().bounds = Detail::resizedWindowBounds(persistentState.windowData().bounds, static_cast<uint8_t>(Detail::WindowResizeRight | Detail::WindowResizeBottom), {}, options.minimumSize, options.maximumSize, available);
+        persistentState.windowData().bounds = Detail::constrainResizedWindowBounds(persistentState.windowData().bounds, static_cast<uint8_t>(Detail::WindowResizeRight | Detail::WindowResizeBottom), persistentState.windowData().bounds, options, available);
+        persistentState.windowData().bounds = Detail::constrainWindowBounds(persistentState.windowData().bounds, available);
 
         if(windowNode.visible == true && dockActive == true)
         {
-            persistentState.windowVisibleLastFrame = ui->frame.number;
+            persistentState.windowData().visibleLastFrame = ui->frame.number;
         }
 
         Rect dockHostBounds;
@@ -699,21 +775,21 @@ namespace Mosaic
         Rect closeButton;
         Rect collapseButton;
 
-        if(windowNode.windowCloseVisible == true)
+        if(windowNode.mutableWindowData().closeVisible == true)
         {
             closeButton = {buttonRight - buttonSide, previousTitle.y + (previousTitle.height - buttonSide) * 0.5f, buttonSide, buttonSide};
             buttonRight = closeButton.x - 2.f;
         }
 
-        if(windowNode.windowCollapseVisible == true)
+        if(windowNode.mutableWindowData().collapseVisible == true)
         {
-            collapseButton = options.collapsePlacement == WindowCollapsePlacement::Left ? Rect{previousTitle.x + 4.f, previousTitle.y + (previousTitle.height - buttonSide) * 0.5f, buttonSide, buttonSide} : Rect{buttonRight - buttonSide, previousTitle.y + (previousTitle.height - buttonSide) * 0.5f, buttonSide, buttonSide};
+            collapseButton = windowNode.mutableWindowData().collapsePlacement == WindowCollapsePlacement::Left ? Rect{previousTitle.x + 4.f, previousTitle.y + (previousTitle.height - buttonSide) * 0.5f, buttonSide, buttonSide} : Rect{buttonRight - buttonSide, previousTitle.y + (previousTitle.height - buttonSide) * 0.5f, buttonSide, buttonSide};
         }
 
         bool dockHostCornerOwner = dockNodeId != 0 && std::abs(persistentState.lastBounds.right() - dockHostBounds.right()) <= 1.f && std::abs(persistentState.lastBounds.bottom() - dockHostBounds.bottom()) <= 1.f;
         Rect resizeBounds = dockNodeId != 0 ? dockHostBounds : persistentState.lastBounds;
         float resizeHitThickness = std::max(1.f, windowNode.style->metrics.windowBorderSize + windowNode.style->metrics.windowBorderHoverPadding);
-        bool canPoint = windowNode.visible && dockActive == true && windowNode.disabled == false && windowNode.inputBlocked == false && Detail::inputLayerBlocked(ui, windowNode) == false && pointer != nullptr && (ui->pointerWindow == InvalidId || ui->pointerWindow == windowNode.id || ui->captured == windowNode.id) && (ui->captured == InvalidId || ui->captured == windowNode.id);
+        bool canPoint = windowNode.visible && dockActive == true && acceptsPointerInput == true && windowNode.disabled == false && windowNode.inputBlocked == false && Detail::inputLayerBlocked(ui, windowNode) == false && pointer != nullptr && (ui->pointerWindow == InvalidId || ui->pointerWindow == windowNode.id || ui->captured == windowNode.id) && (ui->captured == InvalidId || ui->captured == windowNode.id);
         Detail::WindowScrollResult scrollInteraction = Detail::windowScrollBehavior(ui, windowNode, persistentState, canPoint);
         uint8_t resizeEdges = pointer == nullptr || scrollInteraction.hovered == true || scrollInteraction.active ? Detail::WindowResizeNone : Detail::windowResizeEdgesAt(resizeBounds, pointer->position, resizeHitThickness);
 
@@ -766,7 +842,11 @@ namespace Mosaic
                     dockTabPressed = true;
                     (void)dockModel->activate(tab);
                     ui->focused = tab;
-                    ui->navigationFocused = tab;
+
+                    if(acceptsNavigationInputs == true)
+                    {
+                        ui->navigationFocused = tab;
+                    }
 
                     if(options.movable == true)
                     {
@@ -797,16 +877,16 @@ namespace Mosaic
 
                     if(dockModel != nullptr && dockModel->undock(windowNode.id) == true)
                     {
-                        windowNode.windowDockNode = 0;
-                        windowNode.windowDocked = false;
+                        windowNode.mutableWindowData().dockNode = 0;
+                        windowNode.mutableWindowData().docked = false;
                         ui->dockingDragWindow = windowNode.id;
                         ui->dockingTabDragWindow = InvalidId;
                         ui->dockingTabDragNode = 0;
-                        persistentState.windowInteraction = 3;
-                        persistentState.draggingWindow = true;
-                        persistentState.windowBounds = sourceBounds;
-                        persistentState.windowInitialized = true;
-                        persistentState.dragOffset = pointer->position - Vec2{sourceBounds.x, sourceBounds.y};
+                        persistentState.windowData().interaction = 3;
+                        persistentState.windowData().dragging = true;
+                        persistentState.windowData().bounds = sourceBounds;
+                        persistentState.windowData().initialized = true;
+                        persistentState.windowData().dragOffset = pointer->position - Vec2{sourceBounds.x, sourceBounds.y};
                     }
                 }
                 else if(std::abs(dragDistance.x) >= 5.f)
@@ -847,18 +927,19 @@ namespace Mosaic
                 ui->dockingTabDragWindow = InvalidId;
                 ui->dockingTabDragNode = 0;
                 ui->captured = InvalidId;
+                ui->capturedItem = {};
                 ui->capturedPointer = 0;
             }
         }
 
-        windowNode.windowCloseHovered = canPoint && closeButton.contains(pointer->position);
-        windowNode.windowCollapseHovered = canPoint && collapseButton.contains(pointer->position);
-        windowNode.windowResizeHovered = canPoint && options.resizable == true && dockSpaceNoResize == false && resizeEdges != Detail::WindowResizeNone;
-        bool activeResize = ui->captured == windowNode.id && persistentState.windowInteraction == 6;
-        windowNode.windowResizeEdges = activeResize ? persistentState.windowResizeEdges : resizeEdges;
-        windowNode.windowResizable = options.resizable && dockSpaceNoResize == false && (dockNodeId == 0 || dockHostCornerOwner == true || dockHostPointerOwner == true || persistentState.resizingDockHost == true);
-        windowNode.windowResizeGripVisible = options.resizable && dockSpaceNoResize == false && (dockNodeId == 0 || dockHostCornerOwner == true);
-        windowNode.windowResizeBounds = resizeBounds;
+        windowNode.mutableWindowData().closeHovered = canPoint && closeButton.contains(pointer->position);
+        windowNode.mutableWindowData().collapseHovered = canPoint && collapseButton.contains(pointer->position);
+        windowNode.mutableWindowData().resizeHovered = canPoint && options.resizable == true && dockSpaceNoResize == false && resizeEdges != Detail::WindowResizeNone;
+        bool activeResize = ui->captured == windowNode.id && persistentState.windowData().interaction == 6;
+        windowNode.mutableWindowData().resizeEdges = activeResize ? persistentState.windowData().resizeEdges : resizeEdges;
+        windowNode.mutableWindowData().resizable = options.resizable && dockSpaceNoResize == false && (dockNodeId == 0 || dockHostCornerOwner == true || dockHostPointerOwner == true || persistentState.windowData().resizingDockHost == true);
+        windowNode.mutableWindowData().resizeGripVisible = options.resizable && dockSpaceNoResize == false && (dockNodeId == 0 || dockHostCornerOwner == true);
+        windowNode.mutableWindowData().resizeBounds = resizeBounds;
 
         bool autoFitResize = false;
         bool requestAutoFit = scrollInteraction.consumedPress == false;
@@ -868,7 +949,7 @@ namespace Mosaic
             requestAutoFit = false;
         }
 
-        if(windowNode.windowResizeHovered == false)
+        if(windowNode.mutableWindowData().resizeHovered == false)
         {
             requestAutoFit = false;
         }
@@ -891,9 +972,9 @@ namespace Mosaic
             }
         }
 
-        if(persistentState.scrollContentSize.x <= 0.f)
+        if(persistentState.scrollData().contentSize.x <= 0.f)
         {
-            if(persistentState.scrollContentSize.y <= 0.f)
+            if(persistentState.scrollData().contentSize.y <= 0.f)
             {
                 requestAutoFit = false;
             }
@@ -901,11 +982,11 @@ namespace Mosaic
 
         if(requestAutoFit == true)
         {
-            Rect fitted = persistentState.windowBounds;
-            float verticalScrollbar = persistentState.scrollRange.y > 0.f ? windowNode.style->metrics.scrollbarWidth + windowNode.style->metrics.gap : 0.f;
-            float horizontalScrollbar = persistentState.scrollRange.x > 0.f ? windowNode.style->metrics.scrollbarWidth + windowNode.style->metrics.gap : 0.f;
-            float desiredWidth = persistentState.scrollContentSize.x + windowNode.layout.padding.left + windowNode.layout.padding.right + verticalScrollbar;
-            float desiredHeight = persistentState.scrollContentSize.y + windowNode.layout.padding.top + windowNode.layout.padding.bottom + horizontalScrollbar + (windowNode.windowTitleVisible ? windowNode.style->metrics.windowTitleHeight : 0.f);
+            Rect fitted = persistentState.windowData().bounds;
+            float verticalScrollbar = persistentState.scrollData().range.y > 0.f ? windowNode.style->metrics.scrollbarWidth + windowNode.style->metrics.gap : 0.f;
+            float horizontalScrollbar = persistentState.scrollData().range.x > 0.f ? windowNode.style->metrics.scrollbarWidth + windowNode.style->metrics.gap : 0.f;
+            float desiredWidth = persistentState.scrollData().contentSize.x + windowNode.layout.padding.left + windowNode.layout.padding.right + verticalScrollbar;
+            float desiredHeight = persistentState.scrollData().contentSize.y + windowNode.layout.padding.top + windowNode.layout.padding.bottom + horizontalScrollbar + (windowNode.mutableWindowData().titleVisible ? windowNode.style->metrics.windowTitleHeight : 0.f);
 
             if((resizeEdges & (Detail::WindowResizeLeft | Detail::WindowResizeRight)) != 0)
             {
@@ -929,12 +1010,12 @@ namespace Mosaic
                 }
             }
 
-            persistentState.windowBounds = Detail::resizedWindowBounds(fitted, resizeEdges, {}, options.minimumSize, options.maximumSize, available);
-            persistentState.windowBounds = Detail::constrainWindowBounds(persistentState.windowBounds, available);
+            persistentState.windowData().bounds = Detail::resizedWindowBounds(fitted, resizeEdges, {}, options.minimumSize, options.maximumSize, available);
+            persistentState.windowData().bounds = Detail::constrainWindowBounds(persistentState.windowData().bounds, available);
             autoFitResize = true;
         }
 
-        if(persistentState.windowBackgroundMovePending == true)
+        if(persistentState.windowData().backgroundMovePending == true)
         {
             bool cancelBackgroundMove = ui->configuration.windowMoveFromTitleBarOnly;
 
@@ -971,7 +1052,7 @@ namespace Mosaic
 
             if(cancelBackgroundMove == true)
             {
-                persistentState.windowBackgroundMovePending = false;
+                persistentState.windowData().backgroundMovePending = false;
             }
             else
             {
@@ -984,10 +1065,10 @@ namespace Mosaic
                     ui->capturedPointer = pointer->id;
                     ui->active = windowNode.id;
                     ui->focused = windowNode.id;
-                    persistentState.draggingWindow = true;
-                    persistentState.windowInteraction = 3;
-                    persistentState.dragOffset = pointer->pressPosition(PointerButton::Primary) - Vec2{persistentState.windowBounds.x, persistentState.windowBounds.y};
-                    persistentState.windowBackgroundMovePending = false;
+                    persistentState.windowData().dragging = true;
+                    persistentState.windowData().interaction = 3;
+                    persistentState.windowData().dragOffset = pointer->pressPosition(PointerButton::Primary) - Vec2{persistentState.windowData().bounds.x, persistentState.windowData().bounds.y};
+                    persistentState.windowData().backgroundMovePending = false;
 
                     if(dockGroup != 0)
                     {
@@ -1021,21 +1102,21 @@ namespace Mosaic
             beginResize = false;
         }
 
-        if(windowNode.windowResizeHovered == false)
+        if(windowNode.mutableWindowData().resizeHovered == false)
         {
             beginResize = false;
         }
 
         bool pressClose = actionPress;
 
-        if(windowNode.windowCloseHovered == false)
+        if(windowNode.mutableWindowData().closeHovered == false)
         {
             pressClose = false;
         }
 
         bool pressCollapse = actionPress;
 
-        if(windowNode.windowCollapseHovered == false)
+        if(windowNode.mutableWindowData().collapseHovered == false)
         {
             pressCollapse = false;
         }
@@ -1162,35 +1243,35 @@ namespace Mosaic
             ui->capturedPointer = pointer->id;
             ui->active = windowNode.id;
             ui->focused = windowNode.id;
-            persistentState.windowInteraction = 6;
+            persistentState.windowData().interaction = 6;
             persistentState.dragStartPosition = pointer->position;
-            persistentState.windowResizeStartBounds = resizeBounds;
-            persistentState.windowResizeEdges = resizeEdges;
-            persistentState.resizingDockHost = dockNodeId != 0;
+            persistentState.windowData().resizeStartBounds = resizeBounds;
+            persistentState.windowData().resizeEdges = resizeEdges;
+            persistentState.windowData().resizingDockHost = dockNodeId != 0;
         }
         else if(pressClose == true)
         {
             ui->captured = windowNode.id;
             ui->active = windowNode.id;
             ui->focused = windowNode.id;
-            persistentState.windowInteraction = 2;
+            persistentState.windowData().interaction = 2;
         }
         else if(pressCollapse == true)
         {
             ui->captured = windowNode.id;
             ui->active = windowNode.id;
             ui->focused = windowNode.id;
-            persistentState.windowInteraction = 1;
+            persistentState.windowData().interaction = 1;
         }
         else if(doubleClickTitle == true)
         {
             *options.collapsed = !*options.collapsed;
-            windowNode.windowCollapsed = *options.collapsed;
+            windowNode.mutableWindowData().collapsed = *options.collapsed;
             windowNode.layout.height = Dimension::fixed(*options.collapsed ? windowNode.style->metrics.windowTitleHeight : options.initialBounds.height);
-            persistentState.draggingWindow = false;
-            persistentState.windowInteraction = 0;
+            persistentState.windowData().dragging = false;
+            persistentState.windowData().interaction = 0;
             ui->focused = windowNode.id;
-            ui->frame.events.push_back({EventType::Change, windowNode.id, ui->nodePath(windowNode), windowNode.file, windowNode.line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Change, windowNode.id, ui->nodePath(windowNode), windowNode.debugData().file, windowNode.debugData().line, ui->input.timestamp});
         }
         else if(detachDockTab == true)
         {
@@ -1198,18 +1279,18 @@ namespace Mosaic
             ui->capturedPointer = pointer->id;
             ui->active = windowNode.id;
             ui->focused = windowNode.id;
-            persistentState.windowInteraction = 5;
-            persistentState.draggingWindow = true;
-            persistentState.dragOffset = pointer->position - Vec2{dockHostBounds.x, dockHostBounds.y};
+            persistentState.windowData().interaction = 5;
+            persistentState.windowData().dragging = true;
+            persistentState.windowData().dragOffset = pointer->position - Vec2{dockHostBounds.x, dockHostBounds.y};
         }
         else if(moveFromTitle == true)
         {
             ui->captured = windowNode.id;
             ui->active = windowNode.id;
             ui->focused = windowNode.id;
-            persistentState.draggingWindow = true;
-            persistentState.windowInteraction = 3;
-            persistentState.dragOffset = pointer->position - Vec2{persistentState.windowBounds.x, persistentState.windowBounds.y};
+            persistentState.windowData().dragging = true;
+            persistentState.windowData().interaction = 3;
+            persistentState.windowData().dragOffset = pointer->position - Vec2{persistentState.windowData().bounds.x, persistentState.windowData().bounds.y};
 
             if(dockGroup != 0)
             {
@@ -1218,22 +1299,22 @@ namespace Mosaic
         }
         else if(prepareBackgroundMove == true)
         {
-            persistentState.windowBackgroundMovePending = true;
+            persistentState.windowData().backgroundMovePending = true;
         }
 
-        if(pointer != nullptr && ui->captured == windowNode.id && persistentState.windowInteraction == 5 && persistentState.draggingWindow == true && pointer->isDown() == true)
+        if(pointer != nullptr && ui->captured == windowNode.id && persistentState.windowData().interaction == 5 && persistentState.windowData().dragging == true && pointer->isDown() == true)
         {
-            dockHostBounds.x = pointer->position.x - persistentState.dragOffset.x;
-            dockHostBounds.y = pointer->position.y - persistentState.dragOffset.y;
+            dockHostBounds.x = pointer->position.x - persistentState.windowData().dragOffset.x;
+            dockHostBounds.y = pointer->position.y - persistentState.windowData().dragOffset.y;
             dockHostBounds = Detail::constrainWindowBounds(dockHostBounds, available);
             Detail::setDockArea(ui, dockGroup, dockHostBounds);
         }
 
-        if(pointer != nullptr && ui->captured == windowNode.id && persistentState.windowInteraction == 3 && persistentState.draggingWindow == true && pointer->isDown() == true)
+        if(pointer != nullptr && ui->captured == windowNode.id && persistentState.windowData().interaction == 3 && persistentState.windowData().dragging == true && pointer->isDown() == true)
         {
-            persistentState.windowBounds.x = pointer->position.x - persistentState.dragOffset.x;
-            persistentState.windowBounds.y = pointer->position.y - persistentState.dragOffset.y;
-            persistentState.windowBounds = Detail::constrainWindowBounds(persistentState.windowBounds, available);
+            persistentState.windowData().bounds.x = pointer->position.x - persistentState.windowData().dragOffset.x;
+            persistentState.windowData().bounds.y = pointer->position.y - persistentState.windowData().dragOffset.y;
+            persistentState.windowData().bounds = Detail::constrainWindowBounds(persistentState.windowData().bounds, windowAvailable);
             ui->dockingPreviewNode = 0;
             ui->dockingPreviewTargetWindow = InvalidId;
             ui->dockingTargetBounds = {};
@@ -1299,7 +1380,7 @@ namespace Mosaic
                             continue;
                         }
 
-                        if(candidate->windowDockGroup != dockGroup)
+                        if(candidate->windowData().dockGroup != dockGroup)
                         {
                             continue;
                         }
@@ -1376,7 +1457,9 @@ namespace Mosaic
                     DockPlacement placement = DockPlacement::Center;
                     bool dockingModifier = ui->configuration.dockingWithShift == false || ui->input.modifiers.shift == true;
                     bool noSplit = ui->configuration.dockingNoSplit == true || (dockSpace != nullptr && dockSpace->noSplit == true);
-                    bool noMerge = ui->configuration.dockingNoMerge == true || (dockSpace != nullptr && dockSpace->noMerge == true);
+                    bool noMerge = ui->configuration.dockingNoDockingOver == true;
+                    noMerge = noMerge == true || ui->configuration.dockingNoMerge == true;
+                    noMerge = noMerge == true || (dockSpace != nullptr && dockSpace->noMerge == true);
                     bool centralBlocked = dockSpace != nullptr && dockSpace->noDockingOverCentralNode == true && dockModel != nullptr && targetNode == dockModel->centralNode();
                     bool placementFound = Detail::dockPlacementAt(targets, pointer->position, &placement);
                     bool splitBlocked = noSplit == true && placement != DockPlacement::Center;
@@ -1394,25 +1477,26 @@ namespace Mosaic
             }
         }
 
-        if(pointer != nullptr && ui->captured == windowNode.id && persistentState.windowInteraction == 6 && pointer->isDown() == true)
+        if(pointer != nullptr && ui->captured == windowNode.id && persistentState.windowData().interaction == 6 && pointer->isDown() == true)
         {
             Vec2 delta = pointer->position - persistentState.dragStartPosition;
-            Rect resizedBounds = Detail::resizedWindowBounds(persistentState.windowResizeStartBounds, persistentState.windowResizeEdges, delta, options.minimumSize, options.maximumSize, available);
-            resizedBounds = Detail::constrainResizedWindowBounds(persistentState.windowResizeStartBounds, persistentState.windowResizeEdges, resizedBounds, options, available);
+            Rect resizeAvailable = persistentState.windowData().resizingDockHost == true ? available : windowAvailable;
+            Rect resizedBounds = Detail::resizedWindowBounds(persistentState.windowData().resizeStartBounds, persistentState.windowData().resizeEdges, delta, options.minimumSize, options.maximumSize, resizeAvailable);
+            resizedBounds = Detail::constrainResizedWindowBounds(persistentState.windowData().resizeStartBounds, persistentState.windowData().resizeEdges, resizedBounds, options, resizeAvailable);
 
-            if(persistentState.resizingDockHost == true)
+            if(persistentState.windowData().resizingDockHost == true)
             {
                 Detail::setDockArea(ui, dockGroup, resizedBounds);
             }
             else
             {
-                persistentState.windowBounds = resizedBounds;
+                persistentState.windowData().bounds = resizedBounds;
             }
         }
 
         if(pointer != nullptr && ui->captured == windowNode.id && pointer->isReleased() == true)
         {
-            bool completeDocking = persistentState.windowInteraction == 3;
+            bool completeDocking = persistentState.windowData().interaction == 3;
 
             if(ui->dockingDragWindow != windowNode.id)
             {
@@ -1432,18 +1516,18 @@ namespace Mosaic
                 }
             }
 
-            if(persistentState.windowInteraction == 1 && options.collapsed != nullptr && collapseButton.contains(pointer->position) == true)
+            if(persistentState.windowData().interaction == 1 && options.collapsed != nullptr && collapseButton.contains(pointer->position) == true)
             {
                 *options.collapsed = !*options.collapsed;
-                windowNode.windowCollapsed = *options.collapsed;
+                windowNode.mutableWindowData().collapsed = *options.collapsed;
                 windowNode.layout.height = Dimension::fixed(*options.collapsed ? windowNode.style->metrics.windowTitleHeight : options.initialBounds.height);
-                ui->frame.events.push_back({EventType::Change, windowNode.id, ui->nodePath(windowNode), windowNode.file, windowNode.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Change, windowNode.id, ui->nodePath(windowNode), windowNode.debugData().file, windowNode.debugData().line, ui->input.timestamp});
             }
-            else if(persistentState.windowInteraction == 2 && options.open != nullptr && closeButton.contains(pointer->position) == true)
+            else if(persistentState.windowData().interaction == 2 && options.open != nullptr && closeButton.contains(pointer->position) == true)
             {
                 *options.open = false;
                 windowNode.visible = false;
-                ui->frame.events.push_back({EventType::Change, windowNode.id, ui->nodePath(windowNode), windowNode.file, windowNode.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Change, windowNode.id, ui->nodePath(windowNode), windowNode.debugData().file, windowNode.debugData().line, ui->input.timestamp});
             }
             else if(completeDocking == true)
             {
@@ -1467,12 +1551,12 @@ namespace Mosaic
                 }
             }
 
-            persistentState.draggingWindow = false;
-            persistentState.draggingScrollbar = false;
-            persistentState.draggingScrollAxis = 0;
-            persistentState.resizingDockHost = false;
-            persistentState.windowResizeEdges = Detail::WindowResizeNone;
-            persistentState.windowInteraction = 0;
+            persistentState.windowData().dragging = false;
+            persistentState.scrollData().draggingScrollbar = false;
+            persistentState.scrollData().draggingAxis = 0;
+            persistentState.windowData().resizingDockHost = false;
+            persistentState.windowData().resizeEdges = Detail::WindowResizeNone;
+            persistentState.windowData().interaction = 0;
 
             if(ui->dockingDragWindow == windowNode.id)
             {
@@ -1484,12 +1568,14 @@ namespace Mosaic
             }
 
             ui->captured = InvalidId;
+            ui->capturedItem = {};
             ui->active = InvalidId;
+            ui->activeItem = {};
         }
 
         Response windowResponse;
         windowResponse.id = windowNode.id;
-        Detail::setFlag(windowResponse, 0, canPoint && (previousTitle.contains(pointer->position) || windowNode.windowResizeHovered == true || scrollInteraction.hovered == true));
+        Detail::setFlag(windowResponse, 0, canPoint && (previousTitle.contains(pointer->position) || windowNode.mutableWindowData().resizeHovered == true || scrollInteraction.hovered == true));
         Detail::setFlag(windowResponse, 1, ui->captured == windowNode.id || scrollInteraction.active == true);
         Detail::setFlag(windowResponse, 6, autoFitResize || scrollInteraction.changed == true);
         Detail::setFlag(windowResponse, 2, ui->focused == windowNode.id);
@@ -1497,9 +1583,25 @@ namespace Mosaic
         bool previousNavigationBlocked = ui->currentNavigationBlocked;
         uint64_t token = ui->pushScope(node, ui->currentStyle, ui->currentDisabled);
         ui->currentWindow = windowNode.id;
-        ui->currentNavigationBlocked = previousNavigationBlocked || options.navigation == false;
+        ui->currentWindowSubmission = windowSubmission;
+        ui->currentNavigationBlocked = previousNavigationBlocked || acceptsNavigationInputs == false;
 
-        return {ui, token, windowNode.id, windowNode.visible && dockActive == true && windowNode.windowCollapsed == false};
+        bool debugReturnFalse = false;
+        ++ui->debugBeginCall;
+
+        if(ui->configuration.debugBeginReturnValueOnce == true && ui->debugBeginOnceConsumed == false)
+        {
+            ui->debugBeginOnceConsumed = true;
+            debugReturnFalse = true;
+        }
+
+        if(ui->configuration.debugBeginReturnValueLoop == true)
+        {
+            uint64_t phase = ui->frame.number / 24U + ui->debugBeginCall;
+            debugReturnFalse = phase % 5U == 0U;
+        }
+
+        return {ui, token, windowNode.id, windowNode.visible && dockActive == true && windowNode.mutableWindowData().collapsed == false && debugReturnFalse == false};
     }
     //////////////////////////////////////////////////////////////////////////
 } // namespace Mosaic

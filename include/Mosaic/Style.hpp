@@ -10,6 +10,29 @@ namespace Mosaic
         Right
     };
 
+    enum class WindowMenuButtonPosition : uint8_t
+    {
+        None,
+        Left,
+        Right
+    };
+
+    enum class TreeLineMode : uint8_t
+    {
+        Style,
+        None,
+        Full,
+        ToNodes
+    };
+
+    enum class TooltipDelay : uint8_t
+    {
+        Default,
+        None,
+        Short,
+        Normal
+    };
+
     struct StyleColors
     {
         Color background = Color::fromBytes(24, 26, 31);
@@ -151,10 +174,17 @@ namespace Mosaic
         Vec2 separatorTextPadding = {8.f, 3.f};
         float tableAngledHeadersAngleDegrees = 35.f;
         float tableAngledHeadersTextAlignment = 0.5f;
+        TreeLineMode treeLineMode = TreeLineMode::None;
         float treeLinesSize = 1.f;
+        float treeLinesRounding = 0.f;
         float logarithmicSliderDeadzone = 4.f;
         float colorMarkerSize = 3.f;
+        float imageRounding = 0.f;
+        float imageBorderSize = 0.f;
+        Vec2 displayWindowPadding = {19.f, 19.f};
+        Vec2 displaySafeAreaPadding = {3.f, 3.f};
         ColorButtonPosition colorButtonPosition = ColorButtonPosition::Right;
+        WindowMenuButtonPosition windowMenuButtonPosition = WindowMenuButtonPosition::Right;
         bool dockingNodeHasCloseButton = true;
 
         [[nodiscard]] constexpr bool operator==(const StyleMetrics &) const noexcept = default;
@@ -166,6 +196,14 @@ namespace Mosaic
         // hover cursors are suppressed, so the same UI can be used on touch-only hardware.
         bool hoverEnabled = true;
         bool animationsEnabled = true;
+        bool antiAliasedLines = true;
+        bool antiAliasedLinesUseTexture = false;
+        bool antiAliasedFill = true;
+        uint8_t curveTessellationQuality = 24;
+        uint8_t ellipseTessellationQuality = 32;
+        uint8_t rectangleTessellationQuality = 8;
+        float curveTessellationMaximumError = 1.6f;
+        float circleTessellationMaximumError = 0.3f;
         float alpha = 1.f;
         float disabledAlpha = 0.6f;
         float hoverAnimationDuration = 0.12f;
@@ -179,7 +217,13 @@ namespace Mosaic
         // Keep sub-step movement useful by accumulating one step over roughly five pixels.
         float dragSpeedMinimumStepRatio = 0.2f;
         float tooltipHoverDelay = 0.25f;
+        float tooltipShortDelay = 0.25f;
+        float tooltipNormalDelay = 0.40f;
         float tooltipStationaryDelay = 0.15f;
+        TooltipDelay tooltipMouseDelay = TooltipDelay::Short;
+        bool tooltipMouseStationary = true;
+        bool tooltipMouseSharedDelay = true;
+        bool tooltipNavigationFocus = true;
 
         [[nodiscard]] constexpr bool operator==(const StyleBehavior &) const noexcept = default;
     };

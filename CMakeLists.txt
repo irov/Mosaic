@@ -12,10 +12,10 @@ option(MOSAIC_WARNINGS_AS_ERRORS "Treat Mosaic compiler warnings as errors" ${PR
 set(MOSAIC_GRAPHICS_INCLUDE "" CACHE STRING "Graphics include directories supplied by the host")
 set(MOSAIC_GRAPHICS_LIBS "" CACHE STRING "Graphics libraries supplied by the host")
 set(MOSAIC_GRAPHICS_DEPENDENCY "" CACHE STRING "Optional target which prepares the external Graphics library")
+set(MOSAIC_GRAPHICS_TARGET "" CACHE STRING "Existing Graphics CMake target supplied by the host")
+set(MOSAIC_GRAPHICS_SOURCE_DIR "" CACHE PATH "Graphics source checkout added directly to this build")
 set(MOSAIC_GRAPHICS_GIT_REPOSITORY "https://github.com/irov/graphics.git" CACHE STRING
     "Git repository used to download Graphics")
-set(MOSAIC_GRAPHICS_GIT_TAG "76941ce66700a9cf8a8e67eed49e0f1f184d3687" CACHE STRING
-    "Graphics revision downloaded by Mosaic")
 
 function(mosaic_target_warnings target)
     if(MSVC)
@@ -42,24 +42,54 @@ function(mosaic_target_warnings target)
     endif()
 endfunction()
 
+set(mosaic_graphics_mode_count 0)
+if(MOSAIC_GRAPHICS_TARGET)
+    math(EXPR mosaic_graphics_mode_count "${mosaic_graphics_mode_count} + 1")
+endif()
+if(MOSAIC_GRAPHICS_SOURCE_DIR)
+    math(EXPR mosaic_graphics_mode_count "${mosaic_graphics_mode_count} + 1")
+endif()
 if(MOSAIC_GRAPHICS_INCLUDE OR MOSAIC_GRAPHICS_LIBS)
+    math(EXPR mosaic_graphics_mode_count "${mosaic_graphics_mode_count} + 1")
+endif()
+if(mosaic_graphics_mode_count GREATER 1)
+    message(FATAL_ERROR "Choose only one Graphics integration mode: TARGET, SOURCE_DIR, or INCLUDE/LIBS")
+endif()
+
+if(MOSAIC_GRAPHICS_TARGET)
+    if(NOT TARGET ${MOSAIC_GRAPHICS_TARGET})
+        message(FATAL_ERROR "MOSAIC_GRAPHICS_TARGET '${MOSAIC_GRAPHICS_TARGET}' does not exist")
+    endif()
+    set(mosaic_graphics_library ${MOSAIC_GRAPHICS_TARGET})
+elseif(MOSAIC_GRAPHICS_SOURCE_DIR)
+    if(NOT EXISTS "${MOSAIC_GRAPHICS_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "MOSAIC_GRAPHICS_SOURCE_DIR does not contain CMakeLists.txt")
+    endif()
+    set(GRAPHICS_EXTERNAL_BUILD ON CACHE BOOL "" FORCE)
+    set(GRAPHICS_EXAMPLES_BUILD OFF CACHE BOOL "" FORCE)
+    set(GRAPHICS_INSTALL OFF CACHE BOOL "" FORCE)
+    set(GRAPHICS_TESTS OFF CACHE BOOL "" FORCE)
+    set(GRAPHICS_TESTS_IN_SOLUTIONS OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${MOSAIC_GRAPHICS_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/GraphicsSource")
+    set(mosaic_graphics_library graphics)
+elseif(MOSAIC_GRAPHICS_INCLUDE OR MOSAIC_GRAPHICS_LIBS)
     if(NOT MOSAIC_GRAPHICS_INCLUDE OR NOT MOSAIC_GRAPHICS_LIBS)
         message(FATAL_ERROR "MOSAIC_GRAPHICS_INCLUDE and MOSAIC_GRAPHICS_LIBS must be provided together")
     endif()
+    list(LENGTH MOSAIC_GRAPHICS_LIBS mosaic_graphics_library_count)
+    if(NOT mosaic_graphics_library_count EQUAL 1)
+        message(FATAL_ERROR "MOSAIC_GRAPHICS_LIBS must identify exactly one Graphics library")
+    endif()
+    list(GET MOSAIC_GRAPHICS_LIBS 0 mosaic_graphics_library)
 else()
     include(cmake/GraphicsDownload.cmake)
+    set(mosaic_graphics_library ${MOSAIC_GRAPHICS_LIBS})
 endif()
 
 if(MOSAIC_GRAPHICS_DEPENDENCY AND NOT TARGET ${MOSAIC_GRAPHICS_DEPENDENCY})
     message(FATAL_ERROR "MOSAIC_GRAPHICS_DEPENDENCY '${MOSAIC_GRAPHICS_DEPENDENCY}' does not exist")
 endif()
 
-list(LENGTH MOSAIC_GRAPHICS_LIBS mosaic_graphics_library_count)
-if(NOT mosaic_graphics_library_count EQUAL 1)
-    message(FATAL_ERROR "MOSAIC_GRAPHICS_LIBS must identify exactly one Graphics library")
-endif()
-
-list(GET MOSAIC_GRAPHICS_LIBS 0 mosaic_graphics_library)
 if(TARGET ${mosaic_graphics_library})
     set(mosaic_graphics_install_source "$<TARGET_FILE:${mosaic_graphics_library}>")
 else()
@@ -76,6 +106,7 @@ add_library(MosaicCore
     src/DockSpace.cpp
     src/Docking.cpp
     src/DragDrop.cpp
+    src/FrameArena.cpp
     src/Interaction.cpp
     src/Layout.cpp
     src/Menu.cpp
@@ -87,6 +118,7 @@ add_library(MosaicCore
     src/ShortcutRegistry.cpp
     src/Table.cpp
     src/TextEdit.cpp
+    src/TextFilter.cpp
     src/Theme.cpp
     src/Window.cpp
     src/Widgets.cpp
@@ -94,6 +126,7 @@ add_library(MosaicCore
 add_library(Mosaic::Core ALIAS MosaicCore)
 
 target_compile_features(MosaicCore PUBLIC cxx_std_20)
+target_compile_definitions(MosaicCore PUBLIC MOSAIC_VERSION_STRING="${PROJECT_VERSION}")
 target_include_directories(MosaicCore
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

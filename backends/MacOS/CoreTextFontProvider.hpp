@@ -20,8 +20,12 @@ namespace Mosaic
         bool shapeText(FontHandle font, float size, StringView text, const TextShapeOptions & options, ShapedText * const _out) const override;
         [[nodiscard]] FontCacheMetrics cacheMetrics() const noexcept override;
         [[nodiscard]] bool atlasPage(size_t index, FontAtlasPage * const _out) const noexcept override;
+        [[nodiscard]] bool atlasConfiguration(FontAtlasConfiguration * const _out) const noexcept override;
+        bool inspectFonts(FontInfoVector * const _out) const override;
         bool inspectFontCache(FontCacheEntryVector * const _out) const override;
         bool inspectGlyphCache(GlyphCacheEntryVector * const _out) const override;
+        bool inspectAtlasRects(FontAtlasRectInfoVector * const _out) const override;
+        bool cacheAction(FontCacheAction action) override;
         [[nodiscard]] uint64_t revision() const noexcept override;
 
     private:
@@ -70,10 +74,22 @@ namespace Mosaic
             bool mask = false;
         };
 
+        struct AtlasRegion
+        {
+            size_t page = 0;
+            Rect bounds;
+            FontHandle font = DefaultFont;
+            float size = 0.f;
+            uint32_t face = 0;
+            uint32_t glyph = 0;
+            bool packed = false;
+        };
+
         using FontCache = UnorderedMap<FontCacheKey, CachedFont, FontCacheKeyHash>;
         using GlyphCache = UnorderedMap<uint64_t, CachedGlyph>;
         using ResolvedFontVector = Vector<ResolvedFont>;
         using AtlasPageVector = Vector<AtlasPage>;
+        using AtlasRegionVector = Vector<AtlasRegion>;
 
         [[nodiscard]] const CachedFont * findOrCreateFont(FontHandle font, float size) const noexcept;
         [[nodiscard]] uint32_t findOrCreateResolvedFont(const void * native) const noexcept;
@@ -88,6 +104,7 @@ namespace Mosaic
         mutable GlyphCache m_glyphs;
         mutable ResolvedFontVector m_resolvedFonts;
         mutable AtlasPageVector m_atlasPages;
+        mutable AtlasRegionVector m_atlasRegions;
         float m_scale = 1.f;
         uint64_t m_revision = 1;
     };

@@ -78,7 +78,7 @@ Immediate API -> Estimate BB -> Transient Tree -> Layout/Input/Culling
              -> irov/graphics -> 32-bit RenderMesh -> Renderer Adapter
 ```
 
-By default Mosaic downloads, builds and installs the configured Graphics revision into its build
+By default Mosaic downloads, builds and installs the latest Graphics `origin/master` into its build
 tree. A host may instead provide the Graphics include directories and libraries. `GraphicsBridge`
 owns one persistent canvas, clears it once at the start of each mesh build and records all visible
 primitives in render order. Render-state changes start fixed-storage branches, while images,
@@ -103,7 +103,7 @@ size; a backing-scale change clears its font/glyph resources and advances the re
 
 Each `Context` keeps up to 4,096 prepared text runs. The key contains the provider and its revision,
 font handle, font size, line height, text bytes and editing attributes. A cached run owns its measured
-size, shaping clusters, editable cursor offsets and local glyph geometry with texture/UV data. Nodes
+size, shaping clusters, editable cursor offsets and logical glyph rectangles with texture/UV data. Nodes
 reference that immutable geometry for the frame; position, color, clipping and render target remain
 dynamic draw state. Changing the provider or its revision invalidates the cache before the next frame.
 
@@ -223,12 +223,11 @@ auto canvas = Mosaic::canvas(ui, "Graph", {
     .height = Mosaic::SizeRule::Fill
 });
 
-canvas.line({0, 0}, {100, 80}, 2.f, {0.3f, 0.7f, 1.f, 1.f});
-canvas.ellipse({140, 50}, {32, 18}, 0.25f, 2.f,
-    {1.f, 0.7f, 0.2f, 1.f});
-canvas.pushClip({0, 0, 220, 100});
+bool recorded = canvas.line({0, 0}, {100, 80}, 2.f, {0.3f, 0.7f, 1.f, 1.f});
+recorded = canvas.ellipse({140, 50}, {32, 18}, 0.25f, 2.f, {1.f, 0.7f, 0.2f, 1.f}) && recorded;
+recorded = canvas.pushClip({0, 0, 220, 100}) && recorded;
 (void)canvas.text({8, 8}, "Cached canvas text", {1.f, 1.f, 1.f, 1.f});
-canvas.popClip();
+recorded = canvas.popClip() && recorded;
 ```
 
 Canvas coordinates are local to its content rectangle and are clipped hierarchically. The
@@ -245,38 +244,39 @@ cmake --build build -j
 Useful options:
 
 - `MOSAIC_BUILD_EXAMPLES`
+- `MOSAIC_GRAPHICS_TARGET`
+- `MOSAIC_GRAPHICS_SOURCE_DIR`
 - `MOSAIC_GRAPHICS_INCLUDE`
 - `MOSAIC_GRAPHICS_LIBS`
 - `MOSAIC_GRAPHICS_DEPENDENCY`
 - `MOSAIC_GRAPHICS_GIT_REPOSITORY`
-- `MOSAIC_GRAPHICS_GIT_TAG`
 - `MOSAIC_ENABLE_EXCEPTIONS`
 - `MOSAIC_ENABLE_RTTI`
 - `MOSAIC_WARNINGS_AS_ERRORS`
 
-The default top-level build enables the examples. When neither `MOSAIC_GRAPHICS_INCLUDE` nor
-`MOSAIC_GRAPHICS_LIBS` is set, Mosaic downloads and builds the pinned Graphics revision through a
-separate `ExternalProject`.
+The default top-level build enables the examples. When no external Graphics mode is selected,
+Mosaic downloads and builds the current `origin/master` revision through a separate
+`ExternalProject`. Configure is intentionally connected so a clean build never silently reuses a
+pinned or disconnected revision.
 
 ```sh
 # Mosaic downloads Graphics itself.
 cmake -S . -B build
 ```
 
-An embedding host passes the same include/library pair used for its other dependencies:
+An embedding host can supply an existing target:
 
 ```cmake
 add_subdirectory(/path/to/graphics graphics-build)
-set(MOSAIC_GRAPHICS_INCLUDE "/path/to/graphics/include" CACHE STRING "" FORCE)
-set(MOSAIC_GRAPHICS_LIBS graphics CACHE STRING "" FORCE)
+set(MOSAIC_GRAPHICS_TARGET graphics CACHE STRING "" FORCE)
 add_subdirectory(/path/to/Mosaic mosaic-build)
 ```
 
-When the library path is produced by a custom or external target, pass that target through
-`MOSAIC_GRAPHICS_DEPENDENCY` so Graphics is ready before `MosaicGraphics` is compiled. The include
-and library variables must either both be empty or both be provided. Mosaic never duplicates vector
-tessellation on its side. Mosaic's own code supports `MOSAIC_ENABLE_EXCEPTIONS=OFF` and
-`MOSAIC_ENABLE_RTTI=OFF`.
+`MOSAIC_GRAPHICS_SOURCE_DIR` adds a source checkout directly. Legacy hosts may instead provide the
+paired `MOSAIC_GRAPHICS_INCLUDE` and `MOSAIC_GRAPHICS_LIBS` values; when the library is produced by
+a custom target, `MOSAIC_GRAPHICS_DEPENDENCY` makes that dependency explicit. These integration
+modes are mutually exclusive. Mosaic never duplicates vector tessellation on its side. Mosaic's
+own code supports `MOSAIC_ENABLE_EXCEPTIONS=OFF` and `MOSAIC_ENABLE_RTTI=OFF`.
 
 Install and consume with CMake:
 

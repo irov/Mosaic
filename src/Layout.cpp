@@ -109,7 +109,7 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         bool scrollsContent(const Context::Node & node) noexcept
         {
-            auto returnedValue = node.kind == NodeKind::Scroll || (node.kind == NodeKind::Window && node.windowScrollable == true);
+            auto returnedValue = node.kind == NodeKind::Scroll || (node.kind == NodeKind::Window && node.windowData().scrollable == true);
 
             return returnedValue;
         }
@@ -138,7 +138,9 @@ namespace Mosaic
         }
         case SizeRule::Fill:
         {
-            return available;
+            auto returnedValue = std::max(0.f, available + dimension.value);
+
+            return returnedValue;
         }
         case SizeRule::Percent:
         {
@@ -171,11 +173,17 @@ namespace Mosaic
             if(node.wordWrap == true)
             {
                 float resolvedWidth = node.layout.width.rule == SizeRule::Fixed ? node.layout.width.value : available.x;
-                node.textWrapWidth = std::max(1.f, resolvedWidth - node.layout.padding.left - node.layout.padding.right);
+                node.valueData().textWrapWidth = std::max(1.f, resolvedWidth - node.layout.padding.left - node.layout.padding.right);
                 prepareText(node, node.label);
             }
 
             contentSize = node.textSize;
+
+            if(node.alignTextToFramePadding == true)
+            {
+                contentSize.y = std::max(contentSize.y, node.style->metrics.lineHeight + node.style->metrics.framePadding.top + node.style->metrics.framePadding.bottom);
+            }
+
             break;
         case Detail::NodeKind::Bullet:
             contentSize = {node.style->metrics.indent * 0.65f, node.style->metrics.lineHeight};
@@ -194,12 +202,12 @@ namespace Mosaic
             if(node.semanticRole == SemanticRole::MenuItem)
             {
                 float checkExtent = node.menuPopupItem ? node.style->metrics.controlHeight * 0.75f : 0.f;
-                float shortcutExtent = node.valueText.empty() == true ? 0.f : node.valueTextSize.x + node.style->metrics.innerSpacing.x;
+                float shortcutExtent = node.valueText.empty() == true ? 0.f : node.valueData().valueTextSize.x + node.style->metrics.innerSpacing.x;
                 float submenuExtent = node.menuSubmenu ? node.style->metrics.controlHeight * 0.75f : 0.f;
                 contentSize.x += checkExtent + shortcutExtent + submenuExtent;
             }
 
-            if(node.kind == Detail::NodeKind::Selectable && node.tableHeader == true && node.tableColumnOptions.angledHeader == true)
+            if(node.kind == Detail::NodeKind::Selectable && node.tableItem().header == true && node.tableItem().columnOptions.angledHeader == true)
             {
                 constexpr float radiansPerDegree = 0.0174532925f;
                 float angle = std::clamp(node.style->metrics.tableAngledHeadersAngleDegrees, -80.f, 80.f) * radiansPerDegree;
@@ -217,7 +225,7 @@ namespace Mosaic
         case Detail::NodeKind::Combo:
         {
             float arrowWidth = node.comboShowArrow ? node.style->metrics.controlHeight : 0.f;
-            float previewWidth = node.comboShowPreview ? (node.comboWidthFitPreview ? node.valueTextSize.x + node.style->metrics.framePadding.left + node.style->metrics.framePadding.right : std::max(200.f, node.style->metrics.minimumControlWidth) - arrowWidth) : 0.f;
+            float previewWidth = node.comboShowPreview ? (node.comboWidthFitPreview ? node.valueData().valueTextSize.x + node.style->metrics.framePadding.left + node.style->metrics.framePadding.right : std::max(200.f, node.style->metrics.minimumControlWidth) - arrowWidth) : 0.f;
             float labelWidth = Detail::itemLabelWidth(node);
             contentSize = {previewWidth + arrowWidth + labelWidth, node.style->metrics.controlHeight};
             break;
@@ -257,7 +265,7 @@ namespace Mosaic
             contentSize = {node.textSize.x + node.style->metrics.separatorTextPadding.x * 2.f, std::max(node.textSize.y, node.style->metrics.lineHeight) + node.style->metrics.separatorTextPadding.y * 2.f};
             break;
         case Detail::NodeKind::Spacer:
-            contentSize = {node.scalar, node.scalar};
+            contentSize = {node.valueData().scalar, node.valueData().scalar};
             break;
         case Detail::NodeKind::Image:
             contentSize = node.measured;
@@ -277,6 +285,11 @@ namespace Mosaic
             float maximumBelowBaseline = 0.f;
             float firstBaseline = 0.f;
             bool firstBaselineValid = false;
+            float flowLineWidth = 0.f;
+            float flowLineHeight = 0.f;
+            float flowLineBaseline = 0.f;
+            float flowLineBelowBaseline = 0.f;
+            size_t flowLineCount = 0;
             Vec2 childAvailable = {std::min(available.x, std::max(0.f, node.layout.maximum.x - node.layout.padding.left - node.layout.padding.right)), std::min(available.y, std::max(0.f, node.layout.maximum.y - node.layout.padding.top - node.layout.padding.bottom))};
 
             if(node.layout.width.rule == SizeRule::Fixed || node.layout.width.rule == SizeRule::Fill || node.layout.width.rule == SizeRule::Percent)
@@ -288,6 +301,25 @@ namespace Mosaic
             {
                 childAvailable.y = std::max(0.f, resolveDimension(node.layout.height, available.y, available.y) - node.layout.padding.top - node.layout.padding.bottom);
             }
+
+            bool horizontalLayout = Detail::isHorizontal(node.kind, node.layout.orientation);
+            bool overlayLayout = Detail::measuresChildrenAsOverlay(node.kind);
+            auto finishFlowLine = [&]()
+            {
+                if(flowLineCount == 0)
+                {
+                    return;
+                }
+
+                if(flowLineCount > 1)
+                {
+                    totalPrimary += nodeGap;
+                }
+
+                float alignedHeight = flowLineBaseline > 0.f ? flowLineBaseline + flowLineBelowBaseline : flowLineHeight;
+                totalPrimary += std::max(flowLineHeight, alignedHeight);
+                maximumSecondary = std::max(maximumSecondary, flowLineWidth);
+            };
 
             size_t child = node.firstChild;
             while(child != std::numeric_limits<size_t>::max())
@@ -316,29 +348,56 @@ namespace Mosaic
                         maximumBelowBaseline = std::max(maximumBelowBaseline, childSize.y - nodes[child].baseline);
                     }
 
-                    if(Detail::isHorizontal(node.kind, node.layout.orientation) == true)
+                    if(horizontalLayout == true)
                     {
                         totalPrimary += childSize.x;
                         maximumSecondary = std::max(maximumSecondary, childSize.y);
                     }
-                    else if(Detail::measuresChildrenAsOverlay(node.kind) == true)
+                    else if(overlayLayout == true)
                     {
                         totalPrimary = std::max(totalPrimary, childSize.x);
                         maximumSecondary = std::max(maximumSecondary, childSize.y);
                     }
                     else
                     {
-                        totalPrimary += childSize.y;
-                        maximumSecondary = std::max(maximumSecondary, childSize.x);
+                        bool continueLine = nodes[child].sameLine == true && flowLineCount != 0;
+
+                        if(continueLine == false)
+                        {
+                            finishFlowLine();
+                            ++flowLineCount;
+                            flowLineWidth = childSize.x;
+                            flowLineHeight = childSize.y;
+                            flowLineBaseline = nodes[child].baselineValid == true ? nodes[child].baseline : 0.f;
+                            flowLineBelowBaseline = nodes[child].baselineValid == true ? childSize.y - nodes[child].baseline : 0.f;
+                        }
+                        else
+                        {
+                            float spacing = nodes[child].sameLineSpacing < 0.f ? nodeGap : nodes[child].sameLineSpacing;
+                            float position = nodes[child].sameLineOffset > 0.f ? nodes[child].sameLineOffset : flowLineWidth + spacing;
+                            flowLineWidth = std::max(flowLineWidth, position + childSize.x);
+                            flowLineHeight = std::max(flowLineHeight, childSize.y);
+
+                            if(nodes[child].baselineValid == true)
+                            {
+                                flowLineBaseline = std::max(flowLineBaseline, nodes[child].baseline);
+                                flowLineBelowBaseline = std::max(flowLineBelowBaseline, childSize.y - nodes[child].baseline);
+                            }
+                        }
                     }
                 }
 
                 child = nodes[child].nextSibling;
             }
 
+            if(horizontalLayout == false && overlayLayout == false)
+            {
+                finishFlowLine();
+            }
+
             if(childCount > 1)
             {
-                if(Detail::measuresChildrenAsOverlay(node.kind) == false)
+                if(overlayLayout == false && horizontalLayout == true)
                 {
                     totalPrimary += nodeGap * static_cast<float>(childCount - 1);
                 }
@@ -394,6 +453,16 @@ namespace Mosaic
                 intrinsicWidths.assign(columns, 0.f);
                 FloatVector & rowHeights = tableState.rowHeights;
                 rowHeights.clear();
+                FloatVector cellCommittedHeights;
+                FloatVector cellLineHeights;
+                FloatVector cellLineWidths;
+                FloatVector cellMaximumWidths;
+                SizeVector cellLineCounts;
+                FloatVector rowLastLineHeights;
+                FloatVector rowLastLineBaselines;
+                FloatVector rowLastLineBelowBaselines;
+                FloatVector cellLineBaselines;
+                FloatVector cellLineBelowBaselines;
                 uint32_t maximumRow = 0;
                 float headerHeight = 0.f;
                 for(size_t tableChild = node.firstChild; tableChild != std::numeric_limits<size_t>::max(); tableChild = nodes[tableChild].nextSibling)
@@ -403,35 +472,120 @@ namespace Mosaic
                         continue;
                     }
 
-                    uint32_t column = std::min(nodes[tableChild].tableColumn, columns - 1);
+                    uint32_t column = std::min(nodes[tableChild].tableItem().column, columns - 1);
 
-                    if(nodes[tableChild].kind != Detail::NodeKind::TableRow)
+                    if(nodes[tableChild].kind == Detail::NodeKind::TableRow)
                     {
-                        bool headerWithoutWidth = tableState.headersSubmitted && nodes[tableChild].tableRow < tableState.headerRowCount && nodes[tableChild].tableColumnOptions.headerContributesToWidth == false;
-
-                        if(headerWithoutWidth == false)
-                        {
-                            intrinsicWidths[column] = std::max(intrinsicWidths[column], nodes[tableChild].measured.x);
-                        }
+                        maximumRow = std::max(maximumRow, nodes[tableChild].tableItem().row);
+                        continue;
                     }
 
-                    maximumRow = std::max(maximumRow, nodes[tableChild].tableRow);
+                    uint32_t row = nodes[tableChild].tableItem().row;
+                    maximumRow = std::max(maximumRow, row);
+                    size_t cellIndex = static_cast<size_t>(row) * columns + column;
+                    size_t requiredCells = cellIndex + 1;
+
+                    if(cellCommittedHeights.size() < requiredCells)
+                    {
+                        cellCommittedHeights.resize(requiredCells, 0.f);
+                        cellLineHeights.resize(requiredCells, 0.f);
+                        cellLineWidths.resize(requiredCells, 0.f);
+                        cellMaximumWidths.resize(requiredCells, 0.f);
+                        cellLineCounts.resize(requiredCells, 0);
+                        cellLineBaselines.resize(requiredCells, 0.f);
+                        cellLineBelowBaselines.resize(requiredCells, 0.f);
+                    }
+
+                    size_t requiredRows = static_cast<size_t>(row) + 1;
+
+                    if(rowLastLineHeights.size() < requiredRows)
+                    {
+                        rowLastLineHeights.resize(requiredRows, 0.f);
+                        rowLastLineBaselines.resize(requiredRows, 0.f);
+                        rowLastLineBelowBaselines.resize(requiredRows, 0.f);
+                    }
+
+                    bool reusePreviousCellLine = nodes[tableChild].sameLine == true && cellLineCounts[cellIndex] == 0 && rowLastLineHeights[row] > 0.f;
+
+                    if(reusePreviousCellLine == true)
+                    {
+                        cellLineCounts[cellIndex] = 1;
+                        cellLineHeights[cellIndex] = rowLastLineHeights[row];
+                        cellLineBaselines[cellIndex] = rowLastLineBaselines[row];
+                        cellLineBelowBaselines[cellIndex] = rowLastLineBelowBaselines[row];
+                    }
+
+                    bool continueLine = nodes[tableChild].sameLine == true && cellLineCounts[cellIndex] != 0;
+
+                    if(continueLine == true)
+                    {
+                        float spacing = nodes[tableChild].sameLineSpacing < 0.f ? nodeGap : nodes[tableChild].sameLineSpacing;
+                        float position = 0.f;
+
+                        if(reusePreviousCellLine == false)
+                        {
+                            position = nodes[tableChild].sameLineOffset > 0.f ? nodes[tableChild].sameLineOffset : cellLineWidths[cellIndex] + spacing;
+                        }
+                        else if(nodes[tableChild].sameLineOffset > 0.f)
+                        {
+                            position = nodes[tableChild].sameLineOffset;
+                        }
+
+                        cellLineWidths[cellIndex] = std::max(cellLineWidths[cellIndex], position + nodes[tableChild].measured.x);
+                        cellLineHeights[cellIndex] = std::max(cellLineHeights[cellIndex], nodes[tableChild].measured.y);
+                    }
+                    else
+                    {
+                        if(cellLineCounts[cellIndex] != 0)
+                        {
+                            cellCommittedHeights[cellIndex] += cellLineHeights[cellIndex] + nodeGap;
+                            cellMaximumWidths[cellIndex] = std::max(cellMaximumWidths[cellIndex], cellLineWidths[cellIndex]);
+                        }
+
+                        ++cellLineCounts[cellIndex];
+                        cellLineWidths[cellIndex] = nodes[tableChild].measured.x;
+                        cellLineHeights[cellIndex] = nodes[tableChild].measured.y;
+                        cellLineBaselines[cellIndex] = 0.f;
+                        cellLineBelowBaselines[cellIndex] = 0.f;
+                    }
+
+                    if(nodes[tableChild].baselineValid == true)
+                    {
+                        cellLineBaselines[cellIndex] = std::max(cellLineBaselines[cellIndex], nodes[tableChild].baseline);
+                        cellLineBelowBaselines[cellIndex] = std::max(cellLineBelowBaselines[cellIndex], nodes[tableChild].measured.y - nodes[tableChild].baseline);
+                        cellLineHeights[cellIndex] = std::max(cellLineHeights[cellIndex], cellLineBaselines[cellIndex] + cellLineBelowBaselines[cellIndex]);
+                    }
+
+                    rowLastLineHeights[row] = cellLineHeights[cellIndex];
+                    rowLastLineBaselines[row] = cellLineBaselines[cellIndex];
+                    rowLastLineBelowBaselines[row] = cellLineBelowBaselines[cellIndex];
+
+                    bool headerWithoutWidth = tableState.headersSubmitted == true;
+                    headerWithoutWidth = headerWithoutWidth == true && row < tableState.headerRowCount;
+                    headerWithoutWidth = headerWithoutWidth == true && nodes[tableChild].tableItem().columnOptions.headerContributesToWidth == false;
+
+                    if(headerWithoutWidth == false)
+                    {
+                        float cellWidth = std::max(cellMaximumWidths[cellIndex], cellLineWidths[cellIndex]);
+                        intrinsicWidths[column] = std::max(intrinsicWidths[column], cellWidth);
+                    }
 
                     if(tableState.rowsVirtualized == true)
                     {
-                        if(nodes[tableChild].tableRow < tableState.virtualFirstRow)
+                        if(row < tableState.virtualFirstRow)
                         {
                             headerHeight = std::max(headerHeight, nodes[tableChild].measured.y);
                         }
                     }
                     else
                     {
-                        if(rowHeights.size() <= nodes[tableChild].tableRow)
+                        if(rowHeights.size() <= row)
                         {
-                            rowHeights.resize(nodes[tableChild].tableRow + 1, 0.f);
+                            rowHeights.resize(row + 1, 0.f);
                         }
 
-                        rowHeights[nodes[tableChild].tableRow] = std::max(rowHeights[nodes[tableChild].tableRow], nodes[tableChild].measured.y);
+                        float cellHeight = cellCommittedHeights[cellIndex] + cellLineHeights[cellIndex];
+                        rowHeights[row] = std::max(rowHeights[row], cellHeight);
                     }
                 }
                 tableState.maximumRow = maximumRow;
@@ -499,7 +653,7 @@ namespace Mosaic
                         height += headerHeight > 0.f ? headerHeight : node.style->metrics.controlHeight;
                     }
 
-                    height += static_cast<float>(tableState.virtualRowCount) * std::max(tableState.virtualRowHeight, node.tableOptions.rowMinimumHeight);
+                    height += static_cast<float>(tableState.virtualRowCount) * std::max(tableState.virtualRowHeight, node.tableOptions().rowMinimumHeight);
                     size_t totalRows = static_cast<size_t>(tableState.virtualFirstRow) + tableState.virtualRowCount;
 
                     if(totalRows > 1)
@@ -513,7 +667,7 @@ namespace Mosaic
                     {
                         float requested = row < tableState.requestedRowHeights.size() ? tableState.requestedRowHeights[row] : 0.f;
                         float padding = row < tableState.requestedRowPaddingY.size() && tableState.requestedRowPaddingY[row] >= 0.f ? tableState.requestedRowPaddingY[row] * 2.f : 0.f;
-                        height += std::max({rowHeights[row] + padding, requested, node.tableOptions.rowMinimumHeight});
+                        height += std::max({rowHeights[row] + padding, requested, node.tableOptions().rowMinimumHeight});
                     }
 
                     if(rowHeights.empty() == false)
@@ -524,17 +678,17 @@ namespace Mosaic
 
                 contentSize = {std::max(contentSize.x, width), std::max(contentSize.y, height)};
 
-                if(node.tableOptions.scrollHorizontal == true)
+                if(node.tableOptions().scrollHorizontal == true)
                 {
-                    contentSize.x = std::max(contentSize.x, node.tableOptions.innerWidth);
+                    contentSize.x = std::max(contentSize.x, node.tableOptions().innerWidth);
                 }
 
-                if(node.tableOptions.extendHostHorizontal == false)
+                if(node.tableOptions().extendHostHorizontal == false)
                 {
                     contentSize.x = std::min(contentSize.x, available.x);
                 }
 
-                if(node.tableOptions.extendHostVertical == false)
+                if(node.tableOptions().extendHostVertical == false)
                 {
                     contentSize.y = std::min(contentSize.y, available.y);
                 }
@@ -547,6 +701,7 @@ namespace Mosaic
                 {
                     contentSize.y = std::max(contentSize.y, maximumBaseline + maximumBelowBaseline);
                 }
+
             }
             else if(Detail::measuresChildrenAsOverlay(node.kind) == true)
             {
@@ -575,7 +730,7 @@ namespace Mosaic
         contentSize.x += node.layout.padding.left + node.layout.padding.right;
         contentSize.y += node.layout.padding.top + node.layout.padding.bottom;
 
-        if(node.kind == Detail::NodeKind::Window && node.windowTitleVisible == true)
+        if(node.kind == Detail::NodeKind::Window && node.windowData().titleVisible == true)
         {
             contentSize.y += node.style->metrics.windowTitleHeight;
         }
@@ -583,9 +738,9 @@ namespace Mosaic
         float labelWidth = Detail::itemLabelWidth(node);
         float measuredWidth = 0.f;
 
-        if(node.itemWidthRequested == true)
+        if(node.valueData().itemWidthRequested == true)
         {
-            float controlWidth = node.itemWidth < 0.f ? std::max(1.f, available.x + node.itemWidth) : std::max(1.f, node.itemWidth);
+            float controlWidth = node.valueData().itemWidth < 0.f ? std::max(1.f, available.x + node.valueData().itemWidth) : std::max(1.f, node.valueData().itemWidth);
             measuredWidth = controlWidth + labelWidth;
         }
         else if(labelWidth > 0.f && node.layout.width.rule != SizeRule::Content && node.layout.width.rule != SizeRule::Auto)
@@ -641,7 +796,7 @@ namespace Mosaic
                 case Detail::NodeKind::Text:
                 case Detail::NodeKind::Bullet:
                 case Detail::NodeKind::BulletText:
-                    node.baseline = node.layout.padding.top + textBaseline;
+                    node.baseline = node.layout.padding.top + textBaseline + (node.alignTextToFramePadding == true ? node.style->metrics.framePadding.top : 0.f);
                     break;
                 case Detail::NodeKind::Button:
                 case Detail::NodeKind::Selectable:
@@ -712,7 +867,7 @@ namespace Mosaic
         node.childrenClip = Detail::clipsDescendants(node.kind) ? node.clip : inheritedClip;
         node.content = Detail::inset(bounds, node.layout.padding);
 
-        if(node.kind == Detail::NodeKind::Window && node.windowTitleVisible == true)
+        if(node.kind == Detail::NodeKind::Window && node.windowData().titleVisible == true)
         {
             node.content.y += node.style->metrics.windowTitleHeight;
             node.content.height = std::max(0.f, node.content.height - node.style->metrics.windowTitleHeight);
@@ -731,16 +886,16 @@ namespace Mosaic
 
             if(node.kind == Detail::NodeKind::Tree)
             {
-                node.treeFrameBounds = {node.bounds.x, node.bounds.y, node.bounds.width, node.style->metrics.controlHeight};
+                node.mutableTreeData().frameBounds = {node.bounds.x, node.bounds.y, node.bounds.width, node.style->metrics.controlHeight};
 
-                if(node.treeSpanLabelWidth == true)
+                if(node.treeData().spanLabelWidth == true)
                 {
-                    node.treeFrameBounds.width = std::min(node.treeFrameBounds.width, node.textSize.x + node.style->metrics.padding * 2.f + node.style->metrics.indent);
+                    node.mutableTreeData().frameBounds.width = std::min(node.mutableTreeData().frameBounds.width, node.textSize.x + node.style->metrics.padding * 2.f + node.style->metrics.indent);
                 }
 
-                node.treeFrameClip = node.clip;
-                node.treeLabelClip = node.clip;
-                nodeState->lastBounds = node.treeFrameBounds;
+                node.mutableTreeData().frameClip = node.clip;
+                node.mutableTreeData().labelClip = node.clip;
+                nodeState->lastBounds = node.mutableTreeData().frameBounds;
             }
             else if(node.kind == Detail::NodeKind::Combo)
             {
@@ -755,39 +910,40 @@ namespace Mosaic
 
             if(Detail::scrollsContent(node) == true)
             {
-                nodeState->scrollOrientation = node.scrollOptions.axes == ScrollAxes::Horizontal ? Orientation::Horizontal : Orientation::Vertical;
-                nodeState->scrollbarTrackBounds = {};
-                nodeState->scrollbarThumbBounds = {};
-                nodeState->verticalScrollbarTrack = {};
-                nodeState->verticalScrollbarThumb = {};
-                nodeState->horizontalScrollbarTrack = {};
-                nodeState->horizontalScrollbarThumb = {};
+                nodeState->scrollData().orientation = node.scrollOptions().axes == ScrollAxes::Horizontal ? Orientation::Horizontal : Orientation::Vertical;
+                nodeState->scrollData().trackBounds = {};
+                nodeState->scrollData().thumbBounds = {};
+                nodeState->scrollData().verticalTrack = {};
+                nodeState->scrollData().verticalThumb = {};
+                nodeState->scrollData().horizontalTrack = {};
+                nodeState->scrollData().horizontalThumb = {};
             }
         }
 
-        bool preserveEmptyScrollContent = Detail::scrollsContent(node) == true && node.windowContentSizeExplicit == true;
+        bool preserveEmptyScrollContent = Detail::scrollsContent(node) == true && node.windowData().contentSizeExplicit == true;
 
         if(node.firstChild == std::numeric_limits<size_t>::max() && preserveEmptyScrollContent == false)
         {
             if(Detail::scrollsContent(node) == true)
             {
                 Persistent & persistentState = *nodeState;
-                persistentState.scroll = 0.f;
-                persistentState.scrollExtent = 0.f;
-                persistentState.scrollPosition = {};
-                persistentState.scrollTarget = {};
-                persistentState.scrollVelocity = {};
-                persistentState.scrollRange = {};
-                persistentState.scrollContentSize = {};
-                persistentState.scrollTargetInitialized = false;
-                persistentState.scrollToEndX = false;
-                persistentState.scrollToEndY = false;
-                persistentState.draggingScrollbar = false;
+                persistentState.scrollData().value = 0.f;
+                persistentState.scrollData().extent = 0.f;
+                persistentState.scrollData().position = {};
+                persistentState.scrollData().target = {};
+                persistentState.scrollData().velocity = {};
+                persistentState.scrollData().range = {};
+                persistentState.scrollData().contentSize = {};
+                persistentState.scrollData().targetInitialized = false;
+                persistentState.scrollData().toEndX = false;
+                persistentState.scrollData().toEndY = false;
+                persistentState.scrollData().draggingScrollbar = false;
             }
 
             return;
         }
 
+        size_t fixedMenuChild = std::numeric_limits<size_t>::max();
         size_t childrenBegin = layoutChildren.size();
         for(size_t child = node.firstChild; child != std::numeric_limits<size_t>::max(); child = nodes[child].nextSibling)
         {
@@ -795,29 +951,40 @@ namespace Mosaic
 
             if(nodes[child].visible == true && floatingRootChild == false)
             {
+                bool windowMenuContainer = node.kind == Detail::NodeKind::Window && node.windowData().menuBar == true;
+                bool childMenuContainer = node.kind == Detail::NodeKind::Scroll;
+                bool fixedWindowMenu = (windowMenuContainer == true || childMenuContainer == true) && nodes[child].menuBar == true && fixedMenuChild == std::numeric_limits<size_t>::max();
+
+                if(fixedWindowMenu == true)
+                {
+                    fixedMenuChild = child;
+
+                    continue;
+                }
+
                 layoutChildren.push_back(child);
             }
         }
         NodeIndexSpan children = childrenBegin == layoutChildren.size() ? NodeIndexSpan{} : NodeIndexSpan(layoutChildren.data() + childrenBegin, layoutChildren.size() - childrenBegin);
 
-        bool preserveEmptyScrollChildren = Detail::scrollsContent(node) == true && node.windowContentSizeExplicit == true;
+        bool preserveEmptyScrollChildren = Detail::scrollsContent(node) == true && node.windowData().contentSizeExplicit == true;
 
-        if(children.empty() == true && preserveEmptyScrollChildren == false)
+        if(children.empty() == true && preserveEmptyScrollChildren == false && fixedMenuChild == std::numeric_limits<size_t>::max())
         {
             if(Detail::scrollsContent(node) == true)
             {
                 Persistent & persistentState = *nodeState;
-                persistentState.scroll = 0.f;
-                persistentState.scrollExtent = 0.f;
-                persistentState.scrollPosition = {};
-                persistentState.scrollTarget = {};
-                persistentState.scrollVelocity = {};
-                persistentState.scrollRange = {};
-                persistentState.scrollContentSize = {};
-                persistentState.scrollTargetInitialized = false;
-                persistentState.scrollToEndX = false;
-                persistentState.scrollToEndY = false;
-                persistentState.draggingScrollbar = false;
+                persistentState.scrollData().value = 0.f;
+                persistentState.scrollData().extent = 0.f;
+                persistentState.scrollData().position = {};
+                persistentState.scrollData().target = {};
+                persistentState.scrollData().velocity = {};
+                persistentState.scrollData().range = {};
+                persistentState.scrollData().contentSize = {};
+                persistentState.scrollData().targetInitialized = false;
+                persistentState.scrollData().toEndX = false;
+                persistentState.scrollData().toEndY = false;
+                persistentState.scrollData().draggingScrollbar = false;
             }
 
             return;
@@ -827,9 +994,21 @@ namespace Mosaic
         Rect childArea = node.content;
         Rect childClip = node.childrenClip;
 
+        if(fixedMenuChild != std::numeric_limits<size_t>::max())
+        {
+            Node & menuNode = nodes[fixedMenuChild];
+            float menuHeight = resolveDimension(menuNode.layout.height, menuNode.measured.y, childArea.height);
+            menuHeight = std::clamp(menuHeight, 0.f, childArea.height);
+            Rect menuBounds = {childArea.x, childArea.y, childArea.width, menuHeight};
+            arrangeNode(fixedMenuChild, menuBounds, node.childrenClip);
+            childArea.y += menuHeight;
+            childArea.height = std::max(0.f, childArea.height - menuHeight);
+            childClip = Rect::intersection(childClip, childArea);
+        }
+
         if(node.kind == Detail::NodeKind::Tree)
         {
-            float treeIndent = node.tableColumnOptions.indent == TableColumnIndent::Disable ? 0.f : node.style->metrics.indent;
+            float treeIndent = node.tableItem().columnOptions.indent == TableColumnIndent::Disable ? 0.f : node.style->metrics.indent;
             childArea.x += treeIndent;
             childArea.width = std::max(0.f, childArea.width - treeIndent);
             childArea.y += node.style->metrics.controlHeight + nodeGap;
@@ -869,91 +1048,102 @@ namespace Mosaic
                 }
             }
 
-            if(node.windowContentSizeExplicit == true)
+            if(node.windowData().contentSizeExplicit == true)
             {
-                contentWidth = std::max(contentWidth, node.windowContentSize.x);
-                contentHeight = std::max(contentHeight, node.windowContentSize.y);
+                contentWidth = std::max(contentWidth, node.windowData().contentSize.x);
+                contentHeight = std::max(contentHeight, node.windowData().contentSize.y);
             }
 
-            bool allowHorizontal = node.scrollOptions.axes == ScrollAxes::Horizontal || node.scrollOptions.axes == ScrollAxes::Both;
-            bool allowVertical = node.scrollOptions.axes == ScrollAxes::Vertical || node.scrollOptions.axes == ScrollAxes::Both;
-            bool forceScrollbars = node.scrollOptions.visibility == ScrollbarVisibility::Always;
-            bool hideScrollbars = node.scrollOptions.visibility == ScrollbarVisibility::Hidden;
+            bool allowHorizontal = node.scrollOptions().axes == ScrollAxes::Horizontal || node.scrollOptions().axes == ScrollAxes::Both;
+            bool allowVertical = node.scrollOptions().axes == ScrollAxes::Vertical || node.scrollOptions().axes == ScrollAxes::Both;
+            ScrollbarVisibility horizontalVisibility = node.scrollOptions().horizontalScrollbar;
+            ScrollbarVisibility verticalVisibility = node.scrollOptions().verticalScrollbar;
+
+            if(node.scrollOptions().visibility != ScrollbarVisibility::Automatic)
+            {
+                horizontalVisibility = node.scrollOptions().visibility;
+                verticalVisibility = node.scrollOptions().visibility;
+            }
+
+            bool forceHorizontalScrollbar = horizontalVisibility == ScrollbarVisibility::Always || node.scrollOptions().alwaysHorizontalScrollbar == true;
+            bool forceVerticalScrollbar = verticalVisibility == ScrollbarVisibility::Always || node.scrollOptions().alwaysVerticalScrollbar == true;
+            bool hideHorizontalScrollbar = horizontalVisibility == ScrollbarVisibility::Hidden;
+            bool hideVerticalScrollbar = verticalVisibility == ScrollbarVisibility::Hidden;
             float scrollbarSize = std::max(8.f, node.style->metrics.scrollbarWidth);
-            bool verticalScrollbar = allowVertical && hideScrollbars == false && (forceScrollbars || contentHeight > childArea.height);
-            bool horizontalScrollbar = allowHorizontal && hideScrollbars == false && (forceScrollbars || contentWidth > childArea.width - (verticalScrollbar ? scrollbarSize + nodeGap : 0.f));
-            verticalScrollbar = allowVertical && hideScrollbars == false && (forceScrollbars || contentHeight > childArea.height - (horizontalScrollbar ? scrollbarSize + nodeGap : 0.f));
+            bool verticalScrollbar = allowVertical && hideVerticalScrollbar == false && (forceVerticalScrollbar || contentHeight > childArea.height);
+            bool horizontalScrollbar = allowHorizontal && hideHorizontalScrollbar == false && (forceHorizontalScrollbar || contentWidth > childArea.width - (verticalScrollbar ? scrollbarSize + nodeGap : 0.f));
+            verticalScrollbar = allowVertical && hideVerticalScrollbar == false && (forceVerticalScrollbar || contentHeight > childArea.height - (horizontalScrollbar ? scrollbarSize + nodeGap : 0.f));
 
             Rect viewportArea = {childArea.x, childArea.y, std::max(0.f, childArea.width - (verticalScrollbar ? scrollbarSize + nodeGap : 0.f)), std::max(0.f, childArea.height - (horizontalScrollbar ? scrollbarSize + nodeGap : 0.f))};
-            persistentState.scrollContentSize = {contentWidth, contentHeight};
+            persistentState.scrollData().contentSize = {contentWidth, contentHeight};
             childClip = Rect::intersection(node.childrenClip, viewportArea);
             node.childrenClip = childClip;
-            persistentState.scrollRange = {allowHorizontal ? std::max(0.f, contentWidth - viewportArea.width) : 0.f, allowVertical ? std::max(0.f, contentHeight - viewportArea.height) : 0.f};
+            persistentState.scrollData().range = {allowHorizontal ? std::max(0.f, contentWidth - viewportArea.width) : 0.f, allowVertical ? std::max(0.f, contentHeight - viewportArea.height) : 0.f};
 
-            if(persistentState.scrollToEndX == true)
+            if(persistentState.scrollData().toEndX == true)
             {
-                persistentState.scrollTarget.x = persistentState.scrollRange.x;
-                persistentState.scrollToEndX = false;
-                persistentState.scrollTargetInitialized = true;
+                persistentState.scrollData().target.x = persistentState.scrollData().range.x;
+                persistentState.scrollData().toEndX = false;
+                persistentState.scrollData().targetInitialized = true;
             }
 
-            if(persistentState.scrollToEndY == true)
+            if(persistentState.scrollData().toEndY == true)
             {
-                persistentState.scrollTarget.y = persistentState.scrollRange.y;
-                persistentState.scrollToEndY = false;
-                persistentState.scrollTargetInitialized = true;
+                persistentState.scrollData().target.y = persistentState.scrollData().range.y;
+                persistentState.scrollData().toEndY = false;
+                persistentState.scrollData().targetInitialized = true;
             }
 
-            persistentState.scrollPosition = {std::clamp(persistentState.scrollPosition.x, 0.f, persistentState.scrollRange.x), std::clamp(persistentState.scrollPosition.y, 0.f, persistentState.scrollRange.y)};
+            persistentState.scrollData().position = {std::clamp(persistentState.scrollData().position.x, 0.f, persistentState.scrollData().range.x), std::clamp(persistentState.scrollData().position.y, 0.f, persistentState.scrollData().range.y)};
 
-            if(persistentState.scrollTargetInitialized == false)
+            if(persistentState.scrollData().targetInitialized == false)
             {
-                persistentState.scrollTarget = persistentState.scrollPosition;
-                persistentState.scrollTargetInitialized = true;
+                persistentState.scrollData().target = persistentState.scrollData().position;
+                persistentState.scrollData().targetInitialized = true;
             }
 
-            persistentState.scrollTarget = {std::clamp(persistentState.scrollTarget.x, 0.f, persistentState.scrollRange.x), std::clamp(persistentState.scrollTarget.y, 0.f, persistentState.scrollRange.y)};
-            persistentState.scroll = node.layout.orientation == Orientation::Vertical ? persistentState.scrollPosition.y : persistentState.scrollPosition.x;
-            persistentState.scrollExtent = node.layout.orientation == Orientation::Vertical ? persistentState.scrollRange.y : persistentState.scrollRange.x;
+            persistentState.scrollData().target = {std::clamp(persistentState.scrollData().target.x, 0.f, persistentState.scrollData().range.x), std::clamp(persistentState.scrollData().target.y, 0.f, persistentState.scrollData().range.y)};
+            persistentState.scrollData().value = node.layout.orientation == Orientation::Vertical ? persistentState.scrollData().position.y : persistentState.scrollData().position.x;
+            persistentState.scrollData().extent = node.layout.orientation == Orientation::Vertical ? persistentState.scrollData().range.y : persistentState.scrollData().range.x;
 
-            persistentState.verticalScrollbarTrack = {};
-            persistentState.verticalScrollbarThumb = {};
-            persistentState.horizontalScrollbarTrack = {};
-            persistentState.horizontalScrollbarThumb = {};
+            persistentState.scrollData().verticalTrack = {};
+            persistentState.scrollData().verticalThumb = {};
+            persistentState.scrollData().horizontalTrack = {};
+            persistentState.scrollData().horizontalThumb = {};
 
             if(verticalScrollbar == true)
             {
-                persistentState.verticalScrollbarTrack = {node.bounds.right() - scrollbarSize, viewportArea.y, scrollbarSize, viewportArea.height};
-                float trackExtent = persistentState.verticalScrollbarTrack.height;
+                persistentState.scrollData().verticalTrack = {node.bounds.right() - scrollbarSize, viewportArea.y, scrollbarSize, viewportArea.height};
+                float trackExtent = persistentState.scrollData().verticalTrack.height;
                 float thumbExtent = std::clamp(trackExtent * viewportArea.height / std::max(1.f, contentHeight), std::min(node.style->metrics.grabMinimumSize, trackExtent), trackExtent);
                 float travel = std::max(0.f, trackExtent - thumbExtent);
-                float offset = persistentState.scrollRange.y <= 0.f ? 0.f : travel * persistentState.scrollPosition.y / persistentState.scrollRange.y;
-                persistentState.verticalScrollbarThumb = {persistentState.verticalScrollbarTrack.x, persistentState.verticalScrollbarTrack.y + offset, persistentState.verticalScrollbarTrack.width, thumbExtent};
+                float offset = persistentState.scrollData().range.y <= 0.f ? 0.f : travel * persistentState.scrollData().position.y / persistentState.scrollData().range.y;
+                persistentState.scrollData().verticalThumb = {persistentState.scrollData().verticalTrack.x, persistentState.scrollData().verticalTrack.y + offset, persistentState.scrollData().verticalTrack.width, thumbExtent};
             }
 
             if(horizontalScrollbar == true)
             {
-                persistentState.horizontalScrollbarTrack = {viewportArea.x, node.bounds.bottom() - scrollbarSize, viewportArea.width, scrollbarSize};
-                float trackExtent = persistentState.horizontalScrollbarTrack.width;
+                persistentState.scrollData().horizontalTrack = {viewportArea.x, node.bounds.bottom() - scrollbarSize, viewportArea.width, scrollbarSize};
+                float trackExtent = persistentState.scrollData().horizontalTrack.width;
                 float thumbExtent = std::clamp(trackExtent * viewportArea.width / std::max(1.f, contentWidth), std::min(node.style->metrics.grabMinimumSize, trackExtent), trackExtent);
                 float travel = std::max(0.f, trackExtent - thumbExtent);
-                float offset = persistentState.scrollRange.x <= 0.f ? 0.f : travel * persistentState.scrollPosition.x / persistentState.scrollRange.x;
-                persistentState.horizontalScrollbarThumb = {persistentState.horizontalScrollbarTrack.x + offset, persistentState.horizontalScrollbarTrack.y, thumbExtent, persistentState.horizontalScrollbarTrack.height};
+                float offset = persistentState.scrollData().range.x <= 0.f ? 0.f : travel * persistentState.scrollData().position.x / persistentState.scrollData().range.x;
+                persistentState.scrollData().horizontalThumb = {persistentState.scrollData().horizontalTrack.x + offset, persistentState.scrollData().horizontalTrack.y, thumbExtent, persistentState.scrollData().horizontalTrack.height};
             }
 
-            bool primaryVertical = node.scrollOptions.axes != ScrollAxes::Horizontal;
-            persistentState.scrollbarTrackBounds = primaryVertical ? persistentState.verticalScrollbarTrack : persistentState.horizontalScrollbarTrack;
-            persistentState.scrollbarThumbBounds = primaryVertical ? persistentState.verticalScrollbarThumb : persistentState.horizontalScrollbarThumb;
+            bool primaryVertical = node.scrollOptions().axes != ScrollAxes::Horizontal;
+            persistentState.scrollData().trackBounds = primaryVertical ? persistentState.scrollData().verticalTrack : persistentState.scrollData().horizontalTrack;
+            persistentState.scrollData().thumbBounds = primaryVertical ? persistentState.scrollData().verticalThumb : persistentState.scrollData().horizontalThumb;
 
-            if(persistentState.scrollRange.x <= 0.f && persistentState.scrollRange.y <= 0.f)
+            if(persistentState.scrollData().range.x <= 0.f && persistentState.scrollData().range.y <= 0.f)
             {
-                persistentState.draggingScrollbar = false;
-                persistentState.draggingScrollAxis = 0;
+                persistentState.scrollData().draggingScrollbar = false;
+                persistentState.scrollData().draggingAxis = 0;
             }
 
             childArea = viewportArea;
-            childArea.x -= persistentState.scrollPosition.x;
-            childArea.y -= persistentState.scrollPosition.y;
+            childArea.x -= persistentState.scrollData().position.x;
+            childArea.y -= persistentState.scrollData().position.y;
             childArea.width = allowHorizontal ? std::max(childArea.width, contentWidth) : viewportArea.width;
             childArea.height = allowVertical ? std::max(childArea.height, contentHeight) : viewportArea.height;
         }
@@ -1054,9 +1244,9 @@ namespace Mosaic
             Persistent & tablePersistent = state(node);
             TableState & tableState = this->tableState(node.id);
             uint32_t columnCount = std::max(1U, node.layout.columns);
-            float horizontalGap = node.tableOptions.padInnerHorizontal ? nodeGap : 0.f;
+            float horizontalGap = node.tableOptions().padInnerHorizontal ? nodeGap : 0.f;
 
-            if(node.tableOptions.padOuterHorizontal == true)
+            if(node.tableOptions().padOuterHorizontal == true)
             {
                 childArea.x += node.style->metrics.cellPadding.left;
                 childArea.width = std::max(0.f, childArea.width - node.style->metrics.cellPadding.left - node.style->metrics.cellPadding.right);
@@ -1093,7 +1283,7 @@ namespace Mosaic
                                                                                     return value.options.enabled && value.options.visible;
                                                                                 }));
             float gaps = visibleColumnCount > 1 ? horizontalGap * static_cast<float>(visibleColumnCount - 1) : 0.f;
-            float availableWidth = std::max(0.f, (node.tableOptions.scrollHorizontal ? std::max(childArea.width, node.tableOptions.innerWidth) : childArea.width) - gaps);
+            float availableWidth = std::max(0.f, (node.tableOptions().scrollHorizontal ? std::max(childArea.width, node.tableOptions().innerWidth) : childArea.width) - gaps);
             float fixedWidth = 0.f;
             float totalWeight = 0.f;
             float fixedSameWidth = 0.f;
@@ -1162,7 +1352,7 @@ namespace Mosaic
                 }
             }
 
-            if(node.tableOptions.preciseWidths == false && stretchColumnCount != 0)
+            if(node.tableOptions().preciseWidths == false && stretchColumnCount != 0)
             {
                 float remainder = std::max(0.f, stretchWidth - assignedStretchWidth);
                 uint32_t lastStretchColumn = 0;
@@ -1197,7 +1387,7 @@ namespace Mosaic
                 tableState.columns[lastStretchColumn].resolvedWidth += remainder;
             }
 
-            if(node.tableOptions.keepColumnsVisible == true && node.tableOptions.scrollHorizontal == false)
+            if(node.tableOptions().keepColumnsVisible == true && node.tableOptions().scrollHorizontal == false)
             {
                 float resolvedTotal = gaps;
                 for(uint32_t column = 0; column != columnCount; ++column)
@@ -1259,7 +1449,7 @@ namespace Mosaic
             {
                 for(size_t child : children)
                 {
-                    if(nodes[child].tableRow < tableState.virtualFirstRow)
+                    if(nodes[child].tableItem().row < tableState.virtualFirstRow)
                     {
                         virtualHeaderHeight = std::max(virtualHeaderHeight, nodes[child].measured.y);
                     }
@@ -1270,7 +1460,7 @@ namespace Mosaic
                     virtualHeaderHeight = node.style->metrics.controlHeight;
                 }
 
-                contentHeight = static_cast<float>(tableState.virtualRowCount) * std::max(tableState.virtualRowHeight, node.tableOptions.rowMinimumHeight);
+                contentHeight = static_cast<float>(tableState.virtualRowCount) * std::max(tableState.virtualRowHeight, node.tableOptions().rowMinimumHeight);
 
                 if(tableState.virtualFirstRow != 0)
                 {
@@ -1295,7 +1485,7 @@ namespace Mosaic
                 {
                     float requested = row < tableState.requestedRowHeights.size() ? tableState.requestedRowHeights[row] : 0.f;
                     float padding = row < tableState.requestedRowPaddingY.size() && tableState.requestedRowPaddingY[row] >= 0.f ? tableState.requestedRowPaddingY[row] * 2.f : 0.f;
-                    rowHeights[row] = std::max({rowHeights[row] + padding, requested, node.tableOptions.rowMinimumHeight});
+                    rowHeights[row] = std::max({rowHeights[row] + padding, requested, node.tableOptions().rowMinimumHeight});
                 }
                 rowY.assign(maximumRow + 1, childArea.y);
                 float y = childArea.y;
@@ -1321,7 +1511,7 @@ namespace Mosaic
                     return returnedValue;
                 }
 
-                auto returnedValue = row < tableState.virtualFirstRow ? virtualHeaderHeight : std::max(tableState.virtualRowHeight, node.tableOptions.rowMinimumHeight);
+                auto returnedValue = row < tableState.virtualFirstRow ? virtualHeaderHeight : std::max(tableState.virtualRowHeight, node.tableOptions().rowMinimumHeight);
 
                 return returnedValue;
             };
@@ -1340,67 +1530,67 @@ namespace Mosaic
                 }
 
                 float headerExtent = tableState.virtualFirstRow == 0 ? 0.f : virtualHeaderHeight + nodeGap;
-                auto returnedValue = childArea.y + headerExtent + static_cast<float>(row - tableState.virtualFirstRow) * (std::max(tableState.virtualRowHeight, node.tableOptions.rowMinimumHeight) + nodeGap);
+                auto returnedValue = childArea.y + headerExtent + static_cast<float>(row - tableState.virtualFirstRow) * (std::max(tableState.virtualRowHeight, node.tableOptions().rowMinimumHeight) + nodeGap);
 
                 return returnedValue;
             };
 
-            bool allowHorizontal = node.tableOptions.scrollHorizontal;
-            bool allowVertical = node.tableOptions.scrollVertical;
+            bool allowHorizontal = node.tableOptions().scrollHorizontal;
+            bool allowVertical = node.tableOptions().scrollVertical;
             float scrollbarSize = std::max(8.f, node.style->metrics.scrollbarWidth);
             bool verticalScrollbar = allowVertical && contentHeight > childArea.height;
             bool horizontalScrollbar = allowHorizontal && contentWidth > childArea.width - (verticalScrollbar ? scrollbarSize + nodeGap : 0.f);
             verticalScrollbar = allowVertical && contentHeight > childArea.height - (horizontalScrollbar ? scrollbarSize + nodeGap : 0.f);
             Rect tableViewport = {childArea.x, childArea.y, std::max(0.f, childArea.width - (verticalScrollbar ? scrollbarSize + nodeGap : 0.f)), std::max(0.f, childArea.height - (horizontalScrollbar ? scrollbarSize + nodeGap : 0.f))};
             node.childrenClip = Rect::intersection(node.childrenClip, tableViewport);
-            tablePersistent.scrollRange = {allowHorizontal ? std::max(0.f, contentWidth - tableViewport.width) : 0.f, allowVertical ? std::max(0.f, contentHeight - tableViewport.height) : 0.f};
+            tablePersistent.scrollData().range = {allowHorizontal ? std::max(0.f, contentWidth - tableViewport.width) : 0.f, allowVertical ? std::max(0.f, contentHeight - tableViewport.height) : 0.f};
 
-            if(tablePersistent.scrollToEndX == true)
+            if(tablePersistent.scrollData().toEndX == true)
             {
-                tablePersistent.scrollTarget.x = tablePersistent.scrollRange.x;
-                tablePersistent.scrollToEndX = false;
-                tablePersistent.scrollTargetInitialized = true;
+                tablePersistent.scrollData().target.x = tablePersistent.scrollData().range.x;
+                tablePersistent.scrollData().toEndX = false;
+                tablePersistent.scrollData().targetInitialized = true;
             }
 
-            if(tablePersistent.scrollToEndY == true)
+            if(tablePersistent.scrollData().toEndY == true)
             {
-                tablePersistent.scrollTarget.y = tablePersistent.scrollRange.y;
-                tablePersistent.scrollToEndY = false;
-                tablePersistent.scrollTargetInitialized = true;
+                tablePersistent.scrollData().target.y = tablePersistent.scrollData().range.y;
+                tablePersistent.scrollData().toEndY = false;
+                tablePersistent.scrollData().targetInitialized = true;
             }
 
-            tablePersistent.scrollPosition = {std::clamp(tablePersistent.scrollPosition.x, 0.f, tablePersistent.scrollRange.x), std::clamp(tablePersistent.scrollPosition.y, 0.f, tablePersistent.scrollRange.y)};
+            tablePersistent.scrollData().position = {std::clamp(tablePersistent.scrollData().position.x, 0.f, tablePersistent.scrollData().range.x), std::clamp(tablePersistent.scrollData().position.y, 0.f, tablePersistent.scrollData().range.y)};
 
-            if(tablePersistent.scrollTargetInitialized == false)
+            if(tablePersistent.scrollData().targetInitialized == false)
             {
-                tablePersistent.scrollTarget = tablePersistent.scrollPosition;
-                tablePersistent.scrollTargetInitialized = true;
+                tablePersistent.scrollData().target = tablePersistent.scrollData().position;
+                tablePersistent.scrollData().targetInitialized = true;
             }
 
-            tablePersistent.scrollTarget = {std::clamp(tablePersistent.scrollTarget.x, 0.f, tablePersistent.scrollRange.x), std::clamp(tablePersistent.scrollTarget.y, 0.f, tablePersistent.scrollRange.y)};
-            tablePersistent.verticalScrollbarTrack = {};
-            tablePersistent.verticalScrollbarThumb = {};
-            tablePersistent.horizontalScrollbarTrack = {};
-            tablePersistent.horizontalScrollbarThumb = {};
+            tablePersistent.scrollData().target = {std::clamp(tablePersistent.scrollData().target.x, 0.f, tablePersistent.scrollData().range.x), std::clamp(tablePersistent.scrollData().target.y, 0.f, tablePersistent.scrollData().range.y)};
+            tablePersistent.scrollData().verticalTrack = {};
+            tablePersistent.scrollData().verticalThumb = {};
+            tablePersistent.scrollData().horizontalTrack = {};
+            tablePersistent.scrollData().horizontalThumb = {};
 
             if(verticalScrollbar == true)
             {
-                tablePersistent.verticalScrollbarTrack = {node.bounds.right() - scrollbarSize, node.bounds.y, scrollbarSize, tableViewport.height};
-                float trackExtent = tablePersistent.verticalScrollbarTrack.height;
+                tablePersistent.scrollData().verticalTrack = {node.bounds.right() - scrollbarSize, node.bounds.y, scrollbarSize, tableViewport.height};
+                float trackExtent = tablePersistent.scrollData().verticalTrack.height;
                 float thumbExtent = std::clamp(trackExtent * tableViewport.height / std::max(1.f, contentHeight), std::min(node.style->metrics.grabMinimumSize, trackExtent), trackExtent);
                 float travel = std::max(0.f, trackExtent - thumbExtent);
-                float offset = tablePersistent.scrollRange.y <= 0.f ? 0.f : travel * tablePersistent.scrollPosition.y / tablePersistent.scrollRange.y;
-                tablePersistent.verticalScrollbarThumb = {tablePersistent.verticalScrollbarTrack.x, tablePersistent.verticalScrollbarTrack.y + offset, tablePersistent.verticalScrollbarTrack.width, thumbExtent};
+                float offset = tablePersistent.scrollData().range.y <= 0.f ? 0.f : travel * tablePersistent.scrollData().position.y / tablePersistent.scrollData().range.y;
+                tablePersistent.scrollData().verticalThumb = {tablePersistent.scrollData().verticalTrack.x, tablePersistent.scrollData().verticalTrack.y + offset, tablePersistent.scrollData().verticalTrack.width, thumbExtent};
             }
 
             if(horizontalScrollbar == true)
             {
-                tablePersistent.horizontalScrollbarTrack = {node.bounds.x, node.bounds.bottom() - scrollbarSize, tableViewport.width, scrollbarSize};
-                float trackExtent = tablePersistent.horizontalScrollbarTrack.width;
+                tablePersistent.scrollData().horizontalTrack = {node.bounds.x, node.bounds.bottom() - scrollbarSize, tableViewport.width, scrollbarSize};
+                float trackExtent = tablePersistent.scrollData().horizontalTrack.width;
                 float thumbExtent = std::clamp(trackExtent * tableViewport.width / std::max(1.f, contentWidth), std::min(node.style->metrics.grabMinimumSize, trackExtent), trackExtent);
                 float travel = std::max(0.f, trackExtent - thumbExtent);
-                float offset = tablePersistent.scrollRange.x <= 0.f ? 0.f : travel * tablePersistent.scrollPosition.x / tablePersistent.scrollRange.x;
-                tablePersistent.horizontalScrollbarThumb = {tablePersistent.horizontalScrollbarTrack.x + offset, tablePersistent.horizontalScrollbarTrack.y, thumbExtent, tablePersistent.horizontalScrollbarTrack.height};
+                float offset = tablePersistent.scrollData().range.x <= 0.f ? 0.f : travel * tablePersistent.scrollData().position.x / tablePersistent.scrollData().range.x;
+                tablePersistent.scrollData().horizontalThumb = {tablePersistent.scrollData().horizontalTrack.x + offset, tablePersistent.scrollData().horizontalTrack.y, thumbExtent, tablePersistent.scrollData().horizontalTrack.height};
             }
 
             float frozenWidth = 0.f;
@@ -1408,18 +1598,18 @@ namespace Mosaic
             {
                 const Context::TableColumnState & columnState = tableState.columns[column];
 
-                if(columnState.options.enabled == true && columnState.options.visible == true && columnState.order < node.tableOptions.frozenColumns)
+                if(columnState.options.enabled == true && columnState.options.visible == true && columnState.order < node.tableOptions().frozenColumns)
                 {
                     frozenWidth = std::max(frozenWidth, columnX[column] - childArea.x + columnState.resolvedWidth + horizontalGap);
                 }
             }
             float frozenHeight = 0.f;
             size_t rowCount = tableState.rowsVirtualized ? static_cast<size_t>(tableState.virtualFirstRow) + tableState.virtualRowCount : rowHeights.size();
-            for(uint32_t rowIndex = 0; rowIndex < std::min<uint32_t>(node.tableOptions.frozenRows, static_cast<uint32_t>(rowCount)); ++rowIndex)
+            for(uint32_t rowIndex = 0; rowIndex < std::min<uint32_t>(node.tableOptions().frozenRows, static_cast<uint32_t>(rowCount)); ++rowIndex)
             {
                 frozenHeight += rowHeight(rowIndex);
 
-                if(rowIndex + 1 < node.tableOptions.frozenRows)
+                if(rowIndex + 1 < node.tableOptions().frozenRows)
                 {
                     frozenHeight += nodeGap;
                 }
@@ -1440,20 +1630,31 @@ namespace Mosaic
                     continue;
                 }
 
-                bool frozenColumn = columnState.order < node.tableOptions.frozenColumns;
-                Rect columnBounds = {columnX[column] - (frozenColumn ? 0.f : tablePersistent.scrollPosition.x), tableViewport.y, columnState.resolvedWidth, tableViewport.height};
+                bool frozenColumn = columnState.order < node.tableOptions().frozenColumns;
+                Rect columnBounds = {columnX[column] - (frozenColumn ? 0.f : tablePersistent.scrollData().position.x), tableViewport.y, columnState.resolvedWidth, tableViewport.height};
                 columnState.bodyBounds = Rect::intersection(columnBounds, node.childrenClip);
             }
 
+            size_t cellCount = (static_cast<size_t>(tableState.maximumRow) + 1) * columnCount;
+            FloatVector cellCursorY(cellCount, 0.f);
+            FloatVector cellLineRight(cellCount, 0.f);
+            FloatVector cellLineHeight(cellCount, 0.f);
+            FloatVector cellLineBaseline(cellCount, 0.f);
+            FloatVector cellLineBelowBaseline(cellCount, 0.f);
+            SizeVector cellLineCounts(cellCount, 0);
+            size_t tableRowCount = static_cast<size_t>(tableState.maximumRow) + 1;
+            FloatVector rowLastLineHeight(tableRowCount, 0.f);
+            FloatVector rowLastLineBaseline(tableRowCount, 0.f);
+            FloatVector rowLastLineBelowBaseline(tableRowCount, 0.f);
             for(size_t child : children)
             {
                 Node & tableChild = nodes[child];
 
                 if(tableChild.kind == Detail::NodeKind::TableRow)
                 {
-                    bool frozenRow = tableChild.tableRow < node.tableOptions.frozenRows;
+                    bool frozenRow = tableChild.tableItem().row < node.tableOptions().frozenRows;
                     Rect rowClip = node.childrenClip;
-                    Rect rowBounds = {tableViewport.x, rowPosition(tableChild.tableRow) - (frozenRow ? 0.f : tablePersistent.scrollPosition.y), tableViewport.width, rowHeight(tableChild.tableRow)};
+                    Rect rowBounds = {tableViewport.x, rowPosition(tableChild.tableItem().row) - (frozenRow ? 0.f : tablePersistent.scrollData().position.y), tableViewport.width, rowHeight(tableChild.tableItem().row)};
 
                     if(Rect::intersection(rowBounds, rowClip).empty() == true)
                     {
@@ -1467,7 +1668,7 @@ namespace Mosaic
                     continue;
                 }
 
-                uint32_t column = std::min(tableChild.tableColumn, columnCount - 1);
+                uint32_t column = std::min(tableChild.tableItem().column, columnCount - 1);
                 const Context::TableColumnState & columnState = tableState.columns[column];
                 tableChild.visible = columnState.options.enabled && columnState.options.visible;
 
@@ -1476,8 +1677,8 @@ namespace Mosaic
                     continue;
                 }
 
-                bool frozenColumn = columnState.order < node.tableOptions.frozenColumns;
-                bool frozenRow = tableChild.tableRow < node.tableOptions.frozenRows;
+                bool frozenColumn = columnState.order < node.tableOptions().frozenColumns;
+                bool frozenRow = tableChild.tableItem().row < node.tableOptions().frozenRows;
                 Rect cellClip = node.childrenClip;
 
                 if(frozenColumn == false && frozenWidth > 0.f)
@@ -1496,10 +1697,85 @@ namespace Mosaic
                     cellClip.height = std::max(0.f, bottom - cellClip.y);
                 }
 
-                float rowPaddingY = tableChild.tableRow < tableState.requestedRowPaddingY.size() && tableState.requestedRowPaddingY[tableChild.tableRow] >= 0.f ? tableState.requestedRowPaddingY[tableChild.tableRow] : 0.f;
-                Rect cellBounds = {columnX[column] - (frozenColumn ? 0.f : tablePersistent.scrollPosition.x) + tableChild.layout.offset.x, rowPosition(tableChild.tableRow) - (frozenRow ? 0.f : tablePersistent.scrollPosition.y) + tableChild.layout.offset.y + rowPaddingY, columnState.resolvedWidth, std::max(0.f, rowHeight(tableChild.tableRow) - rowPaddingY * 2.f)};
+                float rowPaddingY = tableChild.tableItem().row < tableState.requestedRowPaddingY.size() && tableState.requestedRowPaddingY[tableChild.tableItem().row] >= 0.f ? tableState.requestedRowPaddingY[tableChild.tableItem().row] : 0.f;
+                size_t cellIndex = static_cast<size_t>(tableChild.tableItem().row) * columnCount + column;
+                bool reusePreviousCellLine = tableChild.sameLine == true && cellLineCounts[cellIndex] == 0 && rowLastLineHeight[tableChild.tableItem().row] > 0.f;
 
-                if(node.tableOptions.clipCells == true && columnState.options.clip == true)
+                if(reusePreviousCellLine == true)
+                {
+                    cellLineCounts[cellIndex] = 1;
+                    cellLineHeight[cellIndex] = rowLastLineHeight[tableChild.tableItem().row];
+                    cellLineBaseline[cellIndex] = rowLastLineBaseline[tableChild.tableItem().row];
+                    cellLineBelowBaseline[cellIndex] = rowLastLineBelowBaseline[tableChild.tableItem().row];
+                }
+
+                bool continueLine = tableChild.sameLine == true && cellLineCounts[cellIndex] != 0;
+
+                if(continueLine == false)
+                {
+                    if(cellLineCounts[cellIndex] != 0)
+                    {
+                        cellCursorY[cellIndex] += cellLineHeight[cellIndex] + nodeGap;
+                    }
+
+                    ++cellLineCounts[cellIndex];
+                    cellLineRight[cellIndex] = 0.f;
+                    cellLineHeight[cellIndex] = 0.f;
+                    cellLineBaseline[cellIndex] = 0.f;
+                    cellLineBelowBaseline[cellIndex] = 0.f;
+                }
+
+                float spacing = tableChild.sameLineSpacing < 0.f ? nodeGap : tableChild.sameLineSpacing;
+                float itemX = continueLine == true && reusePreviousCellLine == false ? cellLineRight[cellIndex] + spacing : 0.f;
+
+                if(continueLine == true && tableChild.sameLineOffset > 0.f)
+                {
+                    itemX = tableChild.sameLineOffset;
+                }
+
+                float cellHeight = std::max(0.f, rowHeight(tableChild.tableItem().row) - rowPaddingY * 2.f);
+                float availableWidth = std::max(0.f, columnState.resolvedWidth - itemX);
+                float availableHeight = std::max(0.f, cellHeight - cellCursorY[cellIndex]);
+                float itemWidth = resolveDimension(tableChild.layout.width, tableChild.measured.x, availableWidth);
+                float itemHeight = resolveDimension(tableChild.layout.height, tableChild.measured.y, availableHeight);
+
+                if(tableChild.layout.width.rule == SizeRule::Fill)
+                {
+                    itemWidth = availableWidth;
+                }
+
+                if(tableChild.layout.height.rule == SizeRule::Fill)
+                {
+                    itemHeight = availableHeight;
+                }
+
+                float lineBaseline = cellLineBaseline[cellIndex];
+
+                if(tableChild.baselineValid == true)
+                {
+                    lineBaseline = std::max(lineBaseline, tableChild.baseline);
+                }
+
+                float baselineOffset = tableChild.baselineValid == true ? std::max(0.f, lineBaseline - tableChild.baseline) : 0.f;
+
+                float cellX = columnX[column] - (frozenColumn ? 0.f : tablePersistent.scrollData().position.x);
+                float cellY = rowPosition(tableChild.tableItem().row) - (frozenRow ? 0.f : tablePersistent.scrollData().position.y) + rowPaddingY;
+                Rect cellBounds = {cellX + itemX + tableChild.layout.offset.x, cellY + cellCursorY[cellIndex] + baselineOffset + tableChild.layout.offset.y, itemWidth, itemHeight};
+                cellLineRight[cellIndex] = std::max(cellLineRight[cellIndex], itemX + itemWidth);
+                cellLineHeight[cellIndex] = std::max(cellLineHeight[cellIndex], itemHeight);
+
+                if(tableChild.baselineValid == true)
+                {
+                    cellLineBaseline[cellIndex] = std::max(cellLineBaseline[cellIndex], tableChild.baseline);
+                    cellLineBelowBaseline[cellIndex] = std::max(cellLineBelowBaseline[cellIndex], itemHeight - tableChild.baseline);
+                    cellLineHeight[cellIndex] = std::max(cellLineHeight[cellIndex], cellLineBaseline[cellIndex] + cellLineBelowBaseline[cellIndex]);
+                }
+
+                rowLastLineHeight[tableChild.tableItem().row] = cellLineHeight[cellIndex];
+                rowLastLineBaseline[tableChild.tableItem().row] = cellLineBaseline[cellIndex];
+                rowLastLineBelowBaseline[tableChild.tableItem().row] = cellLineBelowBaseline[cellIndex];
+
+                if(node.tableOptions().clipCells == true && columnState.options.clip == true)
                 {
                     cellClip = Rect::intersection(cellClip, cellBounds);
                 }
@@ -1516,21 +1792,21 @@ namespace Mosaic
                     {
                         Rect rowSpan = {tableViewport.x, tableChild.bounds.y, tableViewport.width, tableChild.style->metrics.controlHeight};
 
-                        if(tableChild.treeSpanAllColumns == true)
+                        if(tableChild.treeData().spanAllColumns == true)
                         {
-                            tableChild.treeFrameBounds = rowSpan;
-                            tableChild.treeFrameClip = node.childrenClip;
+                            tableChild.mutableTreeData().frameBounds = rowSpan;
+                            tableChild.mutableTreeData().frameClip = node.childrenClip;
                         }
 
-                        if(tableChild.treeLabelSpanAllColumns == true)
+                        if(tableChild.treeData().labelSpanAllColumns == true)
                         {
-                            tableChild.treeLabelClip = node.childrenClip;
+                            tableChild.mutableTreeData().labelClip = node.childrenClip;
                         }
 
                         if(tableChild.persistentState != nullptr)
                         {
-                            tableChild.persistentState->lastBounds = tableChild.treeFrameBounds;
-                            tableChild.persistentState->lastClip = tableChild.treeFrameClip;
+                            tableChild.persistentState->lastBounds = tableChild.mutableTreeData().frameBounds;
+                            tableChild.persistentState->lastClip = tableChild.mutableTreeData().frameClip;
                         }
                     }
                     else if(tableChild.kind == Detail::NodeKind::Selectable && tableChild.selectableSpanAllColumns == true)
@@ -1547,7 +1823,7 @@ namespace Mosaic
                     }
                 }
 
-                if(tableChild.tableRow < tableState.headerRowCount && tableState.headersSubmitted == true)
+                if(tableChild.tableItem().row < tableState.headerRowCount && tableState.headersSubmitted == true)
                 {
                     tableState.columns[column].lastBounds = tableChild.bounds;
                 }
@@ -1557,7 +1833,96 @@ namespace Mosaic
         }
 
         bool horizontal = Detail::isHorizontal(node.kind, node.layout.orientation) || (Detail::scrollsContent(node) && node.layout.orientation == Orientation::Horizontal);
-        bool bothCollapsedVertical = node.kind == Detail::NodeKind::Split && node.layout.orientation == Orientation::Vertical && children.size() >= 2 && nodes[children.front()].kind == Detail::NodeKind::Window && nodes[children.front()].windowCollapsed && nodes[children[1]].kind == Detail::NodeKind::Window && nodes[children[1]].windowCollapsed;
+        bool bothCollapsedVertical = node.kind == Detail::NodeKind::Split && node.layout.orientation == Orientation::Vertical && children.size() >= 2 && nodes[children.front()].kind == Detail::NodeKind::Window && nodes[children.front()].windowData().collapsed && nodes[children[1]].kind == Detail::NodeKind::Window && nodes[children[1]].windowData().collapsed;
+        bool hasSameLine = std::any_of(children.begin(), children.end(), [this](size_t child)
+                                       {
+                                           return nodes[child].sameLine;
+                                       });
+
+        if(horizontal == false && node.kind != Detail::NodeKind::Split && hasSameLine == true)
+        {
+            float cursorY = childArea.y;
+            size_t lineBegin = 0;
+
+            while(lineBegin < children.size())
+            {
+                size_t lineEnd = lineBegin + 1;
+
+                while(lineEnd < children.size() && nodes[children[lineEnd]].sameLine == true)
+                {
+                    ++lineEnd;
+                }
+
+                float lineRight = 0.f;
+                float lineHeight = 0.f;
+                float lineBaseline = 0.f;
+                float lineBelowBaseline = 0.f;
+                for(size_t childIndex = lineBegin; childIndex != lineEnd; ++childIndex)
+                {
+                    Node & child = nodes[children[childIndex]];
+                    float spacing = child.sameLineSpacing < 0.f ? nodeGap : child.sameLineSpacing;
+                    float x = childIndex == lineBegin ? 0.f : child.sameLineOffset > 0.f ? child.sameLineOffset : lineRight + spacing;
+                    float availableWidth = std::max(0.f, childArea.width - x);
+                    float width = resolveDimension(child.layout.width, child.measured.x, availableWidth);
+
+                    if(child.layout.width.rule == SizeRule::Fill)
+                    {
+                        width = availableWidth;
+                    }
+
+                    float height = resolveDimension(child.layout.height, child.measured.y, childArea.height);
+                    lineRight = std::max(lineRight, x + width);
+                    lineHeight = std::max(lineHeight, height);
+
+                    if(child.baselineValid == true)
+                    {
+                        lineBaseline = std::max(lineBaseline, child.baseline);
+                        lineBelowBaseline = std::max(lineBelowBaseline, height - child.baseline);
+                    }
+                }
+
+                if(lineBaseline > 0.f)
+                {
+                    lineHeight = std::max(lineHeight, lineBaseline + lineBelowBaseline);
+                }
+
+                lineRight = 0.f;
+                for(size_t childIndex = lineBegin; childIndex != lineEnd; ++childIndex)
+                {
+                    Node & child = nodes[children[childIndex]];
+                    float spacing = child.sameLineSpacing < 0.f ? nodeGap : child.sameLineSpacing;
+                    float x = childIndex == lineBegin ? 0.f : child.sameLineOffset > 0.f ? child.sameLineOffset : lineRight + spacing;
+                    float availableWidth = std::max(0.f, childArea.width - x);
+                    float width = resolveDimension(child.layout.width, child.measured.x, availableWidth);
+
+                    if(child.layout.width.rule == SizeRule::Fill)
+                    {
+                        width = availableWidth;
+                    }
+
+                    float height = resolveDimension(child.layout.height, child.measured.y, lineHeight);
+                    float baselineOffset = lineBaseline > 0.f && child.baselineValid == true ? lineBaseline - child.baseline : 0.f;
+                    Rect childBounds = {childArea.x + x + child.layout.offset.x, cursorY + baselineOffset + child.layout.offset.y, width, height};
+
+                    if(Rect::intersection(childBounds, node.childrenClip).empty() == true)
+                    {
+                        cullNode(children[childIndex], childBounds);
+                    }
+                    else
+                    {
+                        arrangeNode(children[childIndex], childBounds, node.childrenClip);
+                    }
+
+                    lineRight = std::max(lineRight, x + width);
+                }
+
+                cursorY += lineHeight + nodeGap;
+                lineBegin = lineEnd;
+            }
+
+            return;
+        }
+
         float spacing = node.kind == Detail::NodeKind::Split ? 0.f : nodeGap;
         float availablePrimary = (horizontal ? childArea.width : childArea.height) - spacing * static_cast<float>(children.size() - 1);
         float fixedPrimary = 0.f;
@@ -1587,8 +1952,8 @@ namespace Mosaic
             if(node.kind == Detail::NodeKind::Split && children.size() >= 2)
             {
                 float total = std::max(0.f, availablePrimary - node.style->metrics.splitterWidth);
-                float minimumRatio = total <= 0.f ? 0.f : std::clamp(node.splitMinimumFirst / total, 0.f, 1.f);
-                float maximumRatio = total <= 0.f ? 1.f : std::clamp(1.f - node.splitMinimumSecond / total, 0.f, 1.f);
+                float minimumRatio = total <= 0.f ? 0.f : std::clamp(node.valueData().splitMinimumFirst / total, 0.f, 1.f);
+                float maximumRatio = total <= 0.f ? 1.f : std::clamp(1.f - node.valueData().splitMinimumSecond / total, 0.f, 1.f);
                 float lowerRatio = std::min(minimumRatio, maximumRatio);
                 float upperRatio = std::max(minimumRatio, maximumRatio);
                 float ratio = std::clamp(node.layout.splitRatio, lowerRatio, upperRatio);
@@ -1598,8 +1963,8 @@ namespace Mosaic
                 {
                     const Node & first = nodes[children.front()];
                     const Node & second = nodes[children[1]];
-                    bool firstCollapsed = first.kind == Detail::NodeKind::Window && first.windowCollapsed;
-                    bool secondCollapsed = second.kind == Detail::NodeKind::Window && second.windowCollapsed;
+                    bool firstCollapsed = first.kind == Detail::NodeKind::Window && first.windowData().collapsed;
+                    bool secondCollapsed = second.kind == Detail::NodeKind::Window && second.windowData().collapsed;
 
                     if(firstCollapsed == true && secondCollapsed == true)
                     {

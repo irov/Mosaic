@@ -38,10 +38,10 @@ ExternalProject_Add(MosaicGraphicsDownload
     PREFIX Graphics
     INSTALL_DIR "${mosaic_graphics_install_dir}"
     GIT_REPOSITORY "${MOSAIC_GRAPHICS_GIT_REPOSITORY}"
-    GIT_TAG "${MOSAIC_GRAPHICS_GIT_TAG}"
+    GIT_TAG master
     GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
-    UPDATE_DISCONNECTED TRUE
+    UPDATE_DISCONNECTED FALSE
     CMAKE_ARGS ${mosaic_graphics_cmake_args}
     BUILD_BYPRODUCTS "${mosaic_graphics_library}"
 )

@@ -6,10 +6,15 @@ namespace Mosaic
 {
     class PlatformAdapter;
 
+    namespace Detail
+    {
+        struct GraphicsBridgeState;
+    }
+
     class GraphicsBridge
     {
     public:
-        GraphicsBridge();
+        explicit GraphicsBridge(Allocator * allocator = nullptr);
         ~GraphicsBridge();
 
         GraphicsBridge(const GraphicsBridge &) = delete;
@@ -19,11 +24,13 @@ namespace Mosaic
 
         [[nodiscard]] bool build(const Frame & frame, RenderMesh * const _out, size_t viewportIndex = 0) const;
         [[nodiscard]] bool build(const Frame & frame, RenderMesh * const _out, PlatformAdapter & platform, size_t viewportIndex = 0) const;
+        [[nodiscard]] StringView lastError() const noexcept;
 
     private:
         [[nodiscard]] bool buildWithPlatform(const Frame & frame, RenderMesh * const _out, PlatformAdapter * platform, size_t viewportIndex) const;
 
     private:
-        [[maybe_unused]] mutable void * m_canvas = nullptr;
+        [[maybe_unused]] mutable Detail::GraphicsBridgeState * m_state = nullptr;
+        mutable StringView m_lastError;
     };
 } // namespace Mosaic

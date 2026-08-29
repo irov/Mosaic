@@ -36,6 +36,25 @@ namespace Mosaic
         using Scope::Scope;
     };
 
+    class MainMenuBarScope final
+    {
+    public:
+        MainMenuBarScope() noexcept = default;
+        MainMenuBarScope(const MainMenuBarScope &) = delete;
+        MainMenuBarScope & operator=(const MainMenuBarScope &) = delete;
+        MainMenuBarScope(MainMenuBarScope &&) noexcept = default;
+        MainMenuBarScope & operator=(MainMenuBarScope &&) noexcept = default;
+        MainMenuBarScope(WindowScope && window, Scope && menuBar) noexcept;
+
+        [[nodiscard]] Id id() const noexcept;
+        [[nodiscard]] bool visible() const noexcept;
+        explicit operator bool() const noexcept;
+
+    private:
+        WindowScope m_window;
+        Scope m_menuBar;
+    };
+
     class TabBarScope final : public Scope
     {
     public:

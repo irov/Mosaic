@@ -32,12 +32,12 @@ namespace Mosaic
                 return false;
             }
 
-            if(tableNode.tableOptions.scrollHorizontal == false)
+            if(tableNode.tableOptions().scrollHorizontal == false)
             {
                 return true;
             }
 
-            if(tableNode.tableOptions.clipCells == false)
+            if(tableNode.tableOptions().clipCells == false)
             {
                 return true;
             }
@@ -47,7 +47,7 @@ namespace Mosaic
                 return true;
             }
 
-            if(columnState.order < tableNode.tableOptions.frozenColumns)
+            if(columnState.order < tableNode.tableOptions().frozenColumns)
             {
                 return true;
             }
@@ -89,7 +89,7 @@ namespace Mosaic
                 return true;
             }
 
-            float scroll = columnState.order < tableNode.tableOptions.frozenColumns ? 0.f : persistentState->scrollPosition.x;
+            float scroll = columnState.order < tableNode.tableOptions().frozenColumns ? 0.f : persistentState->scrollData().position.x;
             Rect columnBounds = {tableState.columnPositions[column] - scroll, persistentState->lastBounds.y, columnState.resolvedWidth, persistentState->lastBounds.height};
             Rect viewport = Rect::intersection(persistentState->lastBounds, persistentState->lastClip);
             auto returnedValue = Rect::intersection(columnBounds, viewport).empty() == false;
@@ -133,7 +133,8 @@ namespace Mosaic
             }
 
             tableState.sortSpecs.clear();
-            tableState.sortSpecs.push_back({column, direction, 0});
+            Id userId = column < tableState.columns.size() ? tableState.columns[column].options.userId : InvalidId;
+            tableState.sortSpecs.push_back({column, direction, 0, userId});
             tableState.sortSpecsDirty = true;
         }
         //////////////////////////////////////////////////////////////////////////
@@ -141,22 +142,37 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Scope table(Context * ui, StringView label, uint32_t columns, const LayoutOptions & layout, const SourceLocation & location)
     {
-        auto returnedValue = Mosaic::table(ui, label, columns, {}, layout, location);
+        auto returnedValue = Mosaic::table(ui, Key{}, label, columns, {}, layout, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope table(Context * ui, const Key & key, StringView label, uint32_t columns, const LayoutOptions & layout, const SourceLocation & location)
+    {
+        auto returnedValue = Mosaic::table(ui, key, label, columns, {}, layout, location);
 
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
     Scope table(Context * ui, StringView label, uint32_t columns, const TableOptions & tableOptions, const LayoutOptions & layout, const SourceLocation & location)
     {
+        auto returnedValue = Mosaic::table(ui, Key{}, label, columns, tableOptions, layout, location);
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    Scope table(Context * ui, const Key & key, StringView label, uint32_t columns, const TableOptions & tableOptions, const LayoutOptions & layout, const SourceLocation & location)
+    {
         LayoutOptions resolvedLayout = layout;
         resolvedLayout.columns = std::max(1U, columns);
-        size_t node = ui->addNode(Detail::NodeKind::Table, {}, label, resolvedLayout, location, SemanticRole::Table);
-        ui->nodes[node].tableSettingsId = tableOptions.settingsId;
+        size_t node = ui->addNode(Detail::NodeKind::Table, key, label, resolvedLayout, location, SemanticRole::Table);
+        ui->nodes[node].setTableSettingsId(tableOptions.settingsId);
         Context::TableState & tableState = ui->tableState(ui->nodes[node].id);
         bool settingsJustDisabled = tableOptions.saveSettings == false && tableState.options.saveSettings;
         tableState.options = tableOptions;
         tableState.currentRow = 0;
         tableState.currentColumn = 0;
+        tableState.currentRowIdentity = InvalidId;
         tableState.currentCellSubmitted = false;
         tableState.virtualRowCount = 0;
         tableState.virtualRowHeight = 0.f;
@@ -194,9 +210,9 @@ namespace Mosaic
             }
         }
 
-        ui->nodes[node].tableOptions = tableOptions;
-        ui->nodes[node].scrollOptions.axes = tableOptions.scrollHorizontal && tableOptions.scrollVertical ? ScrollAxes::Both : (tableOptions.scrollHorizontal ? ScrollAxes::Horizontal : ScrollAxes::Vertical);
-        ui->nodes[node].scrollOptions.visibility = tableOptions.scrollHorizontal || tableOptions.scrollVertical ? ScrollbarVisibility::Automatic : ScrollbarVisibility::Hidden;
+        ui->nodes[node].mutableTableOptions() = tableOptions;
+        ui->nodes[node].mutableScrollOptions().axes = tableOptions.scrollHorizontal && tableOptions.scrollVertical ? ScrollAxes::Both : (tableOptions.scrollHorizontal ? ScrollAxes::Horizontal : ScrollAxes::Vertical);
+        ui->nodes[node].mutableScrollOptions().visibility = tableOptions.scrollHorizontal || tableOptions.scrollVertical ? ScrollbarVisibility::Automatic : ScrollbarVisibility::Hidden;
 
         if(tableOptions.scrollHorizontal == true || tableOptions.scrollVertical == true)
         {
@@ -205,14 +221,14 @@ namespace Mosaic
             Rect hitBounds;
             uint8_t hitAxis = 0;
 
-            if(pointer != nullptr && scrollState.verticalScrollbarTrack.contains(pointer->position) == true)
+            if(pointer != nullptr && scrollState.scrollData().verticalTrack.contains(pointer->position) == true)
             {
-                hitBounds = scrollState.verticalScrollbarTrack;
+                hitBounds = scrollState.scrollData().verticalTrack;
                 hitAxis = 2;
             }
-            else if(pointer != nullptr && scrollState.horizontalScrollbarTrack.contains(pointer->position) == true)
+            else if(pointer != nullptr && scrollState.scrollData().horizontalTrack.contains(pointer->position) == true)
             {
-                hitBounds = scrollState.horizontalScrollbarTrack;
+                hitBounds = scrollState.scrollData().horizontalTrack;
                 hitAxis = 1;
             }
 
@@ -227,19 +243,19 @@ namespace Mosaic
             if(pointer != nullptr && response.pressed() == true && hitAxis != 0)
             {
                 bool vertical = hitAxis == 2;
-                const Rect & track = vertical ? scrollState.verticalScrollbarTrack : scrollState.horizontalScrollbarTrack;
-                const Rect & thumb = vertical ? scrollState.verticalScrollbarThumb : scrollState.horizontalScrollbarThumb;
+                const Rect & track = vertical ? scrollState.scrollData().verticalTrack : scrollState.scrollData().horizontalTrack;
+                const Rect & thumb = vertical ? scrollState.scrollData().verticalThumb : scrollState.scrollData().horizontalThumb;
 
                 if(thumb.contains(pointer->position) == true)
                 {
-                    scrollState.scrollbarDragOffset = (vertical ? pointer->position.y - thumb.y : pointer->position.x - thumb.x);
-                    scrollState.draggingScrollbar = true;
-                    scrollState.draggingScrollAxis = hitAxis;
+                    scrollState.scrollData().dragOffset = (vertical ? pointer->position.y - thumb.y : pointer->position.x - thumb.x);
+                    scrollState.scrollData().draggingScrollbar = true;
+                    scrollState.scrollData().draggingAxis = hitAxis;
                 }
                 else
                 {
-                    float & position = vertical ? scrollState.scrollPosition.y : scrollState.scrollPosition.x;
-                    float extent = vertical ? scrollState.scrollRange.y : scrollState.scrollRange.x;
+                    float & position = vertical ? scrollState.scrollData().position.y : scrollState.scrollData().position.x;
+                    float extent = vertical ? scrollState.scrollData().range.y : scrollState.scrollData().range.x;
                     float pointerPosition = vertical ? pointer->position.y : pointer->position.x;
                     float thumbStart = vertical ? thumb.y : thumb.x;
                     float page = vertical ? scrollState.lastBounds.height : scrollState.lastBounds.width;
@@ -258,9 +274,9 @@ namespace Mosaic
                         position = travel <= 0.f ? 0.f : std::clamp((pointerPosition - trackStart - thumbExtent * 0.5f) / travel, 0.f, 1.f) * extent;
                     }
 
-                    scrollState.scrollTarget = scrollState.scrollPosition;
-                    scrollState.scrollVelocity = {};
-                    scrollState.scrollTargetInitialized = true;
+                    scrollState.scrollData().target = scrollState.scrollData().position;
+                    scrollState.scrollData().velocity = {};
+                    scrollState.scrollData().targetInitialized = true;
 
                     if(position != previous)
                     {
@@ -269,17 +285,17 @@ namespace Mosaic
                 }
             }
 
-            if(pointer != nullptr && ui->captured == response.id && scrollState.draggingScrollbar == true && pointer->isDown() == true)
+            if(pointer != nullptr && ui->captured == response.id && scrollState.scrollData().draggingScrollbar == true && pointer->isDown() == true)
             {
-                bool vertical = scrollState.draggingScrollAxis == 2;
-                const Rect & track = vertical ? scrollState.verticalScrollbarTrack : scrollState.horizontalScrollbarTrack;
-                const Rect & thumb = vertical ? scrollState.verticalScrollbarThumb : scrollState.horizontalScrollbarThumb;
-                float & position = vertical ? scrollState.scrollPosition.y : scrollState.scrollPosition.x;
+                bool vertical = scrollState.scrollData().draggingAxis == 2;
+                const Rect & track = vertical ? scrollState.scrollData().verticalTrack : scrollState.scrollData().horizontalTrack;
+                const Rect & thumb = vertical ? scrollState.scrollData().verticalThumb : scrollState.scrollData().horizontalThumb;
+                float & position = vertical ? scrollState.scrollData().position.y : scrollState.scrollData().position.x;
                 float previous = position;
-                position = Detail::scrollbarScrollAtPointer(track, thumb, vertical ? scrollState.scrollRange.y : scrollState.scrollRange.x, vertical, scrollState.scrollbarDragOffset, pointer->position);
-                scrollState.scrollTarget = scrollState.scrollPosition;
-                scrollState.scrollVelocity = {};
-                scrollState.scrollTargetInitialized = true;
+                position = Detail::scrollbarScrollAtPointer(track, thumb, vertical ? scrollState.scrollData().range.y : scrollState.scrollData().range.x, vertical, scrollState.scrollData().dragOffset, pointer->position);
+                scrollState.scrollData().target = scrollState.scrollData().position;
+                scrollState.scrollData().velocity = {};
+                scrollState.scrollData().targetInitialized = true;
 
                 if(position != previous)
                 {
@@ -325,30 +341,30 @@ namespace Mosaic
 
                 if(ui->input.keyPressed(KeyCode::Home) == true)
                 {
-                    scrollState.scrollPosition = {};
-                    scrollState.scrollTarget = {};
-                    scrollState.scrollVelocity = {};
-                    scrollState.scrollTargetInitialized = true;
+                    scrollState.scrollData().position = {};
+                    scrollState.scrollData().target = {};
+                    scrollState.scrollData().velocity = {};
+                    scrollState.scrollData().targetInitialized = true;
                 }
 
                 if(ui->input.keyPressed(KeyCode::End) == true)
                 {
-                    scrollState.scrollPosition = scrollState.scrollRange;
-                    scrollState.scrollTarget = scrollState.scrollPosition;
-                    scrollState.scrollVelocity = {};
-                    scrollState.scrollTargetInitialized = true;
+                    scrollState.scrollData().position = scrollState.scrollData().range;
+                    scrollState.scrollData().target = scrollState.scrollData().position;
+                    scrollState.scrollData().velocity = {};
+                    scrollState.scrollData().targetInitialized = true;
                 }
             }
 
             if(delta != Vec2{})
             {
-                Vec2 previous = scrollState.scrollPosition;
-                scrollState.scrollPosition = {std::clamp(previous.x + delta.x, 0.f, scrollState.scrollRange.x), std::clamp(previous.y + delta.y, 0.f, scrollState.scrollRange.y)};
-                scrollState.scrollTarget = scrollState.scrollPosition;
-                scrollState.scrollVelocity = {};
-                scrollState.scrollTargetInitialized = true;
+                Vec2 previous = scrollState.scrollData().position;
+                scrollState.scrollData().position = {std::clamp(previous.x + delta.x, 0.f, scrollState.scrollData().range.x), std::clamp(previous.y + delta.y, 0.f, scrollState.scrollData().range.y)};
+                scrollState.scrollData().target = scrollState.scrollData().position;
+                scrollState.scrollData().velocity = {};
+                scrollState.scrollData().targetInitialized = true;
 
-                if(scrollState.scrollPosition != previous)
+                if(scrollState.scrollData().position != previous)
                 {
                     response.flags |= 1U << 6;
                 }
@@ -356,14 +372,14 @@ namespace Mosaic
 
             if(response.released() == true)
             {
-                scrollState.draggingScrollbar = false;
-                scrollState.draggingScrollAxis = 0;
+                scrollState.scrollData().draggingScrollbar = false;
+                scrollState.scrollData().draggingAxis = 0;
             }
 
             if(response.changed() == true)
             {
                 const Context::Node & tableNode = ui->nodes[node];
-                ui->frame.events.push_back({EventType::Change, tableNode.id, ui->nodePath(ui->nodes[node]), tableNode.file, tableNode.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Change, tableNode.id, ui->nodePath(ui->nodes[node]), tableNode.debugData().file, tableNode.debugData().line, ui->input.timestamp});
             }
 
             ui->nodes[node].response = response;
@@ -437,6 +453,7 @@ namespace Mosaic
         {
             // Capabilities belong to the application. Width, order and visibility belong to
             // the user's persistent table configuration after the first submission.
+            columnState.options.userId = options.userId;
             columnState.options.sortable = options.sortable;
             columnState.options.enabled = options.enabled;
             columnState.options.sortAscending = options.sortAscending;
@@ -455,6 +472,14 @@ namespace Mosaic
         }
 
         columnState.configured = true;
+
+        for(TableSortSpec & specification : tableState.sortSpecs)
+        {
+            if(specification.column == column)
+            {
+                specification.userId = options.userId;
+            }
+        }
 
         if(columnState.order >= tableState.columns.size())
         {
@@ -500,7 +525,7 @@ namespace Mosaic
                 direction = SortDirection::Descending;
             }
 
-            tableState.sortSpecs.push_back({column, direction, 0});
+            tableState.sortSpecs.push_back({column, direction, 0, options.userId});
             tableState.sortSpecsDirty = true;
         }
     }
@@ -520,7 +545,7 @@ namespace Mosaic
         bool angledOnly = initialState.submitAngledHeaders;
         uint32_t headerRow = angledOnly ? 0U : initialState.angledHeadersSubmitted ? 1U : 0U;
 
-        if(ui->nodes[tableIndex].tableOptions.headers == false)
+        if(ui->nodes[tableIndex].tableOptions().headers == false)
         {
             Context::TableState & tableState = ui->tableState(tableId);
             tableState.currentRow = headerRow;
@@ -584,10 +609,10 @@ namespace Mosaic
 
             size_t node = ui->addNode(Detail::NodeKind::Selectable, Key(column), label, {}, SourceLocation::current(), SemanticRole::Cell, true);
             Context::Node & header = ui->nodes[node];
-            header.tableRow = headerRow;
-            header.tableColumn = column;
-            header.tableHeader = true;
-            header.tableColumnOptions = ui->tableState(tableId).columns[column].options;
+            header.mutableTableItem().row = headerRow;
+            header.mutableTableItem().column = column;
+            header.mutableTableItem().header = true;
+            header.mutableTableItem().columnOptions = ui->tableState(tableId).columns[column].options;
             {
                 const Context::TableState & tableState = ui->tableState(tableId);
                 auto sort = std::find_if(tableState.sortSpecs.begin(), tableState.sortSpecs.end(),
@@ -599,8 +624,8 @@ namespace Mosaic
                 if(sort != tableState.sortSpecs.end())
                 {
                     header.selected = true;
-                    header.tableSortDirection = sort->direction;
-                    header.tableSortOrder = sort->order;
+                    header.mutableTableItem().sortDirection = sort->direction;
+                    header.mutableTableItem().sortOrder = sort->order;
                 }
             }
 
@@ -646,7 +671,7 @@ namespace Mosaic
                     tableState.columnDragStartX = pointer->position.x;
                     tableState.columnDragMoved = true;
                     const Context::Node & currentTableNode = ui->nodes[tableIndex];
-                    ui->frame.events.push_back({EventType::Change, tableId, ui->nodePath(ui->nodes[tableIndex]), currentTableNode.file, currentTableNode.line, ui->input.timestamp});
+                    ui->frame.events.push_back({EventType::Change, tableId, ui->nodePath(ui->nodes[tableIndex]), currentTableNode.debugData().file, currentTableNode.debugData().line, ui->input.timestamp});
                 }
             }
 
@@ -746,7 +771,7 @@ namespace Mosaic
 
                     if(spec == tableState.sortSpecs.end())
                     {
-                        tableState.sortSpecs.push_back({column, direction, static_cast<uint32_t>(tableState.sortSpecs.size())});
+                        tableState.sortSpecs.push_back({column, direction, static_cast<uint32_t>(tableState.sortSpecs.size()), columnOptions.userId});
                     }
                     else
                     {
@@ -755,7 +780,7 @@ namespace Mosaic
                 }
                 tableState.sortSpecsDirty = true;
                 const Context::Node & currentTableNode = ui->nodes[tableIndex];
-                ui->frame.events.push_back({EventType::Change, tableId, ui->nodePath(ui->nodes[tableIndex]), currentTableNode.file, currentTableNode.line, ui->input.timestamp});
+                ui->frame.events.push_back({EventType::Change, tableId, ui->nodePath(ui->nodes[tableIndex]), currentTableNode.debugData().file, currentTableNode.debugData().line, ui->input.timestamp});
             }
 
             bool beginResize = tableState.options.resizable;
@@ -807,6 +832,7 @@ namespace Mosaic
             {
                 columnState.resizing = false;
                 ui->captured = InvalidId;
+                ui->capturedItem = {};
                 ui->capturedPointer = 0;
             }
 
@@ -888,49 +914,54 @@ namespace Mosaic
                 Detail::resetTableColumnOrder(ui->tableState(tableId));
             }
 
-            Mosaic::separatorText(ui, "Visible columns");
             const Context::TableState & visibleState = ui->tableState(tableId);
-            size_t visibleCount = static_cast<size_t>(std::count_if(visibleState.columns.begin(), visibleState.columns.begin() + columnCount,
-                                                                          [](const Context::TableColumnState & value)
-                                                                          {
-                                                                              return value.options.enabled && value.options.visible;
-                                                                          }));
-            for(uint32_t column = 0; column != columnCount; ++column)
+            if(visibleState.options.hideable == true)
             {
-                const Context::TableState & beforeItem = ui->tableState(tableId);
-                String generatedColumnLabel;
-                StringView columnLabel = beforeItem.columns[column].label;
+                Mosaic::separatorText(ui, "Visible columns");
+                size_t visibleCount = static_cast<size_t>(std::count_if(visibleState.columns.begin(), visibleState.columns.begin() + columnCount,
+                                                                              [](const Context::TableColumnState & value)
+                                                                              {
+                                                                                  bool visible = value.options.enabled == true && value.options.visible == true;
 
-                if(beforeItem.columns[column].options.enabled == false)
+                                                                                  return visible;
+                                                                              }));
+                for(uint32_t column = 0; column != columnCount; ++column)
                 {
-                    continue;
-                }
+                    const Context::TableState & beforeItem = ui->tableState(tableId);
+                    String generatedColumnLabel;
+                    StringView columnLabel = beforeItem.columns[column].label;
 
-                if(beforeItem.columns[column].options.hideable == false)
-                {
-                    continue;
-                }
+                    if(beforeItem.columns[column].options.enabled == false)
+                    {
+                        continue;
+                    }
 
-                bool visible = beforeItem.columns[column].options.visible;
+                    if(beforeItem.columns[column].options.hideable == false)
+                    {
+                        continue;
+                    }
 
-                if(columnLabel.empty() == true)
-                {
-                    generatedColumnLabel = "Column ";
-                    char digits[16] = {};
-                    auto converted = std::to_chars(digits, digits + sizeof(digits), column + 1);
-                    generatedColumnLabel.append(digits, converted.ptr);
-                    columnLabel = generatedColumnLabel;
-                }
+                    bool visible = beforeItem.columns[column].options.visible;
 
-                MenuItemOptions itemOptions;
-                itemOptions.checked = &visible;
-                itemOptions.enabled = visible == false || visibleCount > 1;
-                itemOptions.closeOnActivate = false;
-                Response item = Mosaic::menuItem(ui, Key(column), columnLabel, itemOptions);
+                    if(columnLabel.empty() == true)
+                    {
+                        generatedColumnLabel = "Column ";
+                        char digits[16] = {};
+                        auto converted = std::to_chars(digits, digits + sizeof(digits), column + 1);
+                        generatedColumnLabel.append(digits, converted.ptr);
+                        columnLabel = generatedColumnLabel;
+                    }
 
-                if(item.changed() == true)
-                {
-                    ui->tableState(tableId).columns[column].options.visible = visible;
+                    MenuItemOptions itemOptions;
+                    itemOptions.checked = &visible;
+                    itemOptions.enabled = visible == false || visibleCount > 1;
+                    itemOptions.closeOnActivate = false;
+                    Response item = Mosaic::menuItem(ui, Key(column), columnLabel, itemOptions);
+
+                    if(item.changed() == true)
+                    {
+                        ui->tableState(tableId).columns[column].options.visible = visible;
+                    }
                 }
             }
         }
@@ -951,6 +982,33 @@ namespace Mosaic
         }
 
         Context::TableState & tableState = ui->tableState(ui->nodes[ui->currentParent].id);
+        bool hasAngledHeader = false;
+        for(const Context::TableColumnState & column : tableState.columns)
+        {
+            if(column.options.enabled == false)
+            {
+                continue;
+            }
+
+            if(column.options.visible == false)
+            {
+                continue;
+            }
+
+            if(column.options.angledHeader == true)
+            {
+                hasAngledHeader = true;
+                break;
+            }
+        }
+
+        if(hasAngledHeader == false)
+        {
+            tableState.angledHeadersSubmitted = false;
+
+            return;
+        }
+
         tableState.submitAngledHeaders = true;
         Mosaic::tableHeadersRow(ui);
         tableState.submitAngledHeaders = false;
@@ -1035,10 +1093,10 @@ namespace Mosaic
         layout.width = SizeRule::Fill;
         size_t node = ui->addNode(Detail::NodeKind::Selectable, Key(column), label, layout, location, SemanticRole::Cell, true);
         Context::Node & header = ui->nodes[node];
-        header.tableRow = 0;
-        header.tableColumn = column;
-        header.tableHeader = true;
-        header.tableColumnOptions = columnState.options;
+        header.mutableTableItem().row = 0;
+        header.mutableTableItem().column = column;
+        header.mutableTableItem().header = true;
+        header.mutableTableItem().columnOptions = columnState.options;
         auto sorted = std::find_if(tableState.sortSpecs.begin(), tableState.sortSpecs.end(),
                                          [column](const TableSortSpec & value)
                                          {
@@ -1048,8 +1106,8 @@ namespace Mosaic
         if(sorted != tableState.sortSpecs.end())
         {
             header.selected = true;
-            header.tableSortDirection = sorted->direction;
-            header.tableSortOrder = sorted->order;
+            header.mutableTableItem().sortDirection = sorted->direction;
+            header.mutableTableItem().sortOrder = sorted->order;
         }
 
         Response response = ui->interact(node, true);
@@ -1115,7 +1173,7 @@ namespace Mosaic
 
                 if(existing == tableState.sortSpecs.end())
                 {
-                    tableState.sortSpecs.push_back({column, direction, static_cast<uint32_t>(tableState.sortSpecs.size())});
+                    tableState.sortSpecs.push_back({column, direction, static_cast<uint32_t>(tableState.sortSpecs.size()), columnOptions.userId});
                 }
                 else
                 {
@@ -1126,7 +1184,7 @@ namespace Mosaic
             Detail::setFlag(response, 6);
             header.response = response;
             const Context::Node & tableNode = ui->nodes[tableIndex];
-            ui->frame.events.push_back({EventType::Change, tableId, ui->nodePath(tableIndex), tableNode.file, tableNode.line, ui->input.timestamp});
+            ui->frame.events.push_back({EventType::Change, tableId, ui->nodePath(tableIndex), tableNode.debugData().file, tableNode.debugData().line, ui->input.timestamp});
         }
 
         return response;
@@ -1162,6 +1220,92 @@ namespace Mosaic
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
+    uint32_t tableCurrentRow(const Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return std::numeric_limits<uint32_t>::max();
+        }
+
+        size_t parent = ui->currentParent;
+        while(parent < ui->nodes.size())
+        {
+            const Context::Node & node = ui->nodes[parent];
+
+            if(node.kind == Detail::NodeKind::Table)
+            {
+                const Context::TableState * state = ui->findTableState(node.id);
+
+                return state == nullptr ? std::numeric_limits<uint32_t>::max() : state->currentRow;
+            }
+
+            if(node.parent == parent)
+            {
+                break;
+            }
+
+            parent = node.parent;
+        }
+
+        return std::numeric_limits<uint32_t>::max();
+    }
+    //////////////////////////////////////////////////////////////////////////
+    uint32_t tableCurrentColumn(const Context * ui) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return std::numeric_limits<uint32_t>::max();
+        }
+
+        size_t parent = ui->currentParent;
+        while(parent < ui->nodes.size())
+        {
+            const Context::Node & node = ui->nodes[parent];
+
+            if(node.kind == Detail::NodeKind::Table)
+            {
+                const Context::TableState * state = ui->findTableState(node.id);
+
+                return state == nullptr ? std::numeric_limits<uint32_t>::max() : state->currentColumn;
+            }
+
+            if(node.parent == parent)
+            {
+                break;
+            }
+
+            parent = node.parent;
+        }
+
+        return std::numeric_limits<uint32_t>::max();
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool tableSetColumnVisible(Context * ui, Id table, uint32_t column, bool visible) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        const Context::TableState * existingState = ui->findTableState(table);
+
+        if(existingState == nullptr)
+        {
+            return false;
+        }
+
+        if(column >= existingState->columns.size())
+        {
+            return false;
+        }
+
+        Context::TableState & state = ui->tableState(table);
+        state.columns[column].options.visible = visible;
+        state.displayOrderDirty = true;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     void tableNextRow(Context * ui)
     {
         Mosaic::tableNextRow(ui, TableRowOptions{});
@@ -1185,6 +1329,7 @@ namespace Mosaic
 
         tableState.currentColumn = 0;
         tableState.currentCellSubmitted = false;
+        tableState.currentRowIdentity = InvalidId;
 
         if(tableState.requestedRowHeights.size() <= tableState.currentRow)
         {
@@ -1201,6 +1346,38 @@ namespace Mosaic
         tableState.requestedRowPaddingY[tableState.currentRow] = options.cellPaddingY;
         tableState.currentRowBackgroundsEnabled = {false, false};
         tableState.pendingCellBackgroundEnabled = false;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void tableNextRow(Context * ui, const Key & key, const SourceLocation & location)
+    {
+        Mosaic::tableNextRow(ui, key, TableRowOptions{}, location);
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void tableNextRow(Context * ui, const Key & key, const TableRowOptions & options, const SourceLocation & location)
+    {
+        if(ui->nodes[ui->currentParent].kind != Detail::NodeKind::Table)
+        {
+            ui->frame.diagnostics.emplace_back("tableNextRow must be called inside table()");
+
+            return;
+        }
+
+        size_t tableIndex = ui->currentParent;
+        Mosaic::tableNextRow(ui, options);
+        Context::TableState & tableState = ui->tableState(ui->nodes[tableIndex].id);
+        uint32_t row = tableState.currentRow;
+        LayoutOptions layout;
+        layout.width = SizeRule::Fill;
+        layout.height = Dimension::fixed(std::max(options.minimumHeight, ui->currentStyle->metrics.controlHeight));
+        size_t node = ui->addNode(Detail::NodeKind::TableRow, key, {}, layout, location, SemanticRole::Row, false);
+        Context::Node & rowNode = ui->nodes[node];
+        rowNode.mutableTableItem().row = row;
+        rowNode.mutableTableItem().column = 0;
+        rowNode.inputBlocked = true;
+        tableState.currentRow = row;
+        tableState.currentColumn = 0;
+        tableState.currentCellSubmitted = false;
+        tableState.currentRowIdentity = rowNode.id;
     }
     //////////////////////////////////////////////////////////////////////////
     void tableSetRowBackground(Context * ui, const Color & color)
@@ -1285,7 +1462,7 @@ namespace Mosaic
         float spacing = ui->gap(tableNode);
         float stride = rowHeight + spacing;
         float headerExtent = tableState.headerRowCount == 0 ? 0.f : static_cast<float>(tableState.headerRowCount) * ui->currentStyle->metrics.controlHeight + static_cast<float>(tableState.headerRowCount) * spacing;
-        float scroll = std::max(0.f, persistentState.scrollPosition.y - headerExtent);
+        float scroll = std::max(0.f, persistentState.scrollData().position.y - headerExtent);
         float viewportHeight = persistentState.lastBounds.height > 0.f ? persistentState.lastBounds.height : ui->viewport.bounds.height;
         size_t begin = std::min(boundedRowCount, static_cast<size_t>(std::floor(scroll / std::max(stride, 0.001f))));
         size_t end = std::min(boundedRowCount, begin + static_cast<size_t>(std::ceil(std::max(0.f, viewportHeight) / std::max(stride, 0.001f))) + 1);
@@ -1324,8 +1501,8 @@ namespace Mosaic
         layout.height = Dimension::fixed(ui->currentStyle->metrics.controlHeight);
         size_t node = ui->addNode(Detail::NodeKind::TableRow, key, {}, layout, location, SemanticRole::Row, tableState.options.rowSelection);
         Context::Node & rowNode = ui->nodes[node];
-        rowNode.tableRow = row;
-        rowNode.tableColumn = 0;
+        rowNode.mutableTableItem().row = row;
+        rowNode.mutableTableItem().column = 0;
         rowNode.selected = selected;
         rowNode.inputBlocked = rowNode.inputBlocked || tableState.options.rowSelection == false;
         tableState.currentRow = row;
@@ -1333,6 +1510,7 @@ namespace Mosaic
         tableState.currentCellSubmitted = false;
         Response response = ui->interact(node);
         rowNode.response = response;
+        tableState.currentRowIdentity = rowNode.id;
 
         return response;
     }
@@ -1533,6 +1711,186 @@ namespace Mosaic
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool tableDebugSnapshot(const Context * ui, Id table, TableDebugSnapshot * const _out) noexcept
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        const Context::Node * node = ui->findFrameNode(table);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Table)
+        {
+            return false;
+        }
+
+        const Context::TableState * tableState = ui->findTableState(table);
+
+        if(tableState == nullptr)
+        {
+            return false;
+        }
+
+        TableDebugSnapshot snapshot;
+        snapshot.table = table;
+        snapshot.settings = node->tableSettingsId();
+        snapshot.bounds = node->bounds;
+        snapshot.contentBounds = node->content;
+        snapshot.clipBounds = node->childrenClip.empty() == false ? node->childrenClip : node->clip;
+        snapshot.outerClipBounds = Rect::intersection(node->bounds, node->clip);
+        snapshot.innerClipBounds = node->childrenClip;
+        snapshot.hostClipBounds = node->clip;
+        snapshot.backgroundClipBounds = node->visualClip.empty() == false ? node->visualClip : node->clip;
+        snapshot.columnCount = static_cast<uint32_t>(tableState->columns.size());
+        snapshot.rowCount = node->firstChild == std::numeric_limits<size_t>::max() ? 0 : tableState->maximumRow + 1;
+        snapshot.headerRowCount = tableState->headerRowCount;
+        snapshot.currentRow = tableState->currentRow;
+        snapshot.currentColumn = tableState->currentColumn;
+        snapshot.virtualFirstRow = tableState->virtualFirstRow;
+        snapshot.draggingColumn = tableState->draggingColumn;
+        snapshot.contextColumn = tableState->contextColumn;
+        snapshot.frozenRows = tableState->options.frozenRows;
+        snapshot.frozenColumns = tableState->options.frozenColumns;
+        snapshot.noClip = tableState->options.clipCells == false;
+        snapshot.legacyColumns = node->legacyColumns;
+        snapshot.virtualRowCount = tableState->virtualRowCount;
+        snapshot.virtualRowHeight = tableState->virtualRowHeight;
+        snapshot.rowsVirtualized = tableState->rowsVirtualized;
+        snapshot.headersSubmitted = tableState->headersSubmitted;
+        snapshot.angledHeadersSubmitted = tableState->angledHeadersSubmitted;
+        snapshot.sortSpecsDirty = tableState->sortSpecsDirty;
+        snapshot.displayOrderDirty = tableState->displayOrderDirty;
+        snapshot.rowHeights = tableState->rowHeights;
+        snapshot.rowPositions = tableState->rowPositions;
+        snapshot.columnPositions = tableState->columnPositions;
+        snapshot.displayOrder = tableState->displayOrder;
+        snapshot.columns.reserve(tableState->columns.size());
+        for(size_t columnIndex = 0; columnIndex != tableState->columns.size(); ++columnIndex)
+        {
+            uint32_t column = static_cast<uint32_t>(columnIndex);
+            const Context::TableColumnState & columnState = tableState->columns[columnIndex];
+            TableColumnDebugSnapshot columnSnapshot;
+            columnSnapshot.label = columnState.label;
+            columnSnapshot.userId = columnState.options.userId;
+            columnSnapshot.headerBounds = columnState.lastBounds;
+            columnSnapshot.bodyBounds = columnState.bodyBounds;
+            columnSnapshot.workBounds = columnState.bodyBounds;
+            columnSnapshot.clipBounds = Rect::intersection(columnState.bodyBounds, snapshot.innerClipBounds);
+            columnSnapshot.contentBounds = Rect::intersection(columnState.bodyBounds, snapshot.contentBounds);
+            columnSnapshot.width = columnState.resolvedWidth;
+            columnSnapshot.displayOrder = columnState.order;
+            columnSnapshot.enabled = columnState.options.enabled;
+            columnSnapshot.visible = columnState.options.visible;
+            auto sort = std::find_if(tableState->sortSpecs.begin(), tableState->sortSpecs.end(),
+                                     [column](const TableSortSpec & specification)
+                                     {
+                                         return specification.column == column;
+                                     });
+
+            if(sort != tableState->sortSpecs.end())
+            {
+                columnSnapshot.sorted = true;
+                columnSnapshot.sortDirection = sort->direction;
+            }
+
+            snapshot.columns.emplace_back(std::move(columnSnapshot));
+        }
+        snapshot.sortSpecifications = tableState->sortSpecs;
+        const Context::Persistent * persistent = ui->findState(table);
+
+        if(persistent != nullptr)
+        {
+            snapshot.scrollOffset = persistent->scrollData().position;
+            snapshot.scrollRange = persistent->scrollData().range;
+            snapshot.contentSize = persistent->scrollData().contentSize;
+            snapshot.verticalScrollbarTrack = persistent->scrollData().verticalTrack;
+            snapshot.verticalScrollbarThumb = persistent->scrollData().verticalThumb;
+            snapshot.horizontalScrollbarTrack = persistent->scrollData().horizontalTrack;
+            snapshot.horizontalScrollbarThumb = persistent->scrollData().horizontalThumb;
+            snapshot.lastFrame = persistent->lastFrame;
+            snapshot.active = persistent->lastFrame == ui->frame.number;
+        }
+
+        for(const Context::Node & submittedNode : ui->nodes)
+        {
+            if(submittedNode.kind != Detail::NodeKind::Table)
+            {
+                continue;
+            }
+
+            if(submittedNode.id != table)
+            {
+                continue;
+            }
+
+            ++snapshot.instanceCount;
+            TableInstanceDebugSnapshot instance;
+            instance.submission = submittedNode.windowSubmission;
+            instance.bounds = submittedNode.bounds;
+            instance.contentBounds = submittedNode.content;
+            instance.clipBounds = submittedNode.childrenClip.empty() == false ? submittedNode.childrenClip : submittedNode.clip;
+            instance.visible = submittedNode.visible;
+            snapshot.instances.emplace_back(instance);
+        }
+
+        *_out = snapshot;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool tableDebugSnapshots(const Context * ui, TableDebugSnapshotVector * const _out)
+    {
+        if(ui == nullptr)
+        {
+            return false;
+        }
+
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        TableDebugSnapshotVector output;
+        IdVector submittedTables;
+        for(const Context::Node & node : ui->nodes)
+        {
+            if(node.kind != Detail::NodeKind::Table)
+            {
+                continue;
+            }
+
+            if(std::find(submittedTables.begin(), submittedTables.end(), node.id) != submittedTables.end())
+            {
+                continue;
+            }
+
+            submittedTables.push_back(node.id);
+
+            TableDebugSnapshot snapshot;
+            if(Mosaic::tableDebugSnapshot(ui, node.id, &snapshot) == false)
+            {
+                continue;
+            }
+
+            output.emplace_back(std::move(snapshot));
+        }
+
+        *_out = std::move(output);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     void resetTableSettings(Context * ui, Id table) noexcept
     {
         if(ui == nullptr)
@@ -1545,9 +1903,9 @@ namespace Mosaic
             return;
         }
 
-        if(const Context::Node * node = ui->findFrameNode(table); node != nullptr && node->kind == Detail::NodeKind::Table && node->tableSettingsId != InvalidId)
+        if(const Context::Node * node = ui->findFrameNode(table); node != nullptr && node->kind == Detail::NodeKind::Table && node->tableSettingsId() != InvalidId)
         {
-            table = node->tableSettingsId;
+            table = node->tableSettingsId();
         }
 
         auto iterator = ui->persistent.find(table);
