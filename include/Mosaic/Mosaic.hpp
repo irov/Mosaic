@@ -1037,7 +1037,6 @@ namespace Mosaic
         size_t vertexCount = 0;
         size_t indexCount = 0;
         size_t triangleCount = 0;
-        uint32_t channelCount = 0;
     };
 
     using DrawListDebugSnapshotVector = Vector<DrawListDebugSnapshot>;
@@ -1048,7 +1047,6 @@ namespace Mosaic
         size_t index = 0;
         StringView type;
         uint64_t renderKey = 0;
-        uint32_t channel = 0;
         TextureHandle texture = 0;
         Rect bounds;
         Rect clip;
@@ -2016,8 +2014,5 @@ namespace Mosaic
     bool canvasPopClip(Context * ui, Id canvas);
     bool canvasImage(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint, SamplerFilter sampler = SamplerFilter::Linear);
     bool canvasCustom(Context * ui, Id canvas, VertexSpan vertices, IndexSpan indices, const RenderState & state);
-    bool canvasSplitChannels(Context * ui, Id canvas, uint32_t count) noexcept;
-    bool canvasSetChannel(Context * ui, Id canvas, uint32_t channel) noexcept;
-    bool canvasMergeChannels(Context * ui, Id canvas, UInt32Span order = {}) noexcept;
     bool canvasSetLayer(Context * ui, Id canvas, CanvasLayer layer) noexcept;
 } // namespace Mosaic

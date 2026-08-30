@@ -596,8 +596,6 @@ namespace Mosaic
             const CachedText * textRun = nullptr;
             const CachedText * valueTextRun = nullptr;
             size_t canvasCommandIndex = std::numeric_limits<size_t>::max();
-            uint32_t canvasChannel = 0;
-            uint32_t canvasChannelCount = 1;
             CanvasLayer canvasLayer = CanvasLayer::Local;
             size_t frameStringIndex = std::numeric_limits<size_t>::max();
 

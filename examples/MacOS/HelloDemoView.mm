@@ -78,7 +78,6 @@ namespace MosaicHelloDemo
     Mosaic::Context * _context;
     Mosaic::Input _input;
     Mosaic::GraphicsBridge _graphicsBridge;
-    Mosaic::RenderMesh _mesh;
     NSTrackingArea * _trackingArea;
     NSMutableAttributedString * _markedText;
     NSTimeInterval _previousFrameTime;
@@ -398,10 +397,15 @@ namespace MosaicHelloDemo
     const Mosaic::Color & clearColor = _demo->clearColor();
     self.clearColor = MTLClearColorMake(clearColor.r * clearColor.a, clearColor.g * clearColor.a, clearColor.b * clearColor.a, clearColor.a);
 
-    if(_graphicsBridge.build(frame, &_mesh, *_platform) == true)
+    if(_graphicsBridge.prepare(frame, *_platform) == true)
     {
-        _demo->setRenderMetrics(_mesh);
-        _renderer->render(frame.viewports.front(), _mesh);
+        const Mosaic::RenderMesh * renderData = _graphicsBridge.renderData();
+
+        if(renderData != nullptr)
+        {
+            _demo->setRenderMetrics(*renderData);
+            _renderer->render(frame.viewports.front(), *renderData);
+        }
     }
 
     Mosaic::PointerState & pointer = _input.pointers.front();

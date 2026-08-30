@@ -3859,8 +3859,6 @@ namespace MosaicExample
                             summary += ExamplesDetail::number(drawList.viewport);
                             summary += " commands=";
                             summary += ExamplesDetail::number(drawList.commandCount);
-                            summary += " channels=";
-                            summary += ExamplesDetail::number(drawList.channelCount);
                             summary += " vertices=";
                             summary += ExamplesDetail::number(drawList.vertexCount);
                             summary += " indices=";
@@ -3938,8 +3936,6 @@ namespace MosaicExample
                                 Mosaic::String line = ExamplesDetail::number(command.index);
                                 line += ": ";
                                 line += command.type;
-                                line += ", channel ";
-                                line += ExamplesDetail::number(command.channel);
                                 line += ", render key ";
                                 line += ExamplesDetail::number(command.renderKey);
                                 line += ", texture ";

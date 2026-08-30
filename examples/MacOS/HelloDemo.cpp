@@ -10574,20 +10574,6 @@ namespace MosaicExample
                 preview.rect({10.f, 10.f, 50.f, 50.f}, Mosaic::Color::fromBytes(0, 0, 255));
                 preview.rect({35.f, 35.f, 50.f, 50.f}, Mosaic::Color::fromBytes(255, 0, 0));
             }
-            Mosaic::separator(ui);
-            Mosaic::text(ui, "Blue shape is drawn first, into channel 1: appears in front");
-            Mosaic::text(ui, "Red shape is drawn after, into channel 0: appears in back");
-            {
-                Mosaic::Canvas preview = Mosaic::canvas(ui, "Reordered draw", firstLayout);
-                preview.splitChannels(2);
-                preview.setChannel(1);
-                preview.rect({10.f, 10.f, 50.f, 50.f}, Mosaic::Color::fromBytes(0, 0, 255));
-                preview.setChannel(0);
-                preview.rect({35.f, 35.f, 50.f, 50.f}, Mosaic::Color::fromBytes(255, 0, 0));
-                Mosaic::Array<uint32_t, 2> channelOrder = {0, 1};
-                preview.mergeChannels(channelOrder);
-            }
-            Mosaic::text(ui, "After reordering, contents of channel 0 appears below channel 1.");
         }
     }
     //////////////////////////////////////////////////////////////////////////

@@ -1537,9 +1537,6 @@ namespace Mosaic
                 case DrawCommandType::TextGeometry:
                     command.payload.textGeometry.translation = command.payload.textGeometry.translation + offset;
                     break;
-                case DrawCommandType::BeginChannels:
-                case DrawCommandType::SetChannel:
-                case DrawCommandType::EndChannels:
                 case DrawCommandType::PopClip:
                     break;
                 }

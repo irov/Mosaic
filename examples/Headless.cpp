@@ -24,15 +24,15 @@ int main()
     const Mosaic::Frame & frame = Mosaic::endFrame(ui);
 
     Mosaic::GraphicsBridge bridge;
-    Mosaic::RenderMesh mesh;
-    if(bridge.build(frame, &mesh) == false)
+    if(bridge.prepare(frame) == false)
     {
         Mosaic::deleteContext(ui);
 
         return 1;
     }
 
-    bool geometryGenerated = mesh.vertices.empty() == false;
+    const Mosaic::RenderMesh * renderData = bridge.renderData();
+    bool geometryGenerated = renderData != nullptr && renderData->vertices.empty() == false;
     Mosaic::deleteContext(ui);
 
     if(geometryGenerated == false)

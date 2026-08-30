@@ -24,6 +24,11 @@ namespace Mosaic
 
         [[nodiscard]] bool build(const Frame & frame, RenderMesh * const _out, size_t viewportIndex = 0) const;
         [[nodiscard]] bool build(const Frame & frame, RenderMesh * const _out, PlatformAdapter & platform, size_t viewportIndex = 0) const;
+        [[nodiscard]] bool prepare(const Frame & frame, size_t viewportIndex = 0) const;
+        [[nodiscard]] bool prepare(const Frame & frame, PlatformAdapter & platform, size_t viewportIndex = 0) const;
+        // The source frame must remain valid only for the duration of prepare.
+        // Returned data is owned by this bridge and remains valid until its next prepare call.
+        [[nodiscard]] const RenderMesh * renderData() const noexcept;
         [[nodiscard]] StringView lastError() const noexcept;
 
     private:

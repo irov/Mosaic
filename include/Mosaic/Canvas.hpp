@@ -20,9 +20,6 @@ namespace Mosaic
         [[nodiscard]] bool clipRect(Rect * const _out) const noexcept;
         [[nodiscard]] bool localPointerPosition(Vec2 * const _out) const noexcept;
         [[nodiscard]] bool focused() const noexcept;
-        bool splitChannels(uint32_t count) noexcept;
-        bool setChannel(uint32_t channel) noexcept;
-        bool mergeChannels(UInt32Span order = {}) noexcept;
         bool setLayer(CanvasLayer layer) noexcept;
 
         bool rect(const Rect & bounds, const Color & color);

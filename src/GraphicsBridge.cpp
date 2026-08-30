@@ -15,8 +15,8 @@ extern "C"
 #include <graphics/graphics.h>
 }
 
-#if GP_API_VERSION < 2U
-#error Mosaic requires Graphics API version 2 or newer
+#if GP_API_VERSION < 3U
+#error Mosaic requires Graphics API version 3 or newer
 #endif
 #endif
 
@@ -85,147 +85,6 @@ namespace Mosaic
             return result;
         }
         //////////////////////////////////////////////////////////////////////////
-        [[nodiscard]] bool boundsOf(VertexSpan vertices, Rect * const _out) noexcept
-        {
-            if(vertices.empty() == true)
-            {
-                return false;
-            }
-
-            if(_out == nullptr)
-            {
-                return false;
-            }
-
-            const Vertex & firstVertex = vertices.front();
-            float minimumX = firstVertex.position.x;
-            float minimumY = firstVertex.position.y;
-            float maximumX = minimumX;
-            float maximumY = minimumY;
-
-            for(const Vertex & vertex : vertices.subspan(1))
-            {
-                minimumX = std::min(minimumX, vertex.position.x);
-                minimumY = std::min(minimumY, vertex.position.y);
-                maximumX = std::max(maximumX, vertex.position.x);
-                maximumY = std::max(maximumY, vertex.position.y);
-            }
-
-            *_out = {minimumX, minimumY, maximumX - minimumX, maximumY - minimumY};
-
-            return true;
-        }
-        //////////////////////////////////////////////////////////////////////////
-        [[nodiscard]] uint32_t packColor(const Color & color) noexcept
-        {
-            auto channel = [](float value)
-            {
-                auto returnedValue = static_cast<uint32_t>(std::round(std::clamp(value, 0.f, 1.f) * 255.f));
-
-                return returnedValue;
-            };
-            auto returnedValue = channel(color.a) << 24U | channel(color.r) << 16U | channel(color.g) << 8U | channel(color.b);
-
-            return returnedValue;
-        }
-        //////////////////////////////////////////////////////////////////////////
-        [[nodiscard]] Rect unionRect(const Rect & left, const Rect & right) noexcept
-        {
-            if(left.empty() == true)
-            {
-                return right;
-            }
-
-            if(right.empty() == true)
-            {
-                return left;
-            }
-
-            float minimumX = std::min(left.x, right.x);
-            float minimumY = std::min(left.y, right.y);
-            float maximumX = std::max(left.right(), right.right());
-            float maximumY = std::max(left.bottom(), right.bottom());
-
-            return {minimumX, minimumY, maximumX - minimumX, maximumY - minimumY};
-        }
-        //////////////////////////////////////////////////////////////////////////
-        bool appendGeometry(RenderMesh * const _out, VertexSpan vertices, IndexSpan indices, uint64_t renderKey)
-        {
-            if(_out == nullptr)
-            {
-                return false;
-            }
-
-            RenderMesh & output = *_out;
-
-            if(vertices.empty() == true)
-            {
-                return true;
-            }
-
-            if(indices.empty() == true)
-            {
-                return true;
-            }
-
-            if(output.vertices.size() + vertices.size() > std::numeric_limits<uint32_t>::max())
-            {
-                return false;
-            }
-
-            if(output.indices.size() + indices.size() > std::numeric_limits<uint32_t>::max())
-            {
-                return false;
-            }
-
-            for(uint32_t index : indices)
-            {
-                if(index >= vertices.size())
-                {
-                    return false;
-                }
-            }
-
-            uint32_t vertexOffset = static_cast<uint32_t>(output.vertices.size());
-            uint32_t indexOffset = static_cast<uint32_t>(output.indices.size());
-            Rect bounds;
-            if(Detail::boundsOf(vertices, &bounds) == false)
-            {
-                return false;
-            }
-
-            const RenderBatch * lastBatch = output.batches.empty() == true ? nullptr : &output.batches.back();
-            bool merge = lastBatch != nullptr && lastBatch->renderKey == renderKey;
-            uint32_t relativeBase = merge == true ? vertexOffset - lastBatch->vertexOffset : 0;
-
-            output.vertices.reserve(output.vertices.size() + vertices.size());
-            for(const Vertex & vertex : vertices)
-            {
-                RenderVertex outputVertex = {vertex.position, Detail::packColor(vertex.color), vertex.uv};
-                output.vertices.push_back(outputVertex);
-            }
-            output.indices.reserve(output.indices.size() + indices.size());
-
-            for(uint32_t index : indices)
-            {
-                output.indices.push_back(index + relativeBase);
-            }
-
-            if(merge == true)
-            {
-                RenderBatch & batch = output.batches.back();
-                batch.vertexCount += static_cast<uint32_t>(vertices.size());
-                batch.indexCount += static_cast<uint32_t>(indices.size());
-                batch.bounds = Detail::unionRect(batch.bounds, bounds);
-            }
-            else
-            {
-                RenderBatch batch = {vertexOffset, static_cast<uint32_t>(vertices.size()), indexOffset, static_cast<uint32_t>(indices.size()), renderKey, bounds};
-                output.batches.push_back(batch);
-            }
-
-            return true;
-        }
 #if defined(MOSAIC_HAS_IROV_GRAPHICS)
         struct alignas(std::max_align_t) GpAllocationHeader
         {
@@ -306,187 +165,18 @@ namespace Mosaic
             return replacement;
         }
 
-        struct GraphicsGeometryCacheEntry
-        {
-            uint64_t key = 0;
-            gp_geometry_t * geometry = nullptr;
-            size_t rectangleCount = 0;
-            size_t memory = 0;
-            uint64_t lastFrame = 0;
-        };
-
-        using GraphicsGeometryCacheEntryVector = Vector<GraphicsGeometryCacheEntry>;
-
         struct GraphicsBridgeState
         {
-            explicit GraphicsBridgeState(Allocator & value) : allocator(&value), geometries(StlAllocator<GraphicsGeometryCacheEntry>(value))
+            explicit GraphicsBridgeState(Allocator & value) : allocator(&value), renderData(&value), batches(StlAllocator<gp_render_batch_t>(value))
             {
-                geometries.reserve(4096);
             }
 
             Allocator * allocator = nullptr;
             gp_canvas_t * canvas = nullptr;
-            GraphicsGeometryCacheEntryVector geometries;
-            size_t geometryMemory = 0;
-            uint64_t frame = 0;
+            RenderMesh renderData;
+            Vector<gp_render_batch_t> batches;
         };
 
-        inline constexpr size_t MaximumGeometryCacheEntries = 4096;
-        inline constexpr size_t MaximumGeometryCacheMemory = 32 * 1024 * 1024;
-        //////////////////////////////////////////////////////////////////////////
-        void destroyGeometry(GraphicsBridgeState & state, size_t index)
-        {
-            GraphicsGeometryCacheEntry & entry = state.geometries[index];
-
-            if(entry.geometry != nullptr)
-            {
-                gp_geometry_destroy(entry.geometry);
-            }
-
-            state.geometryMemory -= entry.memory;
-
-            if(index + 1 != state.geometries.size())
-            {
-                entry = state.geometries.back();
-            }
-
-            state.geometries.pop_back();
-        }
-        //////////////////////////////////////////////////////////////////////////
-        [[nodiscard]] bool reserveGeometryCache(GraphicsBridgeState & state, size_t memory)
-        {
-            while(state.geometries.size() >= Detail::MaximumGeometryCacheEntries || state.geometryMemory + memory > Detail::MaximumGeometryCacheMemory)
-            {
-                size_t oldestIndex = state.geometries.size();
-                uint64_t oldestFrame = std::numeric_limits<uint64_t>::max();
-                for(size_t index = 0; index != state.geometries.size(); ++index)
-                {
-                    const GraphicsGeometryCacheEntry & entry = state.geometries[index];
-
-                    if(entry.lastFrame == state.frame)
-                    {
-                        continue;
-                    }
-
-                    if(entry.lastFrame < oldestFrame)
-                    {
-                        oldestFrame = entry.lastFrame;
-                        oldestIndex = index;
-                    }
-                }
-
-                if(oldestIndex == state.geometries.size())
-                {
-                    return false;
-                }
-
-                Detail::destroyGeometry(state, oldestIndex);
-            }
-
-            return true;
-        }
-        //////////////////////////////////////////////////////////////////////////
-        [[nodiscard]] gp_geometry_t * findOrCreateGeometry(GraphicsBridgeState & state, const TextGeometryDrawCommand & command)
-        {
-            for(GraphicsGeometryCacheEntry & entry : state.geometries)
-            {
-                if(entry.key != command.cacheKey)
-                {
-                    continue;
-                }
-
-                if(entry.rectangleCount != command.rectangles.size())
-                {
-                    return nullptr;
-                }
-
-                entry.lastFrame = state.frame;
-
-                return entry.geometry;
-            }
-
-            gp_geometry_t * geometry = nullptr;
-            gp_result_t createResult = gp_geometry_create(&geometry, Detail::gpMalloc, Detail::gpRealloc, Detail::gpFree, state.allocator);
-
-            if(createResult != GP_SUCCESSFUL)
-            {
-                return nullptr;
-            }
-
-            gp_result_t beginResult = gp_geometry_begin_textured_rects(geometry, command.rectangles.size());
-
-            if(beginResult != GP_SUCCESSFUL)
-            {
-                gp_geometry_destroy(geometry);
-
-                return nullptr;
-            }
-
-            for(const TexturedRectInstance & rectangle : command.rectangles)
-            {
-                gp_result_t addResult = gp_geometry_add_textured_rect(geometry, rectangle.bounds.x, rectangle.bounds.y, rectangle.bounds.width, rectangle.bounds.height, rectangle.uv.x, rectangle.uv.y, rectangle.uv.right(), rectangle.uv.bottom(), rectangle.color.r, rectangle.color.g, rectangle.color.b, rectangle.color.a);
-
-                if(addResult != GP_SUCCESSFUL)
-                {
-                    gp_geometry_destroy(geometry);
-
-                    return nullptr;
-                }
-            }
-
-            gp_result_t endResult = gp_geometry_end(geometry);
-
-            if(endResult != GP_SUCCESSFUL)
-            {
-                gp_geometry_destroy(geometry);
-
-                return nullptr;
-            }
-
-            gp_size_t memory = 0;
-            gp_result_t memoryResult = gp_geometry_get_memory_size(geometry, &memory);
-
-            if(memoryResult != GP_SUCCESSFUL)
-            {
-                gp_geometry_destroy(geometry);
-
-                return nullptr;
-            }
-
-            if(Detail::reserveGeometryCache(state, memory) == false)
-            {
-                gp_geometry_destroy(geometry);
-
-                return nullptr;
-            }
-
-            GraphicsGeometryCacheEntry entry;
-            entry.key = command.cacheKey;
-            entry.geometry = geometry;
-            entry.rectangleCount = command.rectangles.size();
-            entry.memory = memory;
-            entry.lastFrame = state.frame;
-            state.geometries.push_back(entry);
-            state.geometryMemory += memory;
-
-            return geometry;
-        }
-
-        struct GpBranchPayload
-        {
-            uint64_t renderKey = 0;
-        };
-
-        struct GpRenderContext
-        {
-            RenderMesh * output = nullptr;
-        };
-
-        struct GpCustomGeometryPayload
-        {
-            VertexSpan vertices;
-            IndexSpan indices;
-        };
         //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] gp_color_t gpColor(const Color & color) noexcept
         {
@@ -738,84 +428,6 @@ namespace Mosaic
             bool successful = recorded == true && endResult == GP_SUCCESSFUL && popResult == GP_SUCCESSFUL;
 
             return successful;
-        }
-        //////////////////////////////////////////////////////////////////////////
-        gp_result_t appendGpBranch(const gp_render_batch_t * batch, void * renderContext, const void * payload)
-        {
-            if(batch == nullptr)
-            {
-                return GP_FAILURE;
-            }
-
-            if(renderContext == nullptr)
-            {
-                return GP_FAILURE;
-            }
-
-            if(payload == nullptr)
-            {
-                return GP_FAILURE;
-            }
-
-            auto & context = *static_cast<GpRenderContext *>(renderContext);
-            const auto & branch = *static_cast<const GpBranchPayload *>(payload);
-            Rect bounds = {batch->bounds.minimum_x, batch->bounds.minimum_y, batch->bounds.maximum_x - batch->bounds.minimum_x, batch->bounds.maximum_y - batch->bounds.minimum_y};
-            RenderBatch renderBatch = {batch->vertex_offset, batch->vertex_count, batch->index_offset, batch->index_count, branch.renderKey, bounds};
-            RenderBatchVector & batches = context.output->batches;
-            batches.push_back(renderBatch);
-
-            return GP_SUCCESSFUL;
-        }
-        //////////////////////////////////////////////////////////////////////////
-        gp_result_t writeGpGeometry(gp_mesh_writer_t * writer, const void * payload)
-        {
-            if(writer == nullptr)
-            {
-                return GP_FAILURE;
-            }
-
-            if(payload == nullptr)
-            {
-                return GP_FAILURE;
-            }
-
-            const auto & geometry = *static_cast<const GpCustomGeometryPayload *>(payload);
-            VertexSpan vertices = geometry.vertices;
-            IndexSpan indices = geometry.indices;
-            for(uint32_t index = 0; index != vertices.size(); ++index)
-            {
-                const Vertex & vertex = vertices[index];
-                gp_result_t positionResult = gp_mesh_writer_position(writer, index, vertex.position.x, vertex.position.y);
-
-                if(positionResult != GP_SUCCESSFUL)
-                {
-                    return GP_FAILURE;
-                }
-
-                uint32_t packedColor = Detail::packColor(vertex.color);
-                gp_result_t colorResult = gp_mesh_writer_color(writer, index, packedColor);
-
-                if(colorResult != GP_SUCCESSFUL)
-                {
-                    return GP_FAILURE;
-                }
-
-                gp_result_t uvResult = gp_mesh_writer_uv(writer, index, vertex.uv.x, vertex.uv.y);
-
-                if(uvResult != GP_SUCCESSFUL)
-                {
-                    return GP_FAILURE;
-                }
-            }
-            for(uint32_t index = 0; index != indices.size(); ++index)
-            {
-                if(gp_mesh_writer_index(writer, index, indices[index]) != GP_SUCCESSFUL)
-                {
-                    return GP_FAILURE;
-                }
-            }
-
-            return GP_SUCCESSFUL;
         }
         //////////////////////////////////////////////////////////////////////////
         bool recordGpGradient(gp_canvas_t * canvas, const GradientDrawCommand & gradient)
@@ -1339,9 +951,8 @@ namespace Mosaic
                     break;
                 }
 
-                GpCustomGeometryPayload payload = {vertices, indices};
-                gp_result_t injectResult = gp_inject_geometry(canvas, static_cast<uint32_t>(vertices.size()), static_cast<uint32_t>(indices.size()), Detail::writeGpGeometry, &payload, sizeof(payload));
-                result = injectResult == GP_SUCCESSFUL;
+                gp_result_t geometryResult = gp_geometry(canvas, static_cast<uint32_t>(vertices.size()), vertices.data(), offsetof(Vertex, position), sizeof(Vertex), vertices.data(), offsetof(Vertex, color), sizeof(Vertex), vertices.data(), offsetof(Vertex, uv), sizeof(Vertex), static_cast<uint32_t>(indices.size()), indices.data(), 0, sizeof(uint32_t), 0.f, 0.f, 1.f, 0.f, 0.f, 1.f);
+                result = geometryResult == GP_SUCCESSFUL;
                 break;
             }
             case DrawCommandType::TextGeometry:
@@ -1354,20 +965,23 @@ namespace Mosaic
                     break;
                 }
 
-                gp_geometry_t * geometry = Detail::findOrCreateGeometry(state, textGeometry);
-
-                if(geometry == nullptr)
+                if(textGeometry.rectangles.size() > std::numeric_limits<uint32_t>::max())
                 {
                     break;
                 }
 
-                gp_result_t drawResult = gp_draw_geometry(canvas, geometry, textGeometry.translation.x, textGeometry.translation.y, textGeometry.axisX.x, textGeometry.axisX.y, textGeometry.axisY.x, textGeometry.axisY.y, textGeometry.tint.r, textGeometry.tint.g, textGeometry.tint.b, textGeometry.tint.a);
-                result = drawResult == GP_SUCCESSFUL;
+                gp_result_t colorResult = gp_set_color(canvas, textGeometry.tint.r, textGeometry.tint.g, textGeometry.tint.b, textGeometry.tint.a);
+
+                if(colorResult != GP_SUCCESSFUL)
+                {
+                    break;
+                }
+
+                const TexturedRectInstance * rectangles = textGeometry.rectangles.data();
+                gp_result_t rectanglesResult = gp_textured_rects(canvas, static_cast<uint32_t>(textGeometry.rectangles.size()), rectangles, offsetof(TexturedRectInstance, bounds), sizeof(TexturedRectInstance), rectangles, offsetof(TexturedRectInstance, uv), sizeof(TexturedRectInstance), rectangles, offsetof(TexturedRectInstance, color), sizeof(TexturedRectInstance), textGeometry.translation.x, textGeometry.translation.y, textGeometry.axisX.x, textGeometry.axisX.y, textGeometry.axisY.x, textGeometry.axisY.y);
+                result = rectanglesResult == GP_SUCCESSFUL;
                 break;
             }
-            case DrawCommandType::BeginChannels:
-            case DrawCommandType::SetChannel:
-            case DrawCommandType::EndChannels:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 break;
@@ -1376,6 +990,86 @@ namespace Mosaic
             bool successful = result == true && popResult == GP_SUCCESSFUL;
 
             return successful;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] bool flushGpSegment(GraphicsBridgeState & state, RenderMesh & output, uint64_t renderKey)
+        {
+            gp_mesh_t mesh = {};
+            gp_result_t sizeResult = gp_calculate_mesh_size(state.canvas, &mesh);
+
+            if(sizeResult != GP_SUCCESSFUL)
+            {
+                return false;
+            }
+
+            size_t vertexOffset = output.vertices.size();
+            size_t indexOffset = output.indices.size();
+            size_t maximumMeshSize = std::numeric_limits<uint32_t>::max();
+
+            if(vertexOffset > maximumMeshSize)
+            {
+                return false;
+            }
+
+            if(indexOffset > maximumMeshSize)
+            {
+                return false;
+            }
+
+            size_t availableVertexCount = maximumMeshSize - vertexOffset;
+
+            if(mesh.vertex_count > availableVertexCount)
+            {
+                return false;
+            }
+
+            size_t availableIndexCount = maximumMeshSize - indexOffset;
+
+            if(mesh.index_count > availableIndexCount)
+            {
+                return false;
+            }
+
+            output.vertices.resize(vertexOffset + mesh.vertex_count);
+            output.indices.resize(indexOffset + mesh.index_count);
+            state.batches.resize(mesh.batch_count);
+
+            mesh.positions_buffer = output.vertices.data();
+            mesh.positions_offset = vertexOffset * sizeof(RenderVertex) + offsetof(RenderVertex, position);
+            mesh.positions_stride = sizeof(RenderVertex);
+            mesh.colors_buffer = output.vertices.data();
+            mesh.colors_offset = vertexOffset * sizeof(RenderVertex) + offsetof(RenderVertex, color);
+            mesh.colors_stride = sizeof(RenderVertex);
+            mesh.uv_buffer = output.vertices.data();
+            mesh.uv_offset = vertexOffset * sizeof(RenderVertex) + offsetof(RenderVertex, uv);
+            mesh.uv_stride = sizeof(RenderVertex);
+            mesh.indices_buffer = output.indices.data();
+            mesh.indices_offset = indexOffset * sizeof(uint32_t);
+            mesh.indices_stride = sizeof(uint32_t);
+            mesh.batches_buffer = state.batches.data();
+            mesh.batches_offset = 0;
+            mesh.batches_stride = sizeof(gp_render_batch_t);
+
+            gp_result_t flushResult = gp_flush(state.canvas, &mesh);
+
+            if(flushResult != GP_SUCCESSFUL)
+            {
+                output.vertices.resize(vertexOffset);
+                output.indices.resize(indexOffset);
+
+                return false;
+            }
+
+            output.batches.reserve(output.batches.size() + state.batches.size());
+
+            for(const gp_render_batch_t & batch : state.batches)
+            {
+                Rect bounds = {batch.bounds.minimum_x, batch.bounds.minimum_y, batch.bounds.maximum_x - batch.bounds.minimum_x, batch.bounds.maximum_y - batch.bounds.minimum_y};
+                RenderBatch renderBatch = {static_cast<uint32_t>(vertexOffset) + batch.vertex_offset, batch.vertex_count, static_cast<uint32_t>(indexOffset) + batch.index_offset, batch.index_count, renderKey, bounds};
+                output.batches.push_back(renderBatch);
+            }
+
+            return true;
         }
 #endif
     } // namespace Detail
@@ -1434,11 +1128,6 @@ namespace Mosaic
         {
             Detail::GraphicsBridgeState & state = *m_state;
 
-            while(state.geometries.empty() == false)
-            {
-                Detail::destroyGeometry(state, state.geometries.size() - 1);
-            }
-
             if(state.canvas != nullptr)
             {
                 gp_canvas_destroy(state.canvas);
@@ -1463,6 +1152,65 @@ namespace Mosaic
         bool result = buildWithPlatform(frame, _out, &platform, viewportIndex);
 
         return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool GraphicsBridge::prepare(const Frame & frame, size_t viewportIndex) const
+    {
+#if defined(MOSAIC_HAS_IROV_GRAPHICS)
+        if(m_state == nullptr)
+        {
+            m_lastError = "Graphics bridge is not initialized";
+
+            return false;
+        }
+
+        bool result = buildWithPlatform(frame, &m_state->renderData, nullptr, viewportIndex);
+
+        return result;
+#else
+        (void)frame;
+        (void)viewportIndex;
+        m_lastError = "Graphics support is not available";
+
+        return false;
+#endif
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool GraphicsBridge::prepare(const Frame & frame, PlatformAdapter & platform, size_t viewportIndex) const
+    {
+#if defined(MOSAIC_HAS_IROV_GRAPHICS)
+        if(m_state == nullptr)
+        {
+            m_lastError = "Graphics bridge is not initialized";
+
+            return false;
+        }
+
+        bool result = buildWithPlatform(frame, &m_state->renderData, &platform, viewportIndex);
+
+        return result;
+#else
+        (void)frame;
+        (void)platform;
+        (void)viewportIndex;
+        m_lastError = "Graphics support is not available";
+
+        return false;
+#endif
+    }
+    //////////////////////////////////////////////////////////////////////////
+    const RenderMesh * GraphicsBridge::renderData() const noexcept
+    {
+#if defined(MOSAIC_HAS_IROV_GRAPHICS)
+        if(m_state == nullptr)
+        {
+            return nullptr;
+        }
+
+        return &m_state->renderData;
+#else
+        return nullptr;
+#endif
     }
     //////////////////////////////////////////////////////////////////////////
     StringView GraphicsBridge::lastError() const noexcept
@@ -1518,7 +1266,7 @@ namespace Mosaic
 
         if(output.renderStates != frame.renderStates)
         {
-            output.renderStates = frame.renderStates;
+            output.renderStates.assign(frame.renderStates.begin(), frame.renderStates.end());
         }
 #if defined(MOSAIC_HAS_IROV_GRAPHICS)
         float pixelScale = std::max(1.f, viewport.dpiScale);
@@ -1533,18 +1281,6 @@ namespace Mosaic
         }
 
         gp_canvas_t * canvas = state->canvas;
-        ++state->frame;
-
-        if(state->frame == 0)
-        {
-            state->frame = 1;
-
-            for(Detail::GraphicsGeometryCacheEntry & entry : state->geometries)
-            {
-                entry.lastFrame = 0;
-            }
-        }
-
         gp_result_t clearResult = gp_canvas_clear(canvas);
 
         if(clearResult != GP_SUCCESSFUL)
@@ -1565,77 +1301,28 @@ namespace Mosaic
             return false;
         }
 
-        bool hasBranch = false;
+        bool hasSegment = false;
         uint64_t renderKey = 0;
+
         for(const DrawCommand & command : *drawCommands)
         {
-            if(command.type == DrawCommandType::BeginChannels)
+            if(hasSegment == true && renderKey != command.renderKey)
             {
-                gp_result_t beginResult = gp_begin_channel_group(canvas, command.payload.channelGroup.count);
-
-                if(beginResult != GP_SUCCESSFUL)
+                if(Detail::flushGpSegment(*state, output, renderKey) == false)
                 {
                     output.clear();
-                    m_lastError = "Graphics channel group creation failed";
+                    m_lastError = "Graphics segment flush failed";
 
                     return false;
                 }
 
-                hasBranch = false;
-
-                continue;
+                hasSegment = false;
             }
 
-            if(command.type == DrawCommandType::SetChannel)
+            if(hasSegment == false)
             {
-                gp_result_t channelResult = gp_set_channel(canvas, command.payload.channelSelection.channel);
-
-                if(channelResult != GP_SUCCESSFUL)
-                {
-                    output.clear();
-                    m_lastError = "Graphics channel selection failed";
-
-                    return false;
-                }
-
-                hasBranch = false;
-
-                continue;
-            }
-
-            if(command.type == DrawCommandType::EndChannels)
-            {
-                const ChannelGroupDrawCommand & group = command.payload.channelGroup;
-                gp_result_t endResult = gp_end_channel_group(canvas, group.order.data(), group.count);
-
-                if(endResult != GP_SUCCESSFUL)
-                {
-                    output.clear();
-                    m_lastError = "Graphics channel merge failed";
-
-                    return false;
-                }
-
-                hasBranch = false;
-
-                continue;
-            }
-
-            if(hasBranch == false || renderKey != command.renderKey)
-            {
-                Detail::GpBranchPayload branch = {command.renderKey};
-                gp_result_t branchResult = gp_inject_branch(canvas, Detail::appendGpBranch, &branch, sizeof(branch));
-
-                if(branchResult != GP_SUCCESSFUL)
-                {
-                    output.clear();
-                    m_lastError = "Graphics render branch creation failed";
-
-                    return false;
-                }
-
-                hasBranch = true;
                 renderKey = command.renderKey;
+                hasSegment = true;
             }
 
             const RenderState * renderState = command.renderKey == 0 || command.renderKey > frame.renderStates.size() ? nullptr : &frame.renderStates[static_cast<size_t>(command.renderKey - 1)];
@@ -1650,49 +1337,10 @@ namespace Mosaic
             }
         }
 
-        gp_mesh_t mesh = {};
-        if(gp_calculate_mesh_size(canvas, &mesh) != GP_SUCCESSFUL)
+        if(hasSegment == true && Detail::flushGpSegment(*state, output, renderKey) == false)
         {
             output.clear();
-            m_lastError = "Graphics mesh size calculation failed";
-
-            return false;
-        }
-
-        output.vertices.resize(mesh.vertex_count);
-        output.indices.resize(mesh.index_count);
-        output.batches.reserve(mesh.batch_count);
-
-        mesh.positions_buffer = output.vertices.data();
-        mesh.positions_offset = offsetof(RenderVertex, position);
-        mesh.positions_stride = sizeof(RenderVertex);
-        mesh.colors_buffer = output.vertices.data();
-        mesh.colors_offset = offsetof(RenderVertex, color);
-        mesh.colors_stride = sizeof(RenderVertex);
-        mesh.uv_buffer = output.vertices.data();
-        mesh.uv_offset = offsetof(RenderVertex, uv);
-        mesh.uv_stride = sizeof(RenderVertex);
-        mesh.indices_buffer = output.indices.data();
-        mesh.indices_offset = 0;
-        mesh.indices_stride = sizeof(uint32_t);
-        mesh.batches_buffer = nullptr;
-
-        Detail::GpRenderContext renderContext = {&output};
-        mesh.render_context = &renderContext;
-        gp_result_t renderResult = gp_render(canvas, &mesh);
-
-        if(renderResult != GP_SUCCESSFUL)
-        {
-            output.clear();
-            m_lastError = "Graphics mesh generation failed";
-
-            return false;
-        }
-
-        if(output.batches.size() != mesh.batch_count)
-        {
-            output.clear();
-            m_lastError = "Graphics render branch count is inconsistent";
+            m_lastError = "Graphics final segment flush failed";
 
             return false;
         }
@@ -1724,14 +1372,11 @@ namespace Mosaic
                 result = false;
                 break;
             case DrawCommandType::CustomGeometry:
-                result = Detail::appendGeometry(&output, drawStorage->vertexSpan(command.payload.custom.vertices), drawStorage->indexSpan(command.payload.custom.indices), command.renderKey);
+                result = false;
                 break;
             case DrawCommandType::TextGeometry:
                 result = false;
                 break;
-            case DrawCommandType::BeginChannels:
-            case DrawCommandType::SetChannel:
-            case DrawCommandType::EndChannels:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 break;

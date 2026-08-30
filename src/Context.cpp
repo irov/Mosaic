@@ -47,12 +47,6 @@ namespace Mosaic
                 return "CustomGeometry";
             case DrawCommandType::TextGeometry:
                 return "TextGeometry";
-            case DrawCommandType::BeginChannels:
-                return "BeginChannels";
-            case DrawCommandType::SetChannel:
-                return "SetChannel";
-            case DrawCommandType::EndChannels:
-                return "EndChannels";
             case DrawCommandType::PushClip:
                 return "PushClip";
             case DrawCommandType::PopClip:
@@ -8756,8 +8750,6 @@ namespace Mosaic
 
             for(const DrawCommand & command : *commands)
             {
-                snapshot.channelCount = std::max(snapshot.channelCount, command.channel + 1);
-
                 if(command.type == DrawCommandType::CustomGeometry)
                 {
                     snapshot.vertexCount += command.payload.custom.vertices.count;
@@ -8815,7 +8807,6 @@ namespace Mosaic
                 snapshot.index = index;
                 snapshot.type = Detail::drawCommandName(command.type);
                 snapshot.renderKey = command.renderKey;
-                snapshot.channel = command.channel;
                 snapshot.vertexOffset = vertexOffset;
                 snapshot.indexOffset = indexOffset;
                 const RenderState * renderState = ui->frame.renderState(command.renderKey);
@@ -8930,9 +8921,6 @@ namespace Mosaic
                     snapshot.elementCount = 1;
                     snapshot.bounds = command.payload.box.bounds;
                     break;
-                case DrawCommandType::BeginChannels:
-                case DrawCommandType::SetChannel:
-                case DrawCommandType::EndChannels:
                 case DrawCommandType::PushClip:
                 case DrawCommandType::PopClip:
                     snapshot.elementCount = 1;
@@ -10559,13 +10547,12 @@ namespace Mosaic
         if(appendCommand == false)
         {
             const DrawCommand & lastCommand = commands.back();
-            appendCommand = lastCommand.type != DrawCommandType::RectBatch || lastCommand.channel != node->canvasChannel;
+            appendCommand = lastCommand.type != DrawCommandType::RectBatch;
         }
 
         if(appendCommand == true)
         {
             DrawCommand command(DrawCommandType::RectBatch);
-            command.channel = node->canvasChannel;
             command.payload.rectBatch.instances.offset = ui->drawCommandStorage.rectangles.size();
             commands.emplace_back(std::move(command));
         }
@@ -10606,13 +10593,12 @@ namespace Mosaic
         if(appendCommand == false)
         {
             const DrawCommand & lastCommand = commands.back();
-            appendCommand = lastCommand.type != DrawCommandType::RectBatch || lastCommand.channel != node->canvasChannel;
+            appendCommand = lastCommand.type != DrawCommandType::RectBatch;
         }
 
         if(appendCommand == true)
         {
             DrawCommand command(DrawCommandType::RectBatch);
-            command.channel = node->canvasChannel;
             command.payload.rectBatch.instances.offset = ui->drawCommandStorage.rectangles.size();
             commands.emplace_back(std::move(command));
         }
@@ -10666,13 +10652,12 @@ namespace Mosaic
         if(appendCommand == false)
         {
             const DrawCommand & lastCommand = commands.back();
-            appendCommand = lastCommand.type != DrawCommandType::QuadBatch || lastCommand.channel != node->canvasChannel;
+            appendCommand = lastCommand.type != DrawCommandType::QuadBatch;
         }
 
         if(appendCommand == true)
         {
             DrawCommand command(DrawCommandType::QuadBatch);
-            command.channel = node->canvasChannel;
             command.payload.quadBatch.instances.offset = ui->drawCommandStorage.quads.size();
             commands.emplace_back(std::move(command));
         }
@@ -10707,7 +10692,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Box);
-        command.channel = node->canvasChannel;
         command.payload.box.bounds = bounds;
         command.payload.box.style = style;
         ui->canvasCommands(*node).emplace_back(std::move(command));
@@ -10742,7 +10726,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::RoundedRect);
-        command.channel = node->canvasChannel;
         command.payload.rectangle.bounds = bounds;
         command.payload.rectangle.radius = radius;
         command.payload.rectangle.color = color;
@@ -10768,7 +10751,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Gradient);
-        command.channel = node->canvasChannel;
         command.payload.gradient.bounds = bounds;
         command.payload.gradient.colors = {topLeft, topRight, bottomRight, bottomLeft};
         ui->canvasCommands(*node).emplace_back(std::move(command));
@@ -10793,7 +10775,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Line);
-        command.channel = node->canvasChannel;
         command.payload.line.first = first;
         command.payload.line.second = second;
         command.payload.line.thickness = thickness;
@@ -10825,7 +10806,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Polyline);
-        command.channel = node->canvasChannel;
         PolylineDrawCommand & polyline = command.payload.polyline;
         polyline.points.offset = ui->drawCommandStorage.points.size();
         polyline.points.count = points.size();
@@ -10860,7 +10840,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::Circle;
         command.payload.path.center = center;
         command.payload.path.radii = {radius, radius};
@@ -10894,7 +10873,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -10929,7 +10907,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
         pathCommand.coloredPoints.offset = ui->drawCommandStorage.coloredPoints.size();
@@ -10963,7 +10940,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::Circle;
         command.payload.path.center = center;
         command.payload.path.radii = {radius, radius};
@@ -10997,7 +10973,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::Arc;
         command.payload.path.center = center;
         command.payload.path.radii = {radius, radius};
@@ -11033,7 +11008,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::Arc;
         command.payload.path.center = center;
         command.payload.path.radii = {radius, radius};
@@ -11074,7 +11048,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::Ellipse;
         command.payload.path.center = center;
         command.payload.path.radii = radii;
@@ -11114,7 +11087,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::Ellipse;
         command.payload.path.center = center;
         command.payload.path.radii = radii;
@@ -11154,7 +11126,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::RegularPolygon;
         command.payload.path.center = center;
         command.payload.path.radii = {radius, radius};
@@ -11194,7 +11165,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         command.payload.path.shape = PathShape::RegularPolygon;
         command.payload.path.center = center;
         command.payload.path.radii = {radius, radius};
@@ -11239,7 +11209,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::GradientRing;
         pathCommand.center = center;
@@ -11276,7 +11245,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -11306,7 +11274,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -11338,7 +11305,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::Polygon;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -11370,7 +11336,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::CubicBezier;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -11404,7 +11369,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::QuadraticBezier;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -11437,7 +11401,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::Path);
-        command.channel = node->canvasChannel;
         PathDrawCommand & pathCommand = command.payload.path;
         pathCommand.shape = PathShape::QuadraticBezier;
         pathCommand.points.offset = ui->drawCommandStorage.points.size();
@@ -11496,7 +11459,6 @@ namespace Mosaic
             state.texture = batch.texture;
             state.renderTarget = ui->viewport.renderTarget;
             DrawCommand command(DrawCommandType::TextGeometry);
-            command.channel = node->canvasChannel;
             command.renderKey = ui->internRenderState(state);
             TextGeometryDrawCommand & geometry = command.payload.textGeometry;
             uint64_t batchKey = combineId(text->key, batchIndex);
@@ -11535,7 +11497,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::PushClip);
-        command.channel = node->canvasChannel;
         command.payload.rectangle.bounds = bounds;
         ui->canvasCommands(*node).emplace_back(std::move(command));
 
@@ -11559,7 +11520,6 @@ namespace Mosaic
         }
 
         DrawCommand command(DrawCommandType::PopClip);
-        command.channel = node->canvasChannel;
         ui->canvasCommands(*node).emplace_back(std::move(command));
 
         return true;
@@ -11591,7 +11551,6 @@ namespace Mosaic
         state.sampler = sampler;
         state.renderTarget = ui->viewport.renderTarget;
         DrawCommand command(DrawCommandType::Image);
-        command.channel = node->canvasChannel;
         command.renderKey = ui->internRenderState(state);
         command.payload.rectangle.bounds = bounds;
         command.payload.rectangle.uv = uv;
@@ -11630,7 +11589,6 @@ namespace Mosaic
         RenderState canvasState = state;
         canvasState.renderTarget = ui->viewport.renderTarget;
         DrawCommand command(DrawCommandType::CustomGeometry);
-        command.channel = node->canvasChannel;
         command.renderKey = ui->internRenderState(canvasState);
         CustomGeometryDrawCommand & custom = command.payload.custom;
         custom.vertices.offset = ui->drawCommandStorage.vertices.size();
@@ -11640,146 +11598,6 @@ namespace Mosaic
         custom.indices.count = indices.size();
         ui->drawCommandStorage.indices.insert(ui->drawCommandStorage.indices.end(), indices.begin(), indices.end());
         ui->canvasCommands(*node).emplace_back(std::move(command));
-
-        return true;
-    }
-    //////////////////////////////////////////////////////////////////////////
-    bool canvasSplitChannels(Context * ui, Id canvas, uint32_t count) noexcept
-    {
-        Context::Node * node = Detail::findCanvasNode(ui, canvas);
-
-        if(node == nullptr)
-        {
-            return false;
-        }
-
-        if(node->kind != Detail::NodeKind::Canvas)
-        {
-            return false;
-        }
-
-        constexpr uint32_t maximumCanvasChannelCount = 64;
-
-        if(count == 0)
-        {
-            ui->frame.diagnostics.emplace_back("Canvas channel count must be greater than zero");
-
-            return false;
-        }
-
-        if(count > maximumCanvasChannelCount)
-        {
-            ui->frame.diagnostics.emplace_back("Canvas channel count exceeds Graphics capacity");
-
-            return false;
-        }
-
-        if(node->canvasChannelCount != 1)
-        {
-            ui->frame.diagnostics.emplace_back("Canvas channel group is already active");
-
-            return false;
-        }
-
-        DrawCommand command(DrawCommandType::BeginChannels);
-        command.payload.channelGroup.count = static_cast<uint8_t>(count);
-        ui->canvasCommands(*node).emplace_back(std::move(command));
-        node->canvasChannel = 0;
-        node->canvasChannelCount = count;
-
-        return true;
-    }
-    //////////////////////////////////////////////////////////////////////////
-    bool canvasSetChannel(Context * ui, Id canvas, uint32_t channel) noexcept
-    {
-        Context::Node * node = Detail::findCanvasNode(ui, canvas);
-
-        if(node == nullptr)
-        {
-            return false;
-        }
-
-        if(node->kind != Detail::NodeKind::Canvas)
-        {
-            return false;
-        }
-
-        if(channel >= node->canvasChannelCount)
-        {
-            ui->frame.diagnostics.emplace_back("Canvas channel is outside the active channel group");
-
-            return false;
-        }
-
-        DrawCommand command(DrawCommandType::SetChannel);
-        command.payload.channelSelection.channel = static_cast<uint8_t>(channel);
-        ui->canvasCommands(*node).emplace_back(std::move(command));
-        node->canvasChannel = channel;
-
-        return true;
-    }
-    //////////////////////////////////////////////////////////////////////////
-    bool canvasMergeChannels(Context * ui, Id canvas, UInt32Span order) noexcept
-    {
-        Context::Node * node = Detail::findCanvasNode(ui, canvas);
-
-        if(node == nullptr)
-        {
-            return false;
-        }
-
-        if(node->kind != Detail::NodeKind::Canvas)
-        {
-            return false;
-        }
-
-        if(node->canvasChannelCount == 1)
-        {
-            ui->frame.diagnostics.emplace_back("Canvas channel group is not active");
-
-            return false;
-        }
-
-        DrawCommand command(DrawCommandType::EndChannels);
-        ChannelGroupDrawCommand & channelGroup = command.payload.channelGroup;
-        Array<bool, 64> used = {};
-        uint8_t destination = 0;
-        for(uint32_t channel : order)
-        {
-            if(channel >= node->canvasChannelCount)
-            {
-                ui->frame.diagnostics.emplace_back("Canvas channel order contains an out-of-range channel");
-
-                return false;
-            }
-
-            if(used[channel] == true)
-            {
-                ui->frame.diagnostics.emplace_back("Canvas channel order contains a duplicate channel");
-
-                return false;
-            }
-
-            used[channel] = true;
-            channelGroup.order[destination] = static_cast<uint8_t>(channel);
-            ++destination;
-        }
-
-        for(uint32_t channel = 0; channel != node->canvasChannelCount; ++channel)
-        {
-            if(used[channel] == true)
-            {
-                continue;
-            }
-
-            channelGroup.order[destination] = static_cast<uint8_t>(channel);
-            ++destination;
-        }
-
-        channelGroup.count = destination;
-        ui->canvasCommands(*node).emplace_back(std::move(command));
-        node->canvasChannel = 0;
-        node->canvasChannelCount = 1;
 
         return true;
     }

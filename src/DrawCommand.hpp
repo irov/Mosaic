@@ -18,9 +18,6 @@ namespace Mosaic
         Image,
         CustomGeometry,
         TextGeometry,
-        BeginChannels,
-        SetChannel,
-        EndChannels,
         PushClip,
         PopClip
     };
@@ -130,17 +127,6 @@ namespace Mosaic
         Vec2 axisX = {1.f, 0.f};
         Vec2 axisY = {0.f, 1.f};
         Color tint;
-    };
-
-    struct ChannelGroupDrawCommand
-    {
-        Array<uint8_t, 64> order = {};
-        uint8_t count = 0;
-    };
-
-    struct ChannelSelectionDrawCommand
-    {
-        uint8_t channel = 0;
     };
 
     struct DrawCommandStorage
@@ -254,8 +240,6 @@ namespace Mosaic
         PathDrawCommand path;
         CustomGeometryDrawCommand custom;
         TextGeometryDrawCommand textGeometry;
-        ChannelGroupDrawCommand channelGroup;
-        ChannelSelectionDrawCommand channelSelection;
 
         DrawCommandPayload() noexcept
         {
@@ -273,7 +257,7 @@ namespace Mosaic
             construct();
         }
 
-        DrawCommand(const DrawCommand & other) : type(other.type), renderKey(other.renderKey), channel(other.channel)
+        DrawCommand(const DrawCommand & other) : type(other.type), renderKey(other.renderKey)
         {
             copyFrom(other);
         }
@@ -285,14 +269,13 @@ namespace Mosaic
                 destroy();
                 type = other.type;
                 renderKey = other.renderKey;
-                channel = other.channel;
                 copyFrom(other);
             }
 
             return *this;
         }
 
-        DrawCommand(DrawCommand && other) noexcept : type(other.type), renderKey(other.renderKey), channel(other.channel)
+        DrawCommand(DrawCommand && other) noexcept : type(other.type), renderKey(other.renderKey)
         {
             moveFrom(std::move(other));
         }
@@ -304,7 +287,6 @@ namespace Mosaic
                 destroy();
                 type = other.type;
                 renderKey = other.renderKey;
-                channel = other.channel;
                 moveFrom(std::move(other));
             }
 
@@ -318,7 +300,6 @@ namespace Mosaic
 
         DrawCommandType type = DrawCommandType::Rect;
         uint64_t renderKey = 0;
-        uint32_t channel = 0;
         DrawCommandPayload payload;
 
     private:
@@ -359,13 +340,6 @@ namespace Mosaic
                 break;
             case DrawCommandType::TextGeometry:
                 ::new(&payload.textGeometry) TextGeometryDrawCommand;
-                break;
-            case DrawCommandType::BeginChannels:
-            case DrawCommandType::EndChannels:
-                ::new(&payload.channelGroup) ChannelGroupDrawCommand;
-                break;
-            case DrawCommandType::SetChannel:
-                ::new(&payload.channelSelection) ChannelSelectionDrawCommand;
                 break;
             }
         }
@@ -408,13 +382,6 @@ namespace Mosaic
             case DrawCommandType::TextGeometry:
                 ::new(&payload.textGeometry) TextGeometryDrawCommand(std::move(other.payload.textGeometry));
                 break;
-            case DrawCommandType::BeginChannels:
-            case DrawCommandType::EndChannels:
-                ::new(&payload.channelGroup) ChannelGroupDrawCommand(std::move(other.payload.channelGroup));
-                break;
-            case DrawCommandType::SetChannel:
-                ::new(&payload.channelSelection) ChannelSelectionDrawCommand(std::move(other.payload.channelSelection));
-                break;
             }
         }
 
@@ -456,13 +423,6 @@ namespace Mosaic
             case DrawCommandType::TextGeometry:
                 ::new(&payload.textGeometry) TextGeometryDrawCommand(other.payload.textGeometry);
                 break;
-            case DrawCommandType::BeginChannels:
-            case DrawCommandType::EndChannels:
-                ::new(&payload.channelGroup) ChannelGroupDrawCommand(other.payload.channelGroup);
-                break;
-            case DrawCommandType::SetChannel:
-                ::new(&payload.channelSelection) ChannelSelectionDrawCommand(other.payload.channelSelection);
-                break;
             }
         }
 
@@ -492,9 +452,6 @@ namespace Mosaic
             case DrawCommandType::Line:
             case DrawCommandType::Image:
             case DrawCommandType::TextGeometry:
-            case DrawCommandType::BeginChannels:
-            case DrawCommandType::SetChannel:
-            case DrawCommandType::EndChannels:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 break;

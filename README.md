@@ -29,10 +29,14 @@ Mosaic::beginFrame(ui, input, viewport);
 }
 const Mosaic::Frame & frame = Mosaic::endFrame(ui);
 Mosaic::GraphicsBridge bridge;
-Mosaic::RenderMesh mesh;
-if(bridge.build(frame, &mesh) == true)
+if(bridge.prepare(frame) == true)
 {
-    renderer.render(frame.viewports.front(), mesh);
+    const Mosaic::RenderMesh * renderData = bridge.renderData();
+
+    if(renderData != nullptr)
+    {
+        renderer.render(frame.viewports.front(), *renderData);
+    }
 }
 Mosaic::deleteContext(ui);
 ```
@@ -60,7 +64,7 @@ clipboard/IME, monotonic time, console output and filesystem access remain adapt
 Mosaic Core does not read the system clock, open files or write to process streams directly. Mosaic
 ships a null platform adapter for headless use.
 
-`PlatformAdapter` is application-owned and must outlive every `Context` and `GraphicsBridge::build`
+`PlatformAdapter` is application-owned and must outlive every `Context` and `GraphicsBridge::prepare`
 call that uses it. A custom backend implements clipboard, console, binary file read/write, user-data
 path resolution, monotonic time, cursor, IME, native-window, monitor and accessibility callbacks.
 
@@ -81,10 +85,18 @@ Immediate API -> Estimate BB -> Transient Tree -> Layout/Input/Culling
 By default Mosaic downloads, builds and installs the latest Graphics `origin/master` into its build
 tree. A host may instead provide the Graphics include directories and libraries. `GraphicsBridge`
 owns one persistent canvas, clears it once at the start of each mesh build and records all visible
-primitives in render order. Render-state changes start fixed-storage branches, while images,
-prepared glyphs and custom geometry use injections that write directly into Mosaic's 32-bit
-vertex/index output. Canvas commands and tessellation scratch data come from the fixed arenas
-configured by Graphics, so recording and tessellation do not allocate after canvas creation.
+primitives in render order. A render-state change flushes the recorded segment into Mosaic-owned
+32-bit vertex/index buffers without clearing the logical canvas state. Images and custom geometry
+are passed as borrowed streams; prepared glyph rectangles are expanded into vertices and indices by
+Graphics. Canvas commands and tessellation scratch data come from the fixed arenas configured by
+Graphics, so recording and tessellation do not allocate after canvas creation.
+
+`GraphicsBridge::prepare` finalizes immutable render data for one viewport. `renderData()` returns a
+read-only pointer owned by the bridge; it remains valid until the next `prepare` call or bridge
+destruction. A renderer must consume it before that boundary. GPU backends copy it into their own
+frame resources during `render()` and keep those resources alive until the corresponding GPU
+completion signal. This matches an immediate UI draw-data lifetime without making Graphics own a
+second geometry cache.
 
 Renderers consume `RenderBatch::renderKey` to look up the full `RenderState` (texture, clip, blend,
 render target and variant) in `RenderMesh::renderStates`. Glyph-atlas page states are resolved before

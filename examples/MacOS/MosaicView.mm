@@ -100,7 +100,6 @@ namespace MosaicExample
     Mosaic::Context * _context;
     Mosaic::Input _input;
     Mosaic::GraphicsBridge _graphicsBridge;
-    Mosaic::RenderMesh _mesh;
     NSTrackingArea * _trackingArea;
     NSMutableAttributedString * _markedText;
     NSTimeInterval _previousFrameTime;
@@ -443,10 +442,15 @@ namespace MosaicExample
     _editor->draw(_context, {static_cast<float>(view.bounds.size.width), static_cast<float>(view.bounds.size.height)});
     const Mosaic::Frame & frame = Mosaic::endFrame(_context);
 
-    if(_graphicsBridge.build(frame, &_mesh, *_platform) == true)
+    if(_graphicsBridge.prepare(frame, *_platform) == true)
     {
-        _renderer->render(frame.viewports.front(), _mesh);
-        _editor->updateProfiler(frame, _mesh);
+        const Mosaic::RenderMesh * renderData = _graphicsBridge.renderData();
+
+        if(renderData != nullptr)
+        {
+            _renderer->render(frame.viewports.front(), *renderData);
+            _editor->updateProfiler(frame, *renderData);
+        }
     }
 
     Mosaic::PointerState & pointer = _input.pointers.front();

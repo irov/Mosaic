@@ -296,6 +296,14 @@ namespace Mosaic
 
     struct RenderMesh
     {
+        explicit RenderMesh(Allocator * allocator = nullptr)
+            : vertices(StlAllocator<RenderVertex>(allocator == nullptr ? defaultAllocator() : *allocator))
+            , indices(StlAllocator<uint32_t>(allocator == nullptr ? defaultAllocator() : *allocator))
+            , batches(StlAllocator<RenderBatch>(allocator == nullptr ? defaultAllocator() : *allocator))
+            , renderStates(StlAllocator<RenderState>(allocator == nullptr ? defaultAllocator() : *allocator))
+        {
+        }
+
         RenderVertexVector vertices;
         IndexVector indices;
         RenderBatchVector batches;

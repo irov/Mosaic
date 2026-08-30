@@ -168,42 +168,6 @@ namespace Mosaic
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
-    bool Canvas::splitChannels(uint32_t count) noexcept
-    {
-        if(m_context == nullptr)
-        {
-            return false;
-        }
-
-        bool result = Mosaic::canvasSplitChannels(m_context, m_id, count);
-
-        return result;
-    }
-    //////////////////////////////////////////////////////////////////////////
-    bool Canvas::setChannel(uint32_t channel) noexcept
-    {
-        if(m_context == nullptr)
-        {
-            return false;
-        }
-
-        bool result = Mosaic::canvasSetChannel(m_context, m_id, channel);
-
-        return result;
-    }
-    //////////////////////////////////////////////////////////////////////////
-    bool Canvas::mergeChannels(UInt32Span order) noexcept
-    {
-        if(m_context == nullptr)
-        {
-            return false;
-        }
-
-        bool result = Mosaic::canvasMergeChannels(m_context, m_id, order);
-
-        return result;
-    }
-    //////////////////////////////////////////////////////////////////////////
     bool Canvas::setLayer(CanvasLayer layer) noexcept
     {
         if(m_context == nullptr)
