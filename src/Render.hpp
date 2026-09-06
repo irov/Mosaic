@@ -43,7 +43,7 @@ namespace Mosaic
         [[nodiscard]] ComboGeometry comboGeometry(const Context::Node & node, const Rect & bounds) noexcept;
         [[nodiscard]] ColorEditGeometry colorEditGeometry(const Context::Node & node, const Rect & bounds) noexcept;
         void updateVisualState(Context::Persistent & state, const Context::Node & node, float deltaTime) noexcept;
-        void drawFrame(DrawList & drawList, const Rect & bounds, float radius, float borderWidth, const Color & fill, const Color & border, float highlight, uint64_t renderKey);
+        void drawFrame(DrawList & drawList, const Rect & bounds, float radius, float borderWidth, const Color & fill, const Color & border, uint64_t renderKey);
         void drawScrollbar(DrawList & drawList, const Rect & track, const Rect & thumb, bool vertical, const Theme & style, float hover, float active, uint64_t renderKey);
         [[nodiscard]] Vec2 textCursorPosition(Context * ui, const Context::Node & node, size_t position);
         void drawTextSelection(Context * ui, DrawList & drawList, const Context::Node & node, const Color & color, uint64_t renderKey);

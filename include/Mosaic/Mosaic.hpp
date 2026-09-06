@@ -1665,7 +1665,7 @@ namespace Mosaic
         size_t overscan = 2;
         size_t scrollToItem = std::numeric_limits<size_t>::max();
         float scrollToAlignment = 0.f;
-        float listRowHeight = 24.f;
+        float listRowHeight = 20.f;
         float availableWidth = 0.f;
     };
 
@@ -1906,6 +1906,10 @@ namespace Mosaic
     Response dragValue(Context * ui, StringView label, uint32_t * value, uint32_t minimum, uint32_t maximum, const IntegralSliderOptions<uint32_t> & options, const SourceLocation & location = SourceLocation::current());
     Response dragValue(Context * ui, StringView label, int64_t * value, int64_t minimum, int64_t maximum, const IntegralSliderOptions<int64_t> & options, const SourceLocation & location = SourceLocation::current());
     Response dragValue(Context * ui, StringView label, uint64_t * value, uint64_t minimum, uint64_t maximum, const IntegralSliderOptions<uint64_t> & options, const SourceLocation & location = SourceLocation::current());
+    // A compact angle control sharing dragValue's keyboard, precision and cancel behavior.
+    // Drag horizontally to rotate; double-click or primary-modifier click to type degrees.
+    Response angleDial(Context * ui, const Key & key, StringView label, float * degrees, float diameter = 36.f, const SourceLocation & location = SourceLocation::current());
+
     Response dragFloatVector(Context * ui, StringView label, FloatSpan values, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragIntVector(Context * ui, StringView label, Int32Span values, int32_t minimum, int32_t maximum, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response sliderFloatVector(Context * ui, StringView label, FloatSpan values, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
@@ -2069,9 +2073,15 @@ namespace Mosaic
     Response property(Context * ui, StringView name, T * value, T minimum = std::numeric_limits<T>::lowest(), T maximum = std::numeric_limits<T>::max(), const SourceLocation & location = SourceLocation::current())
     {
         auto propertyScope = Mosaic::scope(ui, {}, location);
-        auto propertyRow = Mosaic::row(ui, {}, location);
-        Mosaic::text(ui, name, location);
-        auto returnedValue = Mosaic::slider(ui, StringView{}, value, minimum, maximum, location);
+        LayoutOptions rowLayout;
+        rowLayout.width = SizeRule::Fill;
+        auto propertyRow = Mosaic::row(ui, rowLayout, location);
+        TextOptions labelOptions;
+        labelOptions.layout.width = Dimension::fixed(Mosaic::getTheme(ui).metrics.propertyLabelWidth);
+        Mosaic::text(ui, name, labelOptions, location);
+        SliderOptions valueOptions;
+        valueOptions.width = SizeRule::Fill;
+        auto returnedValue = Mosaic::dragValue(ui, StringView{}, value, minimum, maximum, valueOptions, location);
 
         return returnedValue;
     }
@@ -2080,9 +2090,17 @@ namespace Mosaic
     Response property(Context * ui, StringView name, T * value, T minimum = T{0}, T maximum = T{1}, const SourceLocation & location = SourceLocation::current())
     {
         auto propertyScope = Mosaic::scope(ui, {}, location);
-        auto propertyRow = Mosaic::row(ui, {}, location);
-        Mosaic::text(ui, name, location);
-        auto returnedValue = Mosaic::slider(ui, StringView{}, value, minimum, maximum, location);
+        LayoutOptions rowLayout;
+        rowLayout.width = SizeRule::Fill;
+        auto propertyRow = Mosaic::row(ui, rowLayout, location);
+        TextOptions labelOptions;
+        labelOptions.layout.width = Dimension::fixed(Mosaic::getTheme(ui).metrics.propertyLabelWidth);
+        Mosaic::text(ui, name, labelOptions, location);
+        SliderOptions valueOptions;
+        valueOptions.width = SizeRule::Fill;
+        valueOptions.minimum = minimum;
+        valueOptions.maximum = maximum;
+        auto returnedValue = Mosaic::dragValue(ui, StringView{}, value, valueOptions, location);
 
         return returnedValue;
     }

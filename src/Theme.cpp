@@ -66,6 +66,8 @@ namespace Mosaic
         value.colors.borderStrong = Color::fromBytes(132, 142, 158);
         value.colors.borderShadow = Color::fromBytes(0, 0, 0, 0);
         value.colors.textLink = Color::fromBytes(35, 111, 183);
+        value.colors.accent = value.colors.textLink;
+        value.colors.selection = Color::fromBytes(177, 207, 231);
         value.colors.checkMark = Color::fromBytes(250, 251, 253);
         value.colors.checkboxSelectedBackground = Color::fromBytes(35, 111, 183);
         value.colors.treeLines = value.colors.separator;

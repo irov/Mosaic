@@ -198,6 +198,7 @@ namespace Mosaic
             long double dragAccumulator = 0.L;
             long double dragLastApplied = 0.L;
             uint64_t integralDragStart = 0;
+            uint64_t integralEditStart = 0;
             uint64_t integralDragLastApplied = 0;
             uint64_t integralDragRateWhole = 0;
             uint64_t integralDragRateRemainder = 0;
@@ -642,6 +643,7 @@ namespace Mosaic
             bool highlighted : 1 = false;
             bool selectableSpanAllColumns : 1 = false;
             bool arrowButton : 1 = false;
+            bool angleDial : 1 = false;
             bool hyperlink : 1 = false;
             bool overrideTextAlignment : 1 = false;
             Vec2 textAlignment;
@@ -1035,6 +1037,7 @@ namespace Mosaic
             bool visualInitialized : 1 = false;
             float hoverVisual = 0.f;
             float activeVisual = 0.f;
+            float activationVisual = 0.f;
             float selectionVisual = 0.f;
             float focusVisual = 0.f;
             float scalarVisual = 0.f;
@@ -1347,6 +1350,7 @@ namespace Mosaic
                 hash = combine(hash, std::hash<float>{}(value.metrics.splitterWidth));
                 hash = combine(hash, std::hash<float>{}(value.metrics.windowTitleHeight));
                 hash = combine(hash, std::hash<float>{}(value.metrics.minimumControlWidth));
+                hash = combine(hash, std::hash<float>{}(value.metrics.propertyLabelWidth));
                 hash = combine(hash, std::hash<float>{}(value.metrics.minimumPopupWidth));
                 hash = combine(hash, std::hash<float>{}(value.metrics.controlHeight));
                 hash = vector(hash, value.metrics.buttonTextAlignment);

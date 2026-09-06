@@ -179,8 +179,11 @@ namespace MosaicExample
 
                                                                   return nil;
                                                                 }];
-    (void)_persistence->load();
-    (void)Mosaic::deserialize(_context, *_persistence);
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--fresh-layout"] == NO)
+    {
+        (void)_persistence->load();
+        (void)Mosaic::deserialize(_context, *_persistence);
+    }
 
     return self;
 }

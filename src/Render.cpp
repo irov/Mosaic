@@ -342,7 +342,7 @@ namespace Mosaic
         Color controlColor = Detail::mixColor(node.style->colors.panel, node.style->colors.panelHovered, hoverVisual);
         controlColor = Detail::mixColor(controlColor, node.style->colors.selection, selectionVisual * 0.82f);
         controlColor = Detail::mixColor(controlColor, node.style->colors.panelActive, activeVisual);
-        Color controlBorder = Detail::mixColor(node.style->colors.border, node.style->colors.accent, std::max(hoverVisual * 0.75f, activeVisual));
+        Color controlBorder = Detail::mixColor(node.style->colors.border, node.style->colors.accent, std::max(hoverVisual * 0.22f, activeVisual));
         controlBorder = Detail::mixColor(controlBorder, node.style->colors.navigationCursor, navigationFocusVisual);
 
         if(node.disabled == true)
@@ -400,7 +400,7 @@ namespace Mosaic
                 Color border = node.style->colors.borderStrong;
                 background.a *= node.windowData().backgroundAlpha;
                 border.a *= node.windowData().backgroundAlpha;
-                Detail::drawFrame(drawList, node.bounds, windowRadius, windowBorder, background, border, 0.85f, baseKey);
+                Detail::drawFrame(drawList, node.bounds, windowRadius, windowBorder, background, border, baseKey);
             }
 
             if(node.windowData().titleVisible == true)
@@ -455,7 +455,7 @@ namespace Mosaic
                         bool dimmedTab = Mosaic::windowFocused(this, node.id) == false;
                         Color tabColor = activeTab ? (dimmedTab ? node.style->colors.tabDimmedSelected : node.style->colors.tabActive) : (hoveredTab ? node.style->colors.tabHovered : (dimmedTab ? node.style->colors.tabDimmed : node.style->colors.tab));
                         drawList.rect(tabBounds, tabColor, baseKey);
-                        Color tabBorder = activeTab ? node.style->colors.accent : node.style->colors.border;
+                        Color tabBorder = node.style->colors.border;
                         drawList.line({tabBounds.x, tabBounds.y}, {tabBounds.right(), tabBounds.y}, node.style->metrics.tabBorderSize, tabBorder, baseKey);
                         drawList.line({tabBounds.x, tabBounds.y}, {tabBounds.x, tabBounds.bottom()}, node.style->metrics.tabBorderSize, tabBorder, baseKey);
                         drawList.line({tabBounds.right(), tabBounds.y}, {tabBounds.right(), tabBounds.bottom()}, node.style->metrics.tabBorderSize, tabBorder, baseKey);
@@ -463,6 +463,11 @@ namespace Mosaic
                         if(activeTab == false)
                         {
                             drawList.line({tabBounds.x, tabBounds.bottom()}, {tabBounds.right(), tabBounds.bottom()}, node.style->metrics.tabBarBorderSize, node.style->colors.borderStrong, baseKey);
+                        }
+
+                        if(activeTab)
+                        {
+                            drawList.line({tabBounds.x + 5.f, tabBounds.bottom() - 1.f}, {tabBounds.right() - 5.f, tabBounds.bottom() - 1.f}, 1.f, dimmedTab ? node.style->colors.tabDimmedSelectedOverline : node.style->colors.accent, baseKey);
                         }
 
                         const Node * tabNode = findFrameNode(tab);
@@ -486,7 +491,6 @@ namespace Mosaic
                 }
                 else
                 {
-                    drawList.roundedRect({titleBar.x + 1.f, titleBar.y + 4.f, 2.f, std::max(0.f, titleBar.height - 8.f)}, 1.f, node.style->colors.accent, baseKey);
                     float leftControlsWidth = node.windowData().collapseVisible && node.windowData().collapsePlacement == WindowCollapsePlacement::Left ? buttonSide + 2.f : 0.f;
                     float titleContentRight = titleBar.right() - 4.f;
 
@@ -597,8 +601,13 @@ namespace Mosaic
             break;
         }
         case Detail::NodeKind::Text:
+        {
+            bool constrained = node.layout.width.rule != SizeRule::Content;
+            if(constrained) drawList.pushClip(Rect::intersection(node.clip, node.bounds), baseKey);
             emitText(drawList, node, {node.bounds.x, node.bounds.y + (node.alignTextToFramePadding == true ? node.style->metrics.framePadding.top : 0.f)}, textColor, baseState, baseKey);
+            if(constrained) drawList.popClip(baseKey);
             break;
+        }
         case Detail::NodeKind::Bullet:
         {
             float side = 4.f;
@@ -625,7 +634,8 @@ namespace Mosaic
             bool angledHeader = node.kind == Detail::NodeKind::Selectable && node.tableItem().header == true && node.tableItem().columnOptions.angledHeader;
             bool sortedTableHeader = node.kind == Detail::NodeKind::Selectable && node.tableItem().header == true && node.tableItem().sortDirection != SortDirection::None;
             bool menuNode = node.semanticRole == SemanticRole::MenuItem;
-            float emphasis = std::max({hoverVisual, activeVisual, focusVisual});
+            float emphasis = std::max({hoverVisual, activeVisual, navigationFocusVisual});
+            float activationVisual = visualState == nullptr ? 0.f : visualState->activationVisual;
             Color frameBorder = Detail::colorWithAlpha(controlBorder, 0.55f + emphasis * 0.45f);
             Color frameFill = tabNode ? Detail::mixColor(dimmedTab ? node.style->colors.tabDimmed : node.style->colors.tab, node.style->colors.tabHovered, hoverVisual) : Detail::mixColor(node.style->colors.button, node.style->colors.buttonHovered, hoverVisual);
 
@@ -656,6 +666,16 @@ namespace Mosaic
                 frameFill = Detail::mixColor(frameFill, node.style->colors.headerHovered, hoverVisual);
             }
 
+            if(tabNode == false && selectableNode == false && node.semanticRole != SemanticRole::Text)
+            {
+                frameFill = Detail::mixColor(frameFill, accentColor, activationVisual * 0.18f);
+            }
+
+            if(tabNode == true)
+            {
+                textColor = Detail::mixColor(node.style->colors.textDisabled, node.style->colors.text, std::max(hoverVisual, selectionVisual));
+            }
+
             bool drawBackground = node.fillBackground || tabNode == true || selectableNode == true || (node.fillHoverBackground && (emphasis > 0.001f || selectionVisual > 0.001f));
 
             if(drawBackground == true)
@@ -665,7 +685,14 @@ namespace Mosaic
                     frameFill = Detail::mixColor(Color{node.style->colors.background.r, node.style->colors.background.g, node.style->colors.background.b, 0.f}, menuNode ? node.style->colors.menuHovered : node.style->colors.headerHovered, std::max(hoverVisual, selectionVisual));
                 }
 
-                Detail::drawFrame(drawList, frameBounds, tabNode ? node.style->metrics.tabCornerRadius : menuNode ? node.style->metrics.menuItemCornerRadius : node.style->metrics.frameCornerRadius, tabNode ? node.style->metrics.tabBorderSize : node.style->metrics.frameBorderSize, frameFill, frameBorder, selectableNode ? 0.08f : (tabNode ? 0.12f : 0.38f + hoverVisual * 0.22f - activeVisual * 0.2f), baseKey);
+                Detail::drawFrame(drawList, frameBounds, tabNode ? node.style->metrics.tabCornerRadius : menuNode ? node.style->metrics.menuItemCornerRadius : node.style->metrics.frameCornerRadius, tabNode ? node.style->metrics.tabBorderSize : (selectableNode || menuNode || node.fillBackground == false) ? 0.f : node.style->metrics.frameBorderSize, frameFill, frameBorder, baseKey);
+            }
+
+            if(navigationFocusVisual > 0.001f)
+            {
+                float halfWidth = std::max(0.f, frameBounds.width - 4.f) * 0.5f * navigationFocusVisual;
+                float center = frameBounds.x + frameBounds.width * 0.5f;
+                drawList.line({center - halfWidth, frameBounds.bottom() - 1.f}, {center + halfWidth, frameBounds.bottom() - 1.f}, 1.f, node.style->colors.navigationCursor, baseKey);
             }
 
             if(tabNode == true && selectionVisual > 0.001f)
@@ -823,11 +850,11 @@ namespace Mosaic
         {
             Rect frameBounds = node.bounds;
             frameBounds.y += activeVisual * node.style->behavior.pressOffset;
-            float switchHeight = std::min(16.f, frameBounds.height - 4.f);
-            float switchWidth = 30.f;
+            float switchHeight = std::min(12.f, frameBounds.height - 4.f);
+            float switchWidth = 24.f;
             Rect switchBounds = {frameBounds.right() - node.style->metrics.padding - switchWidth, frameBounds.y + (frameBounds.height - switchHeight) * 0.5f, switchWidth, switchHeight};
             Color switchFill = Detail::mixColor(controlColor, accentColor, selectionVisual);
-            Detail::drawFrame(drawList, switchBounds, switchHeight * 0.5f, node.style->metrics.frameBorderSize, switchFill, controlBorder, 0.7f - activeVisual * 0.45f, baseKey);
+            Detail::drawFrame(drawList, switchBounds, switchHeight * 0.5f, node.style->metrics.frameBorderSize, switchFill, controlBorder, baseKey);
             float knobSide = switchHeight - 4.f;
             float knobTravel = std::max(0.f, switchWidth - knobSide - 4.f);
             Rect knob = {switchBounds.x + 2.f + knobTravel * selectionVisual, switchBounds.y + 2.f, knobSide, knobSide};
@@ -895,7 +922,7 @@ namespace Mosaic
                 Color treeFill = Detail::mixColor(idleFill, node.style->colors.headerHovered, std::max(hoverVisual, focusVisual * 0.72f));
                 treeFill = Detail::mixColor(treeFill, node.style->colors.headerActive, activeVisual);
                 Color treeBorder = Detail::mixColor(node.style->colors.border, node.style->colors.accent, std::max(activeVisual, focusVisual * 0.5f));
-                Detail::drawFrame(drawList, treeFrameBounds, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, treeFill, treeBorder, node.treeData().framed ? 0.08f : 0.f, treeFrameKey);
+                Detail::drawFrame(drawList, treeFrameBounds, node.style->metrics.frameCornerRadius, 0.f, treeFill, treeBorder, treeFrameKey);
             }
 
             float centerY = headerBounds.y + headerBounds.height * 0.5f;
@@ -941,7 +968,7 @@ namespace Mosaic
             Rect frameBounds = node.bounds;
             frameBounds.y += activeVisual * node.style->behavior.pressOffset;
             Color imageBackground = node.imageData().backgroundEnabled ? Detail::mixColor(node.imageData().background, node.style->colors.buttonHovered, hoverVisual * 0.2f) : controlColor;
-            Detail::drawFrame(drawList, frameBounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, imageBackground, controlBorder, 1.f - activeVisual * 0.75f, baseKey);
+            Detail::drawFrame(drawList, frameBounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, imageBackground, controlBorder, baseKey);
 
             if(node.imageData().texture != 0)
             {
@@ -955,10 +982,10 @@ namespace Mosaic
         }
         case Detail::NodeKind::Checkbox:
         {
-            float side = std::min(node.bounds.height, node.style->metrics.controlHeight) - 4.f;
+            float side = std::min(12.f, std::min(node.bounds.height, node.style->metrics.controlHeight) - 4.f);
             Rect box = {node.bounds.x + 2.f, node.bounds.y + (node.bounds.height - side) * 0.5f + activeVisual * node.style->behavior.pressOffset, side, side};
             Color boxFill = Detail::mixColor(controlColor, node.style->colors.checkboxSelectedBackground, selectionVisual);
-            Detail::drawFrame(drawList, box, node.style->metrics.cornerRadius * 0.65f, node.style->metrics.frameBorderSize, boxFill, controlBorder, 0.8f - activeVisual * 0.55f, baseKey);
+            Detail::drawFrame(drawList, box, node.style->metrics.cornerRadius * 0.65f, node.style->metrics.frameBorderSize, boxFill, controlBorder, baseKey);
 
             if(selectionVisual > 0.001f)
             {
@@ -967,8 +994,8 @@ namespace Mosaic
                 Vec2 middle = Detail::mixVector(center, {box.x + side * 0.43f, box.y + side * 0.75f}, selectionVisual);
                 Vec2 last = Detail::mixVector(center, {box.x + side * 0.82f, box.y + side * 0.25f}, selectionVisual);
                 Color mark = Detail::colorWithAlpha(node.style->colors.checkMark, selectionVisual);
-                drawList.line(first, middle, 2.f, mark, baseKey);
-                drawList.line(middle, last, 2.f, mark, baseKey);
+                drawList.line(first, middle, 1.5f, mark, baseKey);
+                drawList.line(middle, last, 1.5f, mark, baseKey);
             }
 
             emitText(drawList, node, {box.right() + node.style->metrics.gap, node.bounds.y + (node.bounds.height - node.style->metrics.lineHeight) * 0.5f}, textColor, baseState, baseKey);
@@ -977,10 +1004,9 @@ namespace Mosaic
         case Detail::NodeKind::Combo:
         {
             Detail::ComboGeometry geometry = Detail::comboGeometry(node, node.bounds);
-            float emphasis = std::max({hoverVisual, activeVisual, focusVisual});
             Color previewFill = Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual);
             Color border = Detail::mixColor(controlBorder, accentColor, std::max(focusVisual, selectionVisual * 0.7f));
-            Detail::drawFrame(drawList, geometry.control, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, previewFill, border, 0.5f + emphasis * 0.28f, baseKey);
+            Detail::drawFrame(drawList, geometry.control, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, previewFill, border, baseKey);
 
             if(node.comboShowArrow == true && geometry.arrow.empty() == false)
             {
@@ -1015,7 +1041,7 @@ namespace Mosaic
             float side = std::min(node.bounds.height, node.style->metrics.controlHeight) - 5.f;
             Rect circle = {node.bounds.x + 2.f, node.bounds.y + (node.bounds.height - side) * 0.5f + activeVisual * node.style->behavior.pressOffset, side, side};
             Color circleFill = Detail::mixColor(controlColor, accentColor, selectionVisual * 0.22f);
-            Detail::drawFrame(drawList, circle, side * 0.5f, node.style->metrics.frameBorderSize, circleFill, controlBorder, 0.75f - activeVisual * 0.5f, baseKey);
+            Detail::drawFrame(drawList, circle, side * 0.5f, node.style->metrics.frameBorderSize, circleFill, controlBorder, baseKey);
 
             if(selectionVisual > 0.001f)
             {
@@ -1037,7 +1063,7 @@ namespace Mosaic
                 float grabLength = std::clamp(node.style->metrics.grabMinimumSize, 1.f, node.bounds.height);
                 float grabHalf = grabLength * 0.5f;
                 Rect track = {node.bounds.x + (node.bounds.width - 5.f) * 0.5f, node.bounds.y + grabHalf, 5.f, std::max(0.f, node.bounds.height - grabLength)};
-                Detail::drawFrame(drawList, track, track.width * 0.5f, node.style->metrics.frameBorderSize, Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual), Detail::mixColor(controlBorder, accentColor, hoverVisual * 0.5f), 0.45f, baseKey);
+                Detail::drawFrame(drawList, track, track.width * 0.5f, node.style->metrics.frameBorderSize, Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual), Detail::mixColor(controlBorder, accentColor, hoverVisual * 0.5f), baseKey);
                 float scalar = std::clamp(scalarVisual, 0.f, 1.f);
                 float centerY = track.bottom() - track.height * scalar;
                 Rect fill = {track.x, centerY, track.width, track.bottom() - centerY};
@@ -1066,7 +1092,7 @@ namespace Mosaic
 
             if(sliderNode == true && node.textEditData().numeric == true)
             {
-                Detail::drawFrame(drawList, geometry.control, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, node.style->colors.input, node.style->colors.accent, 0.72f, baseKey);
+                Detail::drawFrame(drawList, geometry.control, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, node.style->colors.input, node.style->colors.accent, baseKey);
 
                 if(node.valueData().colorMarkerEnabled == true)
                 {
@@ -1085,7 +1111,7 @@ namespace Mosaic
 
             float progressHeight = std::max(8.f, node.bounds.height - 8.f);
             Rect track = sliderNode ? geometry.track : Rect{node.bounds.x, node.bounds.y + (node.bounds.height - progressHeight) * 0.5f, node.bounds.width, progressHeight};
-            Detail::drawFrame(drawList, track, track.height * 0.5f, node.style->metrics.frameBorderSize, Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual), Detail::mixColor(controlBorder, accentColor, hoverVisual * 0.5f), sliderNode ? 0.45f : 0.25f, baseKey);
+            Detail::drawFrame(drawList, track, track.height * 0.5f, node.style->metrics.frameBorderSize, Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual), Detail::mixColor(controlBorder, accentColor, hoverVisual * 0.5f), baseKey);
 
             if(sliderNode == true && node.valueData().colorMarkerEnabled == true)
             {
@@ -1118,12 +1144,21 @@ namespace Mosaic
             if(sliderNode == true)
             {
                 float centerX = track.x + track.width * std::clamp(scalarVisual, 0.f, 1.f);
-                float knobSide = std::min(geometry.maximumGrabSide, 12.f + hoverVisual * 1.5f + activeVisual * 2.f);
+                float knobSide = std::min(geometry.maximumGrabSide, 7.f + hoverVisual + activeVisual);
                 Rect knob = {centerX - knobSide * 0.5f, node.bounds.y + (node.bounds.height - knobSide) * 0.5f, knobSide, knobSide};
                 float knobRadius = std::min(knobSide * 0.5f, std::max(0.f, node.style->metrics.grabCornerRadius));
                 drawList.roundedRect({knob.x, knob.y + 1.f, knob.width, knob.height}, knobRadius, Color{0.f, 0.f, 0.f, 0.34f}, baseKey);
                 drawList.roundedRect(knob, knobRadius, Detail::mixColor(Detail::mixColor(node.style->colors.sliderGrab, node.style->colors.sliderGrabHovered, hoverVisual), node.style->colors.sliderGrabActive, activeVisual), baseKey);
-                drawList.roundedRect(knob.inset(2.f), std::max(0.f, knobRadius - 2.f), Detail::mixColor(node.style->colors.text, accentColor, activeVisual * 0.45f), baseKey);
+                if(hoverVisual > 0.001f || activeVisual > 0.001f)
+                {
+                    float halo = 2.f + activeVisual;
+                    Rect haloBounds = {knob.x - halo, knob.y - halo, knob.width + halo * 2.f, knob.height + halo * 2.f};
+                    BoxStyle haloStyle;
+                    haloStyle.radii = {3.f, 3.f, 3.f, 3.f};
+                    haloStyle.borderWidth = 1.f;
+                    haloStyle.borderColor = Detail::colorWithAlpha(accentColor, std::max(hoverVisual * 0.35f, activeVisual * 0.65f));
+                    drawList.box(haloBounds, haloStyle, baseKey);
+                }
 
                 if(node.showValueOnTrack == true && node.valueText.empty() == false)
                 {
@@ -1150,7 +1185,7 @@ namespace Mosaic
                     }
 
                     Rect bubble = {bubbleX, bubbleY, bubbleWidth, bubbleHeight};
-                    Detail::drawFrame(drawList, bubble, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, Detail::colorWithAlpha(node.style->colors.panelHeader, valuePopupVisual * 0.98f), Detail::colorWithAlpha(node.style->colors.accent, valuePopupVisual), valuePopupVisual, baseKey);
+                    Detail::drawFrame(drawList, bubble, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, Detail::colorWithAlpha(node.style->colors.panelHeader, valuePopupVisual * 0.98f), Detail::colorWithAlpha(node.style->colors.accent, valuePopupVisual), baseKey);
                     float pointerX = std::clamp(centerX, bubble.x + 6.f, bubble.right() - 6.f);
                     float pointerY = above ? bubble.bottom() : bubble.y;
                     float knobY = above ? knob.y - 1.f : knob.bottom() + 1.f;
@@ -1173,6 +1208,21 @@ namespace Mosaic
         }
         case Detail::NodeKind::DragValue:
         {
+            if(node.angleDial && node.textEditData().temporaryNumeric == false)
+            {
+                float diameter = std::min(node.bounds.width, node.bounds.height) - 4.f;
+                float radius = std::max(1.f, diameter * 0.5f);
+                Vec2 center = {node.bounds.x + node.bounds.width * 0.5f, node.bounds.y + node.bounds.height * 0.5f};
+                Rect dial = {center.x - radius, center.y - radius, radius * 2.f, radius * 2.f};
+                Color ringColor = Detail::mixColor(node.style->colors.textDisabled, accentColor, std::max({hoverVisual, activeVisual, navigationFocusVisual}));
+                Detail::drawFrame(drawList, dial, radius, 1.f, Detail::mixColor(node.style->colors.background, node.style->colors.frameHovered, hoverVisual), ringColor, baseKey);
+                float angle = std::fmod(node.valueData().secondaryScalar, 360.f) * 0.0174532925f - 1.570796327f;
+                Vec2 tip = {center.x + std::cos(angle) * (radius - 4.f), center.y + std::sin(angle) * (radius - 4.f)};
+                drawList.line(center, tip, 1.5f, node.disabled ? textColor : accentColor, baseKey);
+                drawList.roundedRect({center.x - 1.5f, center.y - 1.5f, 3.f, 3.f}, 1.5f, ringColor, baseKey);
+                break;
+            }
+
             Color inputFill = Detail::mixColor(node.style->colors.frame, node.style->colors.frameHovered, hoverVisual);
             Color inputBorder = Detail::mixColor(controlBorder, accentColor, std::max({hoverVisual * 0.55f, activeVisual, focusVisual}));
 
@@ -1186,12 +1236,25 @@ namespace Mosaic
                 inputBorder = node.style->colors.error;
             }
 
-            Detail::drawFrame(drawList, node.bounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, inputFill, inputBorder, 0.55f + activeVisual * 0.25f, baseKey);
+            bool editing = node.textEditData().temporaryNumeric;
+            float emphasis = std::max({hoverVisual, activeVisual, navigationFocusVisual});
+            if(editing || node.validation != Validation::Normal)
+            {
+                Detail::drawFrame(drawList, node.bounds, node.style->metrics.frameCornerRadius, node.style->metrics.frameBorderSize, inputFill, inputBorder, baseKey);
+            }
+            else
+            {
+                drawList.roundedRect(node.bounds, node.style->metrics.frameCornerRadius, Detail::colorWithAlpha(node.style->colors.frameHovered, emphasis * 0.6f), baseKey);
+                float underlineWidth = std::min(std::max(0.f, node.bounds.width - node.style->metrics.padding * 2.f), std::max(node.textSize.x, node.valueData().valueTextSize.x));
+                drawList.line({node.bounds.x + node.style->metrics.padding, node.bounds.bottom() - 2.f}, {node.bounds.x + node.style->metrics.padding + underlineWidth, node.bounds.bottom() - 2.f}, 1.f, Detail::colorWithAlpha(node.style->colors.textLink, 0.22f + emphasis * 0.6f), baseKey);
+                textColor = node.disabled ? textColor : node.style->colors.textLink;
+            }
 
             if(node.valueData().colorMarkerEnabled == true)
             {
                 float markerWidth = std::min(node.style->metrics.colorMarkerSize, node.bounds.width);
-                Rect marker = {node.bounds.x, node.bounds.y, markerWidth, node.bounds.height};
+                float markerHeight = std::min(8.f, node.bounds.height);
+                Rect marker = {node.bounds.x, node.bounds.y + (node.bounds.height - markerHeight) * 0.5f, markerWidth, markerHeight};
                 drawList.roundedRect(marker, std::min(node.style->metrics.frameCornerRadius, 1.5f), node.colorMarker, baseKey);
             }
 
@@ -1232,7 +1295,7 @@ namespace Mosaic
                 drawList.line({cursorPosition.x, cursorTop}, {cursorPosition.x, cursorBottom}, 1.f, Detail::colorWithAlpha(node.style->colors.textCursor, blink), dragTextKey);
             }
 
-            if(node.textEditData().temporaryNumeric == false && (hoverVisual > 0.001f || activeVisual > 0.001f))
+            if(node.textEditData().temporaryNumeric == false && (hoverVisual > 0.001f || activeVisual > 0.001f) && node.bounds.width > std::max(node.textSize.x, node.valueData().valueTextSize.x) + node.style->metrics.padding * 2.f + 18.f)
             {
                 float centerY = node.bounds.y + node.bounds.height * 0.5f;
                 Color arrows = Detail::colorWithAlpha(node.style->colors.textDisabled, std::max(hoverVisual * 0.8f, activeVisual));
@@ -1266,7 +1329,7 @@ namespace Mosaic
                 inputBorder = node.style->colors.error;
             }
 
-            Detail::drawFrame(drawList, node.bounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, inputFill, inputBorder, 0.6f + focusVisual * 0.35f, baseKey);
+            Detail::drawFrame(drawList, node.bounds, node.style->metrics.cornerRadius, node.style->metrics.frameBorderSize, inputFill, inputBorder, baseKey);
 
             if(focusVisual > 0.001f)
             {
@@ -1310,13 +1373,13 @@ namespace Mosaic
 
             if(node.colorShowInputs == false)
             {
-                Detail::drawFrame(drawList, geometry.control, node.style->metrics.cornerRadius, node.colorBorder ? node.style->metrics.frameBorderSize : 0.f, controlColor, controlBorder, 0.42f + hoverVisual * 0.18f - activeVisual * 0.16f, baseKey);
+                Detail::drawFrame(drawList, geometry.control, node.style->metrics.cornerRadius, node.colorBorder ? node.style->metrics.frameBorderSize : 0.f, controlColor, controlBorder, baseKey);
             }
 
             for(uint8_t channel = 0; channel != geometry.channelCount; ++channel)
             {
                 Rect channelBounds = geometry.channels[channel];
-                Detail::drawFrame(drawList, channelBounds, node.style->metrics.frameCornerRadius, node.colorBorder ? node.style->metrics.frameBorderSize : 0.f, node.style->colors.input, controlBorder, 0.22f + hoverVisual * 0.08f, baseKey);
+                Detail::drawFrame(drawList, channelBounds, node.style->metrics.frameCornerRadius, node.colorBorder ? node.style->metrics.frameBorderSize : 0.f, node.style->colors.input, controlBorder, baseKey);
                 Color markers[] = {Color{1.f, 0.08f, 0.08f, 1.f}, Color{0.12f, 0.92f, 0.18f, 1.f}, Color{0.18f, 0.36f, 1.f, 1.f}, Color{0.72f, 0.78f, 0.84f, 1.f}};
 
                 if(node.colorMarkers == true)
@@ -1418,7 +1481,7 @@ namespace Mosaic
             if(node.imageData().backgroundEnabled == true || node.imageData().borderSize > 0.f)
             {
                 Color background = node.imageData().backgroundEnabled == true ? node.imageData().background : Color{};
-                Detail::drawFrame(drawList, node.bounds, node.imageData().rounding, node.imageData().borderSize, background, node.imageData().borderColor, 0.f, baseKey);
+                Detail::drawFrame(drawList, node.bounds, node.imageData().rounding, node.imageData().borderSize, background, node.imageData().borderColor, baseKey);
             }
 
             if(node.imageData().texture != 0)
@@ -1650,7 +1713,7 @@ namespace Mosaic
 
             if(node.kind == Detail::NodeKind::Scroll && (node.scrollOptions().background == true || node.scrollOptions().framed == true))
             {
-                Detail::drawFrame(drawList, node.bounds, node.style->metrics.childCornerRadius, node.scrollOptions().framed ? node.style->metrics.childBorderSize : 0.f, node.scrollOptions().frameStyle ? node.style->colors.frame : node.style->colors.background, node.scrollOptions().frameStyle ? node.style->colors.borderStrong : node.style->colors.border, node.scrollOptions().frameStyle ? 0.24f : 0.f, baseKey);
+                Detail::drawFrame(drawList, node.bounds, node.style->metrics.childCornerRadius, node.scrollOptions().framed ? node.style->metrics.childBorderSize : 0.f, node.scrollOptions().frameStyle ? node.style->colors.frame : node.style->colors.background, node.scrollOptions().frameStyle ? node.style->colors.borderStrong : node.style->colors.border, baseKey);
             }
 
             if(node.kind == Detail::NodeKind::Scroll && (node.scrollOptions().resizeX == true || node.scrollOptions().resizeY == true))

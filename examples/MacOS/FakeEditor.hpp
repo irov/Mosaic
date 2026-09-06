@@ -18,7 +18,7 @@ namespace MosaicExample
         using FrameHistory = Mosaic::Array<float, 96>;
         using EntityNames = Mosaic::Array<Mosaic::StringView, 10>;
         using InspectorTabs = Mosaic::Array<Mosaic::StringView, 4>;
-        using BottomTabs = Mosaic::Array<Mosaic::StringView, 3>;
+        using BottomTabs = Mosaic::Array<Mosaic::StringView, 4>;
         using ToolNames = Mosaic::Array<Mosaic::StringView, 4>;
         using AssetNames = Mosaic::Array<Mosaic::StringView, 8>;
         using ViewportEntityIndices = Mosaic::Array<size_t, 4>;
@@ -71,6 +71,8 @@ namespace MosaicExample
 
         void updateLayout(const Mosaic::Vec2 & workspaceSize) noexcept;
         void drawTopBar(Mosaic::Context * ui);
+        void drawTimeline(Mosaic::Context * ui);
+        void applyTimeline();
         void drawSceneColumn(Mosaic::Context * ui, const Mosaic::LayoutOptions & layout, Mosaic::Id & hierarchy, Mosaic::Id & properties);
         void drawCenterColumn(Mosaic::Context * ui, const Mosaic::LayoutOptions & layout, Mosaic::Id & viewport, Mosaic::Id & console);
         void drawInspectorColumn(Mosaic::Context * ui, const Mosaic::LayoutOptions & layout, Mosaic::Id & inspector, Mosaic::Id & contentBrowser);
@@ -97,6 +99,9 @@ namespace MosaicExample
         Mosaic::VirtualScrollAnchor m_hierarchyAnchor;
         Mosaic::VirtualScrollAnchor m_assetAnchor;
         Mosaic::DesignSurfaceState m_designSurfaceState;
+        Mosaic::TimelineState m_timeline;
+        Mosaic::Array<Mosaic::TimelineKeyframe, 9> m_motionKeys;
+        Mosaic::Array<float, 9> m_motionValues = {-3.f, 0.f, 3.f, 0.f, 90.f, 180.f, 1.f, 0.3f, 1.f};
         EntityStateArray m_entities;
         Mosaic::TextureHandle m_checkerTexture = 0;
         Mosaic::String m_projectName = "Orbital Workshop";
@@ -139,12 +144,12 @@ namespace MosaicExample
         float m_hierarchyRatio = 0.55f;
         float m_viewportRatio = 0.70f;
         float m_inspectorRatio = 0.70f;
-        float m_layoutGap = 4.f;
+        float m_layoutGap = 2.f;
         float m_popupPadding = 7.f;
         float m_minimumPopupWidth = 180.f;
-        float m_windowTitleHeight = 27.f;
-        float m_controlHeight = 23.f;
-        float m_minimumControlWidth = 64.f;
+        float m_windowTitleHeight = 24.f;
+        float m_controlHeight = 20.f;
+        float m_minimumControlWidth = 56.f;
         uint8_t m_roundedRectangleQuality = 8;
         int m_selectedTool = 1;
         int m_selectedEntity = 2;

@@ -451,6 +451,22 @@ namespace Mosaic
                 InteractionDetail::setFlag(response, 11);
             }
 
+            if(ownsPointer && ui->input.keyPressed(KeyCode::Escape))
+            {
+                InteractionDetail::setFlag(response, 1, false);
+                InteractionDetail::setFlag(response, 3, false);
+                InteractionDetail::setFlag(response, 5, false);
+                InteractionDetail::setFlag(response, 9);
+                ui->active = InvalidId;
+                ui->activeItem = {};
+                ui->captured = InvalidId;
+                ui->capturedItem = {};
+                ui->capturedPointer = 0;
+                state.pressBounds = {};
+                state.pressClip = {};
+                ownsPointer = false;
+            }
+
             if(pointer != nullptr && ownsPointer == true && pointer->isReleased(options.pointerButton) == true)
             {
                 InteractionDetail::setFlag(response, 4);

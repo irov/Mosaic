@@ -892,7 +892,7 @@ namespace Mosaic
             // grab center, not the raw frame edges. At 0 and 1 the whole circular grab stays
             // inside the control instead of extending beyond it or colliding with the label.
             float grabRadius = std::min(geometry.maximumGrabSide * 0.5f, geometry.control.width * 0.5f);
-            float trackHeight = 5.f;
+            float trackHeight = 3.f;
             geometry.track = {geometry.control.x + grabRadius, bounds.y + (bounds.height - trackHeight) * 0.5f, std::max(0.f, geometry.control.width - grabRadius * 2.f), trackHeight};
 
             return geometry;
@@ -1702,6 +1702,12 @@ namespace Mosaic
             float selectionTarget = node.checked || node.selected == true || node.highlighted == true || node.expanded ? 1.f : 0.f;
             float focusTarget = node.response.focused() ? 1.f : 0.f;
 
+            // A brief release confirmation is independent of the held/hovered states.
+            // Reduced motion keeps the state changes and removes the transient flash.
+            state.activationVisual = behavior.animationsEnabled && node.disabled == false
+                ? (node.response.clicked() ? 1.f : std::max(0.f, state.activationVisual - std::max(0.f, deltaTime) / 0.18f))
+                : 0.f;
+
             if(state.visualInitialized == false)
             {
                 state.visualInitialized = true;
@@ -1721,7 +1727,7 @@ namespace Mosaic
             state.scalarVisual = node.response.active() ? node.valueData().scalar : Detail::animateVisual(state.scalarVisual, node.valueData().scalar, deltaTime, behavior.valueAnimationDuration, behavior.animationsEnabled);
         }
         //////////////////////////////////////////////////////////////////////////
-        void drawFrame(DrawList & drawList, const Rect & bounds, float radius, float borderWidth, const Color & fill, const Color & border, float shadow, uint64_t renderKey)
+        void drawFrame(DrawList & drawList, const Rect & bounds, float radius, float borderWidth, const Color & fill, const Color & border, uint64_t renderKey)
         {
             if(bounds.empty() == true)
             {
@@ -1735,21 +1741,7 @@ namespace Mosaic
             style.borderColor = border;
             style.feather = 0.75f;
 
-            if(shadow > 0.001f)
-            {
-                style.shadow.offset = {0.f, 1.f};
-                style.shadow.blur = 1.5f + shadow;
-                style.shadow.color = {0.f, 0.f, 0.f, 0.18f * shadow};
-            }
-
             drawList.box(bounds, style, renderKey);
-
-            if(borderWidth > 0.f)
-            {
-                Rect interior = bounds.inset(borderWidth);
-                float highlightY = interior.y + 0.5f;
-                drawList.line({interior.x + radius, highlightY}, {interior.right() - radius, highlightY}, 1.f, Detail::colorWithAlpha(Color{1.f, 1.f, 1.f, 1.f}, 0.055f), renderKey);
-            }
         }
         //////////////////////////////////////////////////////////////////////////
         void drawScrollbar(DrawList & drawList, const Rect & track, const Rect & thumb, bool vertical, const Theme & style, float hover, float active, uint64_t renderKey)
@@ -1773,7 +1765,7 @@ namespace Mosaic
             float radius = std::min(maximumRadius, std::max(0.f, style.metrics.scrollbarCornerRadius));
             Color fill = Detail::mixColor(style.colors.scrollbarGrab, style.colors.scrollbarGrabHovered, hover);
             fill = Detail::mixColor(fill, style.colors.scrollbarGrabActive, active);
-            Detail::drawFrame(drawList, insetThumb, radius, style.metrics.frameBorderSize, fill, Detail::mixColor(style.colors.borderStrong, style.colors.accent, std::max(hover * 0.45f, active)), 0.22f, renderKey);
+            Detail::drawFrame(drawList, insetThumb, radius, style.metrics.frameBorderSize, fill, Detail::mixColor(style.colors.borderStrong, style.colors.accent, std::max(hover * 0.45f, active)), renderKey);
         }
         //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] size_t previousUtf8(StringView value, size_t position) noexcept
@@ -7213,8 +7205,12 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Response property(Context * ui, StringView name, bool * value, const SourceLocation & location)
     {
-        auto propertyRow = Mosaic::row(ui, {}, location);
-        Mosaic::text(ui, name, location);
+        LayoutOptions rowLayout;
+        rowLayout.width = SizeRule::Fill;
+        auto propertyRow = Mosaic::row(ui, rowLayout, location);
+        TextOptions labelOptions;
+        labelOptions.layout.width = Dimension::fixed(ui->currentStyle->metrics.propertyLabelWidth);
+        Mosaic::text(ui, name, labelOptions, location);
         auto returnedValue = Mosaic::checkbox(ui, Key("value"), {}, value, location);
 
         return returnedValue;
@@ -7222,9 +7218,17 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     Response property(Context * ui, StringView name, String * value, const SourceLocation & location)
     {
-        auto propertyRow = Mosaic::row(ui, {}, location);
-        Mosaic::text(ui, name, location);
+        LayoutOptions rowLayout;
+        rowLayout.width = SizeRule::Fill;
+        auto propertyRow = Mosaic::row(ui, rowLayout, location);
+        TextOptions labelOptions;
+        labelOptions.layout.width = Dimension::fixed(ui->currentStyle->metrics.propertyLabelWidth);
+        Mosaic::text(ui, name, labelOptions, location);
         auto returnedValue = Mosaic::inputText(ui, "value", value, {}, location);
+        if(Context::Node * node = ui->findFrameNode(returnedValue.item); node != nullptr)
+        {
+            node->layout.width = SizeRule::Fill;
+        }
 
         return returnedValue;
     }

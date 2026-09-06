@@ -24,38 +24,6 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::Theme editorTheme() noexcept
         {
             Mosaic::Theme theme = Mosaic::Theme::dark();
-            theme.colors.background = Mosaic::Color::fromBytes(17, 23, 29);
-            theme.colors.panel = Mosaic::Color::fromBytes(31, 43, 52);
-            theme.colors.panelHeader = Mosaic::Color::fromBytes(29, 42, 51);
-            theme.colors.input = Mosaic::Color::fromBytes(11, 16, 21);
-            theme.colors.panelHovered = Mosaic::Color::fromBytes(43, 63, 76);
-            theme.colors.panelActive = Mosaic::Color::fromBytes(38, 79, 107);
-            theme.colors.text = Mosaic::Color::fromBytes(224, 231, 234);
-            theme.colors.textDisabled = Mosaic::Color::fromBytes(105, 118, 125);
-            theme.colors.accent = Mosaic::Color::fromBytes(64, 163, 224);
-            theme.colors.border = Mosaic::Color::fromBytes(38, 51, 60);
-            theme.colors.borderStrong = Mosaic::Color::fromBytes(54, 71, 82);
-            theme.colors.selection = Mosaic::Color::fromBytes(30, 78, 111);
-            theme.colors.warning = Mosaic::Color::fromBytes(232, 198, 72);
-            theme.colors.error = Mosaic::Color::fromBytes(228, 84, 84);
-            theme.colors.success = Mosaic::Color::fromBytes(76, 190, 132);
-            theme.metrics.fontSize = 13.f;
-            theme.metrics.lineHeight = 17.f;
-            theme.metrics.padding = 5.f;
-            theme.metrics.gap = 4.f;
-            theme.metrics.indent = 14.f;
-            theme.metrics.borderWidth = 1.f;
-            theme.metrics.cornerRadius = 4.f;
-            theme.metrics.scrollbarWidth = 11.f;
-            theme.metrics.splitterWidth = 4.f;
-            theme.metrics.windowTitleHeight = 27.f;
-            theme.metrics.minimumControlWidth = 64.f;
-            theme.metrics.controlHeight = 23.f;
-            theme.behavior.hoverAnimationDuration = 0.11f;
-            theme.behavior.activeAnimationDuration = 0.065f;
-            theme.behavior.selectionAnimationDuration = 0.17f;
-            theme.behavior.valueAnimationDuration = 0.10f;
-            theme.behavior.pressOffset = 0.75f;
 
             return theme;
         }
@@ -102,11 +70,8 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::Theme listItemTheme(const Mosaic::Theme & base) noexcept
         {
             Mosaic::Theme theme = base;
-            theme.colors.panel = base.colors.background;
-            theme.colors.panelHovered = Mosaic::Color::fromBytes(34, 53, 65);
-            theme.colors.panelActive = Mosaic::Color::fromBytes(35, 72, 96);
-            theme.colors.border = Mosaic::Color::fromBytes(0, 0, 0, 0);
-            theme.metrics.cornerRadius = 4.f;
+            theme.colors.button = base.colors.background;
+            theme.metrics.frameBorderSize = 0.f;
             theme.metrics.buttonTextAlignment.x = 0.f;
 
             return theme;
@@ -115,12 +80,8 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::Theme menuTheme(const Mosaic::Theme & base, bool selected = false) noexcept
         {
             Mosaic::Theme theme = base;
-            theme.colors.panel = selected ? Mosaic::Color::fromBytes(30, 78, 111) : Mosaic::Color::fromBytes(10, 15, 19);
-            theme.colors.panelHovered = Mosaic::Color::fromBytes(35, 50, 60);
-            theme.colors.panelActive = Mosaic::Color::fromBytes(39, 70, 91);
-            theme.colors.border = selected ? base.colors.accent : Mosaic::Color::fromBytes(0, 0, 0, 0);
-            theme.colors.borderStrong = selected ? base.colors.accent : base.colors.borderStrong;
-            theme.metrics.cornerRadius = 4.f;
+            theme.colors.button = selected ? base.colors.selection : base.colors.menu;
+            theme.metrics.frameBorderSize = 0.f;
 
             return theme;
         }
@@ -128,10 +89,9 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::Theme runTheme(const Mosaic::Theme & base, bool running) noexcept
         {
             Mosaic::Theme theme = base;
-            theme.colors.panel = running ? Mosaic::Color::fromBytes(96, 42, 48) : Mosaic::Color::fromBytes(28, 83, 119);
-            theme.colors.panelHovered = running ? Mosaic::Color::fromBytes(132, 52, 59) : Mosaic::Color::fromBytes(39, 111, 153);
-            theme.colors.panelActive = running ? Mosaic::Color::fromBytes(150, 58, 66) : Mosaic::Color::fromBytes(47, 128, 174);
-            theme.colors.border = running ? base.colors.error : base.colors.accent;
+            theme.colors.button = running ? Mosaic::Color::fromBytes(74, 39, 39) : base.colors.button;
+            theme.colors.buttonHovered = running ? Mosaic::Color::fromBytes(96, 48, 48) : base.colors.buttonHovered;
+            theme.colors.text = running ? base.colors.error : base.colors.textLink;
 
             return theme;
         }
@@ -141,10 +101,35 @@ namespace MosaicExample
             Mosaic::LayoutOptions layout;
             layout.width = Mosaic::SizeRule::Fill;
             layout.height = Mosaic::SizeRule::Fill;
-            layout.padding = Mosaic::EdgeInsets(6.f, 5.f);
-            layout.gap = 4.f;
+            layout.padding = Mosaic::EdgeInsets(5.f, 3.f);
+            layout.gap = 2.f;
 
             return layout;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        void transformRow(Mosaic::Context * ui, Mosaic::StringView label, Mosaic::FloatSpan values, float minimum, float maximum)
+        {
+            Mosaic::Vec2 available;
+            bool stacked = Mosaic::contentRegionAvailable(ui, &available) && available.x < 220.f;
+            auto propertyScope = Mosaic::scope(ui, Mosaic::Key(label));
+            Mosaic::Theme theme = Mosaic::getTheme(ui);
+            theme.metrics.minimumControlWidth = 28.f;
+            auto propertyStyle = Mosaic::styleScope(ui, theme);
+            Mosaic::LayoutOptions rowLayout;
+            rowLayout.width = Mosaic::SizeRule::Fill;
+            rowLayout.gap = 2.f;
+            auto row = stacked ? Mosaic::column(ui, rowLayout) : Mosaic::row(ui, rowLayout);
+            Mosaic::TextOptions labelOptions;
+            labelOptions.layout.width = Mosaic::Dimension::fixed(62.f);
+            Mosaic::text(ui, label, labelOptions);
+            Mosaic::SliderOptions options;
+            options.minimum = minimum;
+            options.maximum = maximum;
+            options.precision = stacked ? 1 : 2;
+            options.step = 0.01;
+            options.labelPlacement = Mosaic::LabelPlacement::Hidden;
+            options.colorMarkers = true;
+            Mosaic::dragFloatVector(ui, label, values, options);
         }
         //////////////////////////////////////////////////////////////////////////
         template<class T> [[nodiscard]] Mosaic::String number(T value)
@@ -350,6 +335,18 @@ namespace MosaicExample
         m_entities[5].position = {9.f, 0.f, 2.f};
         m_entities[5].color = Mosaic::Color::fromBytes(72, 104, 68);
 
+        m_timeline.visibleEnd = 8.0;
+        m_timeline.workEnd = 8.0;
+        m_timeline.loopEnd = 8.0;
+        m_timeline.playhead = 2.0;
+        m_timeline.trackWidth = 124.f;
+        m_timeline.trackHeight = 20.f;
+        for(size_t index = 0; index != m_motionKeys.size(); ++index)
+        {
+            m_motionKeys[index].id = 100 + index;
+            m_motionKeys[index].track = index / 3 + 1;
+            m_motionKeys[index].time = static_cast<double>(index % 3) * 3.0 + 0.5;
+        }
         m_selection.select(FakeEditor::entityId(2));
         m_assetSelection.select(Mosaic::combineId(Mosaic::hashBytes("FakeEditor Asset"), 3));
     }
@@ -397,7 +394,7 @@ namespace MosaicExample
         // This one function is the fake editor frame. Only domain state is retained by FakeEditor;
         // all controls, panel trees, draw commands and hit regions are rebuilt by Mosaic each tick.
         updateLayout(workspaceSize);
-        Mosaic::setDockArea(ui, {0.f, 39.f, m_layout.width, std::max(0.f, m_layout.height - 39.f)});
+        Mosaic::setDockArea(ui, {0.f, 31.f, m_layout.width, std::max(0.f, m_layout.height - 31.f)});
 
         // The fake editor exposes both interaction policies. Touch mode disables visual hover
         // without changing hit testing; reduced motion snaps every visual state immediately.
@@ -424,6 +421,11 @@ namespace MosaicExample
             m_simulating = m_simulating == false;
         }
 
+        if(m_simulating && m_paused == false)
+        {
+            m_timeline.playhead = std::fmod(m_timeline.playhead + Mosaic::input(ui).deltaTime, m_timeline.workEnd);
+            applyTimeline();
+        }
         drawTopBar(ui);
 
         Mosaic::LayoutOptions workspaceLayout;
@@ -595,9 +597,9 @@ namespace MosaicExample
     {
         // These values mirror the nested split tree below. The panel rectangles are only used by
         // the fake scene drawing; Mosaic remains the authority that arranges the actual windows.
-        constexpr float top = 39.f;
+        constexpr float top = 31.f;
         constexpr float splitter = 4.f;
-        constexpr float collapsedHeight = 27.f;
+        constexpr float collapsedHeight = 24.f;
         float width = std::max(workspaceSize.x, 900.f);
         float height = std::max(workspaceSize.y, 620.f);
         float workspaceHeight = height - top;
@@ -768,9 +770,8 @@ namespace MosaicExample
             canvasLayout.width = Mosaic::SizeRule::Fill;
             canvasLayout.height = Mosaic::SizeRule::Fill;
             Mosaic::Canvas background = Mosaic::canvas(ui, "Editor chrome", canvasLayout);
-            background.rect({0.f, 0.f, m_layout.width, 34.f}, Mosaic::Color::fromBytes(10, 15, 19));
-            background.line({0.f, 32.f}, {m_layout.width, 32.f}, 1.f, Mosaic::Color::fromBytes(42, 56, 66));
-            background.line({0.f, 33.f}, {m_layout.width, 33.f}, 1.f, Mosaic::Color::fromBytes(72, 91, 104));
+            background.rect({0.f, 0.f, m_layout.width, 28.f}, Mosaic::getTheme(ui).colors.menuBarBackground);
+            background.line({0.f, 27.f}, {m_layout.width, 27.f}, 1.f, Mosaic::getTheme(ui).colors.borderStrong);
         }
 
         // A real editor usually keeps project commands in a permanent top strip. The File item
@@ -779,7 +780,7 @@ namespace MosaicExample
         Mosaic::LayoutOptions barLayout;
         barLayout.width = Mosaic::SizeRule::Fill;
         barLayout.height = Mosaic::SizeRule::Fill;
-        barLayout.padding = Mosaic::EdgeInsets(6.f, 5.f);
+        barLayout.padding = Mosaic::EdgeInsets(6.f, 3.f);
         auto bar = Mosaic::row(ui, barLayout);
         {
             auto fileMenu = Mosaic::menu(ui, "File");
@@ -798,6 +799,18 @@ namespace MosaicExample
                 if(Mosaic::menuItem(ui, "Load Layout").clicked() == true)
                 {
                     m_status = m_persistence.load() && Mosaic::deserialize(ui, m_persistence) ? "Layout loaded" : "No saved layout found";
+                }
+
+                if(Mosaic::menuItem(ui, "Reset Workspace").clicked() == true)
+                {
+                    Mosaic::clearDockSpace(ui, 1);
+                    m_dockModelInitialized = false;
+                    m_hierarchyPanel = {};
+                    m_propertiesPanel = {};
+                    m_inspectorPanel = {};
+                    m_consolePanel = {};
+                    m_contentBrowserPanel = {};
+                    m_status = "Workspace reset";
                 }
 
                 if(Mosaic::menuItem(ui, "Preferences...").clicked() == true)
@@ -858,19 +871,19 @@ namespace MosaicExample
                     if(viewMenu.expanded() == true)
                     {
                         Mosaic::MenuItemOptions profiler;
-                        profiler.selected = m_bottomTab == 1;
+                        profiler.selected = m_bottomTab == 2;
 
                         if(Mosaic::menuItem(ui, "Profiler", profiler).clicked() == true)
                         {
-                            m_bottomTab = 1;
+                            m_bottomTab = 2;
                         }
 
                         Mosaic::MenuItemOptions events;
-                        events.selected = m_bottomTab == 2;
+                        events.selected = m_bottomTab == 3;
 
                         if(Mosaic::menuItem(ui, "Events", events).clicked() == true)
                         {
-                            m_bottomTab = 2;
+                            m_bottomTab = 3;
                         }
                     }
                 }
@@ -922,21 +935,8 @@ namespace MosaicExample
             Mosaic::toggle(ui, "Pause", &m_paused);
             Mosaic::checkbox(ui, "Snap", &m_snapToGrid);
             Mosaic::spacer(ui, 8.f);
-            Mosaic::toggle(ui, "Motion", &m_animations);
-            Mosaic::toggle(ui, "Touch", &m_touchMode);
 
-            const Mosaic::PointerState * pointer = Mosaic::input(ui).primaryPointer();
-
-            if(pointer != nullptr)
-            {
-                // The live pointer readout makes the platform bridge observable in the sample:
-                // moving the native AppKit mouse must immediately change editor-owned UI state.
-                Mosaic::String pointerStatus = "Mouse ";
-                pointerStatus += Detail::number(static_cast<int>(pointer->position.x));
-                pointerStatus += ", ";
-                pointerStatus += Detail::number(static_cast<int>(pointer->position.y));
-                Mosaic::text(ui, pointerStatus);
-            }
+            Mosaic::text(ui, m_projectName);
         }
     }
     //////////////////////////////////////////////////////////////////////////
@@ -975,7 +975,7 @@ namespace MosaicExample
         sceneRow.key = Mosaic::Key("World");
         sceneRow.item = sceneId;
         sceneRow.expanded = m_sceneExpanded;
-        sceneRow.leadingIcon.semanticFallback = "S";
+        sceneRow.leadingIcon.semanticFallback = "◇";
         sceneRow.label = "World / DemoScene";
         rows.emplace_back(sceneRow);
         orderedRows.emplace_back(sceneId);
@@ -1001,7 +1001,7 @@ namespace MosaicExample
                 entityRow.renameActive = m_renamingEntity == static_cast<int>(index);
                 entityRow.dragEnabled = true;
                 entityRow.dropEnabled = true;
-                entityRow.leadingIcon.semanticFallback = index == 0 ? "C" : "N";
+                entityRow.leadingIcon.semanticFallback = index == 0 ? "◉" : "◇";
                 entityRow.label = entity.name;
                 entityRow.renameValue = &m_entities[index].name;
                 entityRow.dragType = entityDragType;
@@ -1017,7 +1017,7 @@ namespace MosaicExample
         collectionsRow.key = Mosaic::Key("Collections");
         collectionsRow.item = collectionsId;
         collectionsRow.expanded = m_collectionsExpanded;
-        collectionsRow.leadingIcon.semanticFallback = "F";
+        collectionsRow.leadingIcon.semanticFallback = "▱";
         collectionsRow.label = "Collections";
         rows.emplace_back(collectionsRow);
         orderedRows.emplace_back(collectionsId);
@@ -1035,7 +1035,7 @@ namespace MosaicExample
                 collectionRow.item = ids[index];
                 collectionRow.depth = 1;
                 collectionRow.leaf = true;
-                collectionRow.leadingIcon.semanticFallback = "F";
+                collectionRow.leadingIcon.semanticFallback = "▱";
                 collectionRow.label = labels[index];
                 rows.emplace_back(collectionRow);
                 orderedRows.emplace_back(ids[index]);
@@ -1117,10 +1117,8 @@ namespace MosaicExample
 
         if(transform.expanded() == true)
         {
-            Mosaic::text(ui, "Translation");
-            Mosaic::vectorEditor(ui, "Position", entity.position, -20.f, 20.f);
-            Mosaic::text(ui, "Rotation");
-            Mosaic::vectorEditor(ui, "Rotation", entity.rotation, -180.f, 180.f);
+            Detail::transformRow(ui, "Position", entity.position, -20.f, 20.f);
+            Detail::transformRow(ui, "Rotation", entity.rotation, -180.f, 180.f);
         }
 
         auto rendering = Mosaic::collapsingHeader(ui, "Rendering", true);
@@ -1129,7 +1127,6 @@ namespace MosaicExample
         {
             Mosaic::property(ui, "Grid", &m_gridSize, int32_t{4}, int32_t{64});
             Mosaic::property(ui, "Budget", &m_entityBudget, uint64_t{1000}, uint64_t{1000000});
-            Mosaic::text(ui, "Viewport Color");
             Mosaic::colorEditorRgba(ui, "Tint", &entity.color);
         }
 
@@ -1154,33 +1151,36 @@ namespace MosaicExample
         {
             auto toolbar = Mosaic::row(ui);
             constexpr ToolNames tools = {"Select", "Move", "Rotate", "Scale"};
-            Mosaic::comboBox(ui, "Tool", &m_selectedTool, tools);
-            Mosaic::toggle(ui, "Grid", &m_showGrid);
-            Mosaic::checkbox(ui, "Local", &m_snapToGrid);
-
-            if(Mosaic::button(ui, "Frame Selected").clicked() == true)
+            constexpr ToolNames glyphs = {"↖", "✥", "↻", "□"};
+            for(size_t index = 0; index != tools.size(); ++index)
             {
-                m_status = "Camera framed ";
-                m_status += selectedEntity().name;
+                auto toolScope = Mosaic::scope(ui, Mosaic::Key(index));
+                Mosaic::ButtonOptions options;
+                options.width = Mosaic::Dimension::fixed(24.f);
+                options.height = Mosaic::Dimension::fixed(20.f);
+                bool selected = m_selectedTool == static_cast<int>(index);
+                Mosaic::Theme toolTheme = Mosaic::getTheme(ui);
+                toolTheme.colors.button = selected ? toolTheme.colors.selection : toolTheme.colors.panel;
+                toolTheme.colors.text = selected ? toolTheme.colors.accent : toolTheme.colors.text;
+                toolTheme.metrics.frameBorderSize = 0.f;
+                auto toolStyle = Mosaic::styleScope(ui, toolTheme);
+                options.fillBackground = selected;
+                auto response = Mosaic::button(ui, Mosaic::Key("Tool"), glyphs[index], options);
+                if(response.clicked())
+                {
+                    m_selectedTool = static_cast<int>(index);
+                }
+                Mosaic::itemTooltip(ui, response, tools[index]);
+            }
+            Mosaic::checkbox(ui, "Grid", &m_showGrid);
+            auto frame = Mosaic::smallButton(ui, "Fit");
+            if(frame.clicked())
+            {
                 m_designSurfaceState.pan = {};
                 m_designSurfaceState.zoom = 1.f;
+                m_status = "Framed selection";
             }
-
-            Mosaic::Response addComponent = Mosaic::button(ui, "Add Component");
-
-            if(addComponent.clicked() == true)
-            {
-                m_addComponentOwner = addComponent.id;
-                Mosaic::PopupOptions popupOptions;
-                popupOptions.owner = m_addComponentOwner;
-
-                if(Mosaic::debugBounds(ui, addComponent.id, &popupOptions.anchor) == true)
-                {
-                    popupOptions.placement = Mosaic::PopupPlacement::Below;
-                    popupOptions.minimumSize = {210.f, 0.f};
-                    Mosaic::openPopup(ui, Mosaic::Key("Add Component Popup"), popupOptions);
-                }
-            }
+            Mosaic::itemTooltip(ui, frame, "Frame selection · reset pan and zoom");
         }
 
         Mosaic::LayoutOptions canvasLayout;
@@ -1328,7 +1328,9 @@ namespace MosaicExample
         auto content = Mosaic::scrollArea(ui, "Inspector content", Mosaic::Orientation::Vertical, Detail::panelContent());
 
         constexpr InspectorTabs tabs = {"Object", "Material", "Import", "Widgets"};
-        Mosaic::tabs(ui, "Inspector tabs", &m_inspectorTab, tabs);
+        Mosaic::TabsOptions tabOptions;
+        tabOptions.fittingPolicy = Mosaic::TabFittingPolicy::Shrink;
+        Mosaic::tabs(ui, "Inspector tabs", &m_inspectorTab, tabs, tabOptions);
         Mosaic::separator(ui);
 
         if(m_inspectorTab == 0)
@@ -1336,10 +1338,28 @@ namespace MosaicExample
             EntityState & entity = selectedEntity();
             Mosaic::property(ui, "Name", &entity.name);
             Mosaic::property(ui, "Enabled", &entity.visible);
-            Mosaic::text(ui, "Transform");
-            Mosaic::vectorEditor(ui, "Position", entity.position, -20.f, 20.f);
-            Mosaic::property(ui, "Grid", &m_gridSize, int32_t{4}, int32_t{64});
-            Mosaic::property(ui, "Budget", &m_entityBudget, uint64_t{1000}, uint64_t{1000000});
+            auto transform = Mosaic::collapsingHeader(ui, "Layer Transform", true);
+            if(transform.expanded())
+            {
+                Detail::transformRow(ui, "Position", entity.position, -20.f, 20.f);
+                Mosaic::property(ui, "Grid", &m_gridSize, int32_t{4}, int32_t{64});
+                Detail::transformRow(ui, "Rotation", entity.rotation, -180.f, 180.f);
+                Mosaic::property(ui, "Opacity", &entity.color.a, 0.f, 1.f);
+                {
+                    auto angleRow = Mosaic::row(ui);
+                    Mosaic::TextOptions label;
+                    label.layout.width = Mosaic::Dimension::fixed(88.f);
+                    Mosaic::text(ui, "Y Rotation", label);
+                    auto angle = Mosaic::angleDial(ui, Mosaic::Key("Y rotation dial"), "Y Rotation", &entity.rotation[1]);
+                    Mosaic::itemTooltip(ui, angle, "Drag to rotate · double-click to type · Esc to cancel");
+                    if(Mosaic::hyperlink(ui, "Reset").clicked())
+                    {
+                        entity.position = {};
+                        entity.rotation = {};
+                        entity.color.a = 1.f;
+                    }
+                }
+            }
         }
         else if(m_inspectorTab == 1)
         {
@@ -1725,6 +1745,101 @@ namespace MosaicExample
         }
     }
     //////////////////////////////////////////////////////////////////////////
+    void FakeEditor::applyTimeline()
+    {
+        float * values[] = {&m_entities[2].position[0], &m_entities[2].rotation[1], &m_entities[2].color.a};
+        for(size_t track = 0; track != 3; ++track)
+        {
+            size_t first = track * 3;
+            Mosaic::Array<size_t, 3> order = {first, first + 1, first + 2};
+            std::sort(order.begin(), order.end(), [this](size_t left, size_t right) { return m_motionKeys[left].time < m_motionKeys[right].time; });
+            size_t left = order.front();
+            size_t right = order.back();
+            if(m_timeline.playhead <= m_motionKeys[left].time)
+            {
+                right = left;
+            }
+            else if(m_timeline.playhead >= m_motionKeys[right].time)
+            {
+                left = right;
+            }
+            else
+            {
+                for(size_t index = 1; index != order.size(); ++index)
+                {
+                    if(m_timeline.playhead <= m_motionKeys[order[index]].time)
+                    {
+                        left = order[index - 1];
+                        right = order[index];
+                        break;
+                    }
+                }
+            }
+            double span = m_motionKeys[right].time - m_motionKeys[left].time;
+            float ratio = span > 0.000001 ? static_cast<float>((m_timeline.playhead - m_motionKeys[left].time) / span) : 0.f;
+            *values[track] = m_motionValues[left] + (m_motionValues[right] - m_motionValues[left]) * ratio;
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
+    void FakeEditor::drawTimeline(Mosaic::Context * ui)
+    {
+        {
+            auto toolbar = Mosaic::row(ui);
+            if(Mosaic::smallButton(ui, "|<").clicked())
+            {
+                m_timeline.playhead = 0.0;
+                applyTimeline();
+            }
+            if(Mosaic::smallButton(ui, m_simulating ? "Stop" : "Play").clicked()) m_simulating = !m_simulating;
+            Mosaic::SliderOptions timeOptions;
+            timeOptions.minimum = 0.0;
+            timeOptions.maximum = 8.0;
+            timeOptions.step = 1.0 / 30.0;
+            timeOptions.precision = 2;
+            timeOptions.width = Mosaic::Dimension::fixed(74.f);
+            if(Mosaic::dragValue(ui, "", &m_timeline.playhead, timeOptions).changed()) applyTimeline();
+            Mosaic::text(ui, "s   /   30 fps");
+            Mosaic::checkbox(ui, "Snap", &m_snapToGrid);
+        }
+        Mosaic::Array<Mosaic::TimelineTrack, 3> tracks;
+        constexpr Mosaic::Array<Mosaic::StringView, 3> names = {"Position X", "Y Rotation", "Opacity"};
+        for(size_t index = 0; index != tracks.size(); ++index)
+        {
+            tracks[index].id = index + 1;
+            tracks[index].label = names[index];
+        }
+        Mosaic::TimelineOptions options;
+        options.layout.width = Mosaic::SizeRule::Fill;
+        options.layout.height = Mosaic::SizeRule::Fill;
+        options.frameRate = 30.0;
+        options.snapFrames = m_snapToGrid;
+        options.allowDuplicate = false;
+        options.allowScale = false;
+        Mosaic::TimelineResponse edit;
+        (void)Mosaic::timeline(ui, Mosaic::Key("Scene timeline"), "Player Rig animation", tracks, m_motionKeys, &m_timeline, options, &edit);
+        if(edit.item != Mosaic::InvalidId)
+        {
+            for(Mosaic::TimelineKeyframe & key : m_motionKeys)
+            {
+                key.selected = key.id == edit.item;
+                if(key.id == edit.item)
+                {
+                    key.time = std::clamp(edit.time, 0.0, 8.0);
+                }
+            }
+            applyTimeline();
+        }
+        if(edit.playheadChanged) applyTimeline();
+        if(edit.selectionFinished && edit.phase != Mosaic::EditorTransactionPhase::Cancel)
+        {
+            for(Mosaic::TimelineKeyframe & key : m_motionKeys)
+            {
+                size_t track = static_cast<size_t>(key.track - 1);
+                key.selected = track >= edit.firstSelectedTrack && track <= edit.lastSelectedTrack && key.time >= edit.selectionBegin && key.time <= edit.selectionEnd;
+            }
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////
     Mosaic::Id FakeEditor::drawConsole(Mosaic::Context * ui)
     {
         auto window = Mosaic::window(ui, "Console / Profiler", Detail::panel(m_layout.console, &m_consolePanel.visible, &m_consolePanel.collapsed));
@@ -1738,10 +1853,14 @@ namespace MosaicExample
 
         auto content = Mosaic::column(ui, Detail::panelContent());
 
-        constexpr BottomTabs tabs = {"Console", "Profiler", "Events"};
+        constexpr BottomTabs tabs = {"Timeline", "Console", "Profiler", "Events"};
         Mosaic::tabs(ui, "Bottom panel", &m_bottomTab, tabs);
 
         if(m_bottomTab == 0)
+        {
+            drawTimeline(ui);
+        }
+        else if(m_bottomTab == 1)
         {
             Mosaic::LayoutOptions logLayout;
             logLayout.width = Mosaic::SizeRule::Fill;
@@ -1762,7 +1881,7 @@ namespace MosaicExample
             Mosaic::text(ui, m_persistence.status());
             Mosaic::property(ui, "Command", &m_command);
         }
-        else if(m_bottomTab == 1)
+        else if(m_bottomTab == 2)
         {
             Mosaic::TableOptions tableOptions;
             tableOptions.resizable = true;
@@ -1924,7 +2043,7 @@ namespace MosaicExample
             tile.key = Mosaic::Key(assetIndex);
             tile.resource = assetIds[index];
             tile.thumbnail.texture = m_checkerTexture;
-            tile.thumbnail.logicalSize = {20.f, 20.f};
+            tile.thumbnail.logicalSize = {14.f, 14.f};
             tile.thumbnail.semanticFallback = "R";
             tile.label = assets[assetIndex];
             tile.type = types[assetIndex];
@@ -2045,6 +2164,8 @@ namespace MosaicExample
             if(modal.visible() == true)
             {
                 auto content = Mosaic::column(ui, Detail::panelContent());
+                Mosaic::checkbox(ui, "Animate controls", &m_animations);
+                Mosaic::checkbox(ui, "Touch input", &m_touchMode);
                 Mosaic::checkbox(ui, "Live reload shaders", &m_liveReload);
                 Mosaic::checkbox(ui, "Snap viewport tools", &m_snapToGrid);
                 Mosaic::property(ui, "Project", &m_projectName);
@@ -2072,10 +2193,10 @@ namespace MosaicExample
         Mosaic::DockNodeId root = Mosaic::dockSpaceRoot(ui, dockGroup);
         bool initialized = Mosaic::dockWindow(ui, dockGroup, viewport, root);
         initialized = Mosaic::dockWindow(ui, dockGroup, hierarchy, root, Mosaic::DockPlacement::Left, 0.18f) && initialized;
-        initialized = Mosaic::dockWindow(ui, dockGroup, properties, Mosaic::dockNodeForWindow(ui, dockGroup, hierarchy), Mosaic::DockPlacement::Bottom, 0.46f) && initialized;
-        initialized = Mosaic::dockWindow(ui, dockGroup, inspector, Mosaic::dockNodeForWindow(ui, dockGroup, viewport), Mosaic::DockPlacement::Right, 0.22f) && initialized;
-        initialized = Mosaic::dockWindow(ui, dockGroup, console, Mosaic::dockNodeForWindow(ui, dockGroup, viewport), Mosaic::DockPlacement::Bottom, 0.30f) && initialized;
-        initialized = Mosaic::dockWindow(ui, dockGroup, contentBrowser, Mosaic::dockNodeForWindow(ui, dockGroup, inspector), Mosaic::DockPlacement::Bottom, 0.34f) && initialized;
+        initialized = Mosaic::dockWindow(ui, dockGroup, properties, Mosaic::dockNodeForWindow(ui, dockGroup, hierarchy), Mosaic::DockPlacement::Bottom, 0.54f) && initialized;
+        initialized = Mosaic::dockWindow(ui, dockGroup, inspector, Mosaic::dockNodeForWindow(ui, dockGroup, viewport), Mosaic::DockPlacement::Right, 0.74f) && initialized;
+        initialized = Mosaic::dockWindow(ui, dockGroup, console, Mosaic::dockNodeForWindow(ui, dockGroup, viewport), Mosaic::DockPlacement::Bottom, 0.70f) && initialized;
+        initialized = Mosaic::dockWindow(ui, dockGroup, contentBrowser, Mosaic::dockNodeForWindow(ui, dockGroup, inspector), Mosaic::DockPlacement::Bottom, 0.66f) && initialized;
         m_dockModelInitialized = initialized;
     }
     //////////////////////////////////////////////////////////////////////////

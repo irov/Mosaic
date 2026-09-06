@@ -309,6 +309,32 @@ find_package(Mosaic 0.1 CONFIG REQUIRED)
 target_link_libraries(your_app PRIVATE Mosaic::Mosaic)
 ```
 
+## Compact editor UI
+
+The default theme uses neutral charcoal surfaces, 20-pixel controls, 24-pixel panel
+headers and 1-pixel separators. Buttons, tabs and tree rows are flat; emphasis is
+reserved for selection, focus and interaction. Numeric properties use aligned,
+underlined scrub values and become input fields during typing. `propertyLabelWidth`
+controls the shared label column. `SliderOptions::width` also applies to drag values.
+
+`angleDial(ui, key, label, &degrees)` provides a compact angle control: horizontal
+drag, Shift/Alt precision modifiers, double-click to type and Escape to cancel.
+Buttons confirm activation with a brief tint, keyboard focus grows an underline,
+and slider handles and timeline keys gain local hover/drag feedback. Setting
+`Theme::behavior.animationsEnabled = false` removes transitions and confirmation
+flashes while retaining all input and focus states.
+
+The macOS editor includes a working three-channel animation timeline with playback,
+playhead scrubbing, keyframe dragging and frame snapping. **File → Reset Workspace**
+restores the default panel proportions. Launch with `--fresh-layout` to preview the
+layout without reading or overwriting saved settings; saving remains explicit.
+**File → Preferences** contains animation and touch-input settings.
+
+Visual references: Adobe's [Properties panel](https://helpx.adobe.com/after-effects/using/properties-panel.html)
+and [layer-property controls](https://helpx.adobe.com/after-effects/using/layer-properties.html),
+including compact value columns, restrained panel tabs and timeline hierarchy.
+All controls are rendered by Mosaic.
+
 ## Targets
 
 - `Mosaic::Core` — context, identity, input, layout, widgets, docking, semantics, persistence,

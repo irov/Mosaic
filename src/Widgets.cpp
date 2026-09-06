@@ -2196,7 +2196,9 @@ namespace Mosaic
 
             visible += formattedValue;
 
-            size_t node = ui->addNode(Detail::NodeKind::DragValue, {}, label, {}, location, SemanticRole::Slider, true);
+            LayoutOptions layout;
+            layout.width = options.width;
+            size_t node = ui->addNode(Detail::NodeKind::DragValue, {}, label, layout, location, SemanticRole::Slider, true);
             ui->nodes[node].label = visible;
             ui->mutableStyle(ui->nodes[node]).metrics.font = MonospaceFont;
             ui->estimateNodeText(ui->nodes[node], visible);
@@ -2233,6 +2235,18 @@ namespace Mosaic
 
                 Detail::setFlag(response, 7);
                 ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
+            }
+
+            if(response.canceled() && persistentState.editing && numericState.temporaryInput == false)
+            {
+                if(value != nullptr)
+                {
+                    Detail::setFlag(response, 6, *value != static_cast<T>(numericState.dragStartValue));
+                    *value = static_cast<T>(numericState.dragStartValue);
+                }
+                persistentState.editing = false;
+                numericState.dragAccumulator = 0.L;
+                ui->frame.events.push_back({EventType::Cancel, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             if(numericState.temporaryInput == false && value != nullptr && pointer != nullptr && ui->captured == response.id && pointer->isDown() == true)
@@ -2366,7 +2380,9 @@ namespace Mosaic
 
             visible += formattedValue;
 
-            size_t node = ui->addNode(Detail::NodeKind::DragValue, {}, label, {}, location, SemanticRole::Slider, true);
+            LayoutOptions layout;
+            layout.width = options.width;
+            size_t node = ui->addNode(Detail::NodeKind::DragValue, {}, label, layout, location, SemanticRole::Slider, true);
             ui->nodes[node].label = visible;
             ui->mutableStyle(ui->nodes[node]).metrics.font = MonospaceFont;
             ui->estimateNodeText(ui->nodes[node], visible);
@@ -2398,6 +2414,7 @@ namespace Mosaic
                     Detail::IntegralDragRate rate = Detail::automaticIntegralDragRate(ui->nodes[node], options, minimum, maximum, step);
                     numericState.integralDragStart = static_cast<uint64_t>(Detail::integralOrdered(*value));
                     numericState.integralDragLastApplied = numericState.integralDragStart;
+                    numericState.integralEditStart = numericState.integralDragStart;
                     numericState.integralDragRateWhole = rate.whole;
                     numericState.integralDragRateRemainder = rate.remainder;
                     numericState.integralDragRateDenominator = rate.denominator;
@@ -2407,6 +2424,19 @@ namespace Mosaic
 
                 Detail::setFlag(response, 7);
                 ui->frame.events.push_back({EventType::BeginEdit, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
+            }
+
+            if(response.canceled() && persistentState.editing && numericState.temporaryInput == false)
+            {
+                if(value != nullptr)
+                {
+                    T original = Detail::integralFromOrdered<T>(static_cast<IntegralUnsigned<T>>(numericState.integralEditStart));
+                    Detail::setFlag(response, 6, *value != original);
+                    *value = original;
+                }
+                persistentState.editing = false;
+                numericState.integralDragMotion = 0;
+                ui->frame.events.push_back({EventType::Cancel, response.id, ui->nodePath(node), ui->nodes[node].debugData().file, ui->nodes[node].debugData().line, ui->input.timestamp});
             }
 
             if(numericState.temporaryInput == false && validStep == true && value != nullptr && pointer != nullptr && ui->captured == response.id && pointer->isDown() == true)
@@ -2849,7 +2879,7 @@ namespace Mosaic
             ui->nodes[ui->currentParent].label.assign(label);
             LayoutOptions layout;
             layout.width = SizeRule::Fill;
-            layout.gap = 4.f;
+            layout.gap = ui->currentStyle->metrics.gap;
             uint32_t columns = static_cast<uint32_t>(std::clamp(values.size(), size_t{1}, size_t{4}));
             auto components = Mosaic::grid(ui, columns, layout, location);
             Response result;
@@ -2946,7 +2976,7 @@ namespace Mosaic
                 return;
             }
 
-            constexpr Array<Color, 4> markers = {{Color::fromBytes(240, 20, 20), Color::fromBytes(20, 240, 20), Color::fromBytes(20, 20, 240), Color::fromBytes(140, 140, 140)}};
+            constexpr Array<Color, 4> markers = {{Color::fromBytes(201, 107, 103), Color::fromBytes(119, 169, 126), Color::fromBytes(106, 151, 200), Color::fromBytes(140, 140, 140)}};
             Context::Node * node = ui->findFrameNode(response.id);
 
             if(node == nullptr)
@@ -4733,6 +4763,28 @@ namespace Mosaic
         return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
+    Response angleDial(Context * ui, const Key & key, StringView label, float * degrees, float diameter, const SourceLocation & location)
+    {
+        auto dialScope = Mosaic::scope(ui, key, location);
+        SliderOptions options;
+        options.minimum = -36000.0;
+        options.maximum = 36000.0;
+        options.step = 0.1;
+        options.dragSpeed = 1.0;
+        options.precision = 1;
+        options.width = Dimension::fixed(std::isfinite(diameter) ? std::max(20.f, diameter) : 36.f);
+        Response response = Mosaic::dragValue(ui, label, degrees, options, location);
+        Context::Node * node = ui->findFrameNode(response.item);
+        if(node != nullptr)
+        {
+            node->angleDial = true;
+            node->layout.height = options.width;
+            node->layout.minimum = {};
+            node->valueData().secondaryScalar = degrees != nullptr && std::isfinite(*degrees) ? *degrees : 0.f;
+        }
+        return response;
+    }
+    //////////////////////////////////////////////////////////////////////////
     Response dragFloatVector(Context * ui, StringView label, FloatSpan values, const SliderOptions & options, const SourceLocation & location)
     {
         SliderOptions componentOptions = options;
@@ -5293,6 +5345,9 @@ namespace Mosaic
                         {
                             tabLayout.width = SizeRule::Fill;
                             tabLayout.minimum.x = ui->currentStyle->metrics.tabMinimumWidthForShrink;
+                            // The row lays out the identity scope, not its tab child.
+                            ui->nodes[ui->currentParent].layout.width = SizeRule::Fill;
+                            ui->nodes[ui->currentParent].layout.minimum.x = tabLayout.minimum.x;
                         }
                         else
                         {

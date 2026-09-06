@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
 namespace Mosaic
@@ -318,10 +319,11 @@ namespace Mosaic
 
             result.response = row;
             result.activated = row.doubleClicked();
+            Mosaic::itemTooltip(ui, row, resource.label, Vec2{420.f, 0.f}, location);
             LayoutOptions contentsLayout;
             contentsLayout.width = SizeRule::Fill;
             contentsLayout.height = SizeRule::Fill;
-            contentsLayout.gap = ui->currentStyle->metrics.innerSpacing.x;
+            contentsLayout.gap = std::max(6.f, ui->currentStyle->metrics.innerSpacing.x);
             auto contentsScope = Mosaic::row(ui, Key("Resource list row contents"), contentsLayout, location);
 
             if(resource.thumbnail.texture != 0 || resource.thumbnail.semanticFallback.empty() == false)
@@ -348,7 +350,10 @@ namespace Mosaic
             }
             else if(resource.type.empty() == false)
             {
-                (void)Mosaic::typeBadge(ui, resource.type, ui->currentStyle->colors.accent, location);
+                Theme metadataTheme = *ui->currentStyle;
+                metadataTheme.colors.text = metadataTheme.colors.textDisabled;
+                auto metadataStyle = Mosaic::styleScope(ui, metadataTheme, location);
+                (void)Mosaic::text(ui, resource.type, location);
             }
 
             if(resource.dragType != 0 && resource.dragPayload.empty() == false)
@@ -1241,9 +1246,11 @@ namespace Mosaic
     Response typeBadge(Context * ui, StringView type, const Color & color, const SourceLocation & location)
     {
         Theme badgeTheme = *ui->currentStyle;
-        badgeTheme.colors.button = color;
-        badgeTheme.colors.buttonHovered = color;
-        badgeTheme.colors.buttonActive = color;
+        badgeTheme.colors.button = {color.r, color.g, color.b, 0.10f};
+        badgeTheme.colors.text = color;
+        badgeTheme.metrics.frameBorderSize = 0.f;
+        badgeTheme.colors.buttonHovered = badgeTheme.colors.button;
+        badgeTheme.colors.buttonActive = badgeTheme.colors.button;
         badgeTheme.metrics.framePadding = {5.f, 1.f};
         auto badgeStyle = Mosaic::styleScope(ui, badgeTheme, location);
         LayoutOptions layout;
@@ -1868,11 +1875,21 @@ namespace Mosaic
             (void)canvasValue.rect({0.f, 0.f, contentX, bounds.height}, ui->currentStyle->colors.panel);
             (void)canvasValue.line({contentX, 0.f}, {contentX, bounds.height}, 1.f, ui->currentStyle->colors.separator);
 
-            for(uint32_t tick = 0; tick <= 10; ++tick)
+            double idealStep = duration / std::max(1.0, static_cast<double>(contentWidth) / 64.0);
+            double magnitude = std::pow(10.0, std::floor(std::log10(idealStep)));
+            double fraction = idealStep / magnitude;
+            double tickStep = magnitude * (fraction <= 1.0 ? 1.0 : fraction <= 2.0 ? 2.0 : fraction <= 5.0 ? 5.0 : 10.0);
+            double firstTick = std::ceil(state->visibleBegin / tickStep) * tickStep;
+            for(size_t tick = 0; tick != 128; ++tick)
             {
-                float ratio = static_cast<float>(tick) / 10.f;
-                float x = contentX + ratio * contentWidth;
-                (void)canvasValue.line({x, 0.f}, {x, bounds.height}, tick % 5U == 0U ? 1.f : 0.5f, tick % 5U == 0U ? ui->currentStyle->colors.separator : ui->currentStyle->colors.tableBorderLight);
+                double tickTime = firstTick + static_cast<double>(tick) * tickStep;
+                if(tickTime > state->visibleEnd) break;
+                float x = contentX + static_cast<float>((tickTime - state->visibleBegin) / duration) * contentWidth;
+                (void)canvasValue.line({x, 0.f}, {x, bounds.height}, 1.f, ui->currentStyle->colors.tableBorderLight);
+                char timeLabel[32];
+                (void)std::snprintf(timeLabel, sizeof(timeLabel), "%.3gs", tickTime);
+                Vec2 labelSize;
+                (void)canvasValue.text({x + 4.f, 1.f}, timeLabel, ui->currentStyle->colors.textDisabled, &labelSize);
             }
 
             float workBeginRatio = static_cast<float>((state->workBegin - state->visibleBegin) / duration);
@@ -1882,8 +1899,8 @@ namespace Mosaic
             Color workColor = ui->currentStyle->colors.accent;
             workColor.a *= 0.18f;
             (void)canvasValue.rect({contentX + workBeginRatio * contentWidth, 0.f, (workEndRatio - workBeginRatio) * contentWidth, rulerHeight}, workColor);
-            Color loopColor = ui->currentStyle->colors.warning;
-            loopColor.a *= 0.72f;
+            Color loopColor = ui->currentStyle->colors.accent;
+            loopColor.a *= 0.45f;
             (void)canvasValue.line({contentX + loopBeginRatio * contentWidth, rulerHeight - 3.f}, {contentX + loopEndRatio * contentWidth, rulerHeight - 3.f}, 2.f, loopColor);
 
             for(double marker : options.markers)
@@ -1940,11 +1957,20 @@ namespace Mosaic
                 float ratio = static_cast<float>((keyframe.time - state->visibleBegin) / duration);
                 float x = contentX + ratio * contentWidth;
                 float y = rulerHeight + (static_cast<float>(trackIndex - firstTrack) + 0.5f) * trackHeight - firstTrackOffset;
-                (void)canvasValue.regularPolygonFilled({x, y}, 5.f, 4, 0.7853982f, keyframe.selected ? ui->currentStyle->colors.accent : ui->currentStyle->colors.sliderGrab);
                 auto keyframeScope = Mosaic::scope(ui, Key(keyframe.id), location);
                 Detail::ItemBehaviorOptions keyframeBehavior;
                 keyframeBehavior.keyboardActivation = true;
+                // The surface is submitted before its handles. Let a handle take only
+                // its own surface's capture, without stealing another control's drag.
+                keyframeBehavior.allowOverlap = ui->captured == canvasValue.id();
                 Response keyframeResponse = Detail::absoluteInteraction(ui, Key("Timeline keyframe"), {x - 7.f, y - 7.f, 14.f, 14.f}, keyframeBehavior, tracks[trackIndex].locked == false, location);
+                bool emphasized = keyframeResponse.hovered() || keyframeResponse.active() || keyframeResponse.focused();
+                Color keyColor = keyframe.selected || emphasized ? ui->currentStyle->colors.accent : ui->currentStyle->colors.sliderGrab;
+                (void)canvasValue.regularPolygonFilled({x, y}, keyframeResponse.active() ? 4.f : 5.f, 4, 0.f, keyColor);
+                if(emphasized)
+                {
+                    (void)canvasValue.regularPolygon({x, y}, 7.f, 4, 0.f, 1.f, keyColor);
+                }
 
                 if(keyframeResponse.pressed() == true)
                 {
@@ -2034,9 +2060,18 @@ namespace Mosaic
                 }
             }
 
+            if(timelineResult.item != InvalidId || interaction.keyframe != InvalidId)
+            {
+                Detail::setFlag(response, 1, false);
+                Detail::setFlag(response, 3, false);
+                Detail::setFlag(response, 4, false);
+                interaction.selecting = false;
+            }
+
             float playheadRatio = static_cast<float>((state->playhead - state->visibleBegin) / duration);
             float playheadX = contentX + playheadRatio * contentWidth;
-            (void)canvasValue.line({playheadX, 0.f}, {playheadX, bounds.height}, 1.f, ui->currentStyle->colors.error);
+            (void)canvasValue.line({playheadX, 0.f}, {playheadX, bounds.height}, 1.f, ui->currentStyle->colors.accent);
+            (void)canvasValue.rect({playheadX - 3.f, 0.f, 6.f, 8.f}, ui->currentStyle->colors.accent);
             Vec2 pointer;
             bool hasPointer = canvasValue.localPointerPosition(&pointer);
 
