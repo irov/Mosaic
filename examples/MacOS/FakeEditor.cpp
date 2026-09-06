@@ -351,6 +351,7 @@ namespace MosaicExample
         m_entities[5].color = Mosaic::Color::fromBytes(72, 104, 68);
 
         m_selection.select(FakeEditor::entityId(2));
+        m_assetSelection.select(Mosaic::combineId(Mosaic::hashBytes("FakeEditor Asset"), 3));
     }
     //////////////////////////////////////////////////////////////////////////
     Mosaic::Id FakeEditor::entityId(size_t index) noexcept
@@ -950,44 +951,146 @@ namespace MosaicExample
             return returnedValue;
         }
 
-        auto content = Mosaic::scrollArea(ui, "Hierarchy content", Mosaic::Orientation::Vertical, Detail::panelContent());
-
+        auto content = Mosaic::column(ui, Detail::panelContent());
         Mosaic::searchField(ui, "Search entities", &m_filter);
-        auto scene = Mosaic::treeNode(ui, Mosaic::Key("World"), "World / DemoScene", true);
+        constexpr Mosaic::Id sceneId = 0x579c0d45ff40ea55ULL;
+        constexpr Mosaic::Id collectionsId = 0xe1c775d3eb5a3ccdULL;
+        constexpr Mosaic::Id gameplayId = 0x98583fc0ec210acbULL;
+        constexpr Mosaic::Id environmentId = 0xf993833f450a51dfULL;
+        constexpr Mosaic::TypeId entityDragType = 0x341ddd60094ef68aULL;
+        Mosaic::Array<Mosaic::Id, 10> entityIds;
 
-        if(scene.expanded() == true)
+        for(size_t index = 0; index != m_entities.size(); ++index)
         {
-            Mosaic::Theme flatItems = Detail::listItemTheme(Mosaic::getTheme(ui));
-            auto listStyle = Mosaic::styleScope(ui, flatItems);
-            Mosaic::LayoutOptions listLayout;
-            listLayout.width = Mosaic::SizeRule::Fill;
-            auto list = Mosaic::table(ui, "Scene entities", 1, listLayout);
-            Mosaic::IdVector entityIds;
-            entityIds.reserve(m_entities.size());
-            for(size_t index = 0; index != m_entities.size(); ++index)
-            {
-                entityIds.push_back(FakeEditor::entityId(index));
-            }
-            for(size_t index = 0; index != m_entities.size(); ++index)
-            {
-                auto itemScope = Mosaic::scope(ui, Mosaic::Key(index));
-                Mosaic::Id entity = FakeEditor::entityId(index);
+            entityIds[index] = FakeEditor::entityId(index);
+        }
 
-                if(Mosaic::selectable(ui, Mosaic::Key("Entity"), m_entities[index].name, &m_selection, entity, entityIds).clicked() == true)
+        Mosaic::TreeRowVector rows;
+        Mosaic::IdVector orderedRows;
+        Mosaic::Vector<int> entityRows;
+        rows.reserve(m_entities.size() + 4);
+        orderedRows.reserve(m_entities.size() + 4);
+        entityRows.reserve(m_entities.size() + 4);
+        Mosaic::TreeRow sceneRow;
+        sceneRow.key = Mosaic::Key("World");
+        sceneRow.item = sceneId;
+        sceneRow.expanded = m_sceneExpanded;
+        sceneRow.leadingIcon.semanticFallback = "S";
+        sceneRow.label = "World / DemoScene";
+        rows.emplace_back(sceneRow);
+        orderedRows.emplace_back(sceneId);
+        entityRows.emplace_back(-2);
+
+        if(m_sceneExpanded == true)
+        {
+            for(size_t index = 0; index != m_entities.size(); ++index)
+            {
+                const EntityState & entity = m_entities[index];
+
+                if(m_filter.empty() == false && entity.name.find(m_filter) == Mosaic::String::npos)
                 {
-                    selectEntity(index, "Scene Hierarchy");
+                    continue;
                 }
+
+                Mosaic::TreeRow entityRow;
+                entityRow.key = Mosaic::Key(entityIds[index]);
+                entityRow.item = entityIds[index];
+                entityRow.depth = 1;
+                entityRow.leaf = true;
+                entityRow.selected = m_selection.selected(entityIds[index]);
+                entityRow.renameActive = m_renamingEntity == static_cast<int>(index);
+                entityRow.dragEnabled = true;
+                entityRow.dropEnabled = true;
+                entityRow.leadingIcon.semanticFallback = index == 0 ? "C" : "N";
+                entityRow.label = entity.name;
+                entityRow.renameValue = &m_entities[index].name;
+                entityRow.dragType = entityDragType;
+                entityRow.dragPayload = Mosaic::ByteSpan(reinterpret_cast<const std::byte *>(&entityIds[index]), sizeof(entityIds[index]));
+                entityRow.acceptedDropType = entityDragType;
+                rows.emplace_back(entityRow);
+                orderedRows.emplace_back(entityIds[index]);
+                entityRows.emplace_back(static_cast<int>(index));
             }
         }
 
-        Mosaic::separator(ui);
-        Mosaic::text(ui, "Collections");
+        Mosaic::TreeRow collectionsRow;
+        collectionsRow.key = Mosaic::Key("Collections");
+        collectionsRow.item = collectionsId;
+        collectionsRow.expanded = m_collectionsExpanded;
+        collectionsRow.leadingIcon.semanticFallback = "F";
+        collectionsRow.label = "Collections";
+        rows.emplace_back(collectionsRow);
+        orderedRows.emplace_back(collectionsId);
+        entityRows.emplace_back(-3);
+
+        if(m_collectionsExpanded == true)
         {
-            auto gameplay = Mosaic::treeNode(ui, Mosaic::Key("Gameplay"), "Gameplay", false);
+            constexpr Mosaic::Array<Mosaic::StringView, 2> labels = {"Gameplay", "Environment"};
+            constexpr Mosaic::Array<Mosaic::Id, 2> ids = {gameplayId, environmentId};
+
+            for(size_t index = 0; index != labels.size(); ++index)
+            {
+                Mosaic::TreeRow collectionRow;
+                collectionRow.key = Mosaic::Key(ids[index]);
+                collectionRow.item = ids[index];
+                collectionRow.depth = 1;
+                collectionRow.leaf = true;
+                collectionRow.leadingIcon.semanticFallback = "F";
+                collectionRow.label = labels[index];
+                rows.emplace_back(collectionRow);
+                orderedRows.emplace_back(ids[index]);
+                entityRows.emplace_back(-1);
+            }
         }
+
+        Mosaic::TreeViewOptions treeOptions;
+        treeOptions.layout.width = Mosaic::SizeRule::Fill;
+        treeOptions.layout.height = Mosaic::SizeRule::Fill;
+        treeOptions.anchor = &m_hierarchyAnchor;
+        treeOptions.orderedItems = orderedRows;
+        Mosaic::TreeViewResponse treeResponse;
+        (void)Mosaic::treeView(ui, Mosaic::Key("Scene hierarchy tree"), "Scene hierarchy rows", rows, &m_selection, &treeResponse, treeOptions);
+
+        for(const Mosaic::TreeViewRowResponse & rowResponse : treeResponse.rows)
         {
-            auto environment = Mosaic::treeNode(ui, Mosaic::Key("Environment"), "Environment", false);
+            int entityIndex = entityRows[rowResponse.index];
+
+            if(entityIndex == -2 && rowResponse.row.toggleExpanded == true)
+            {
+                m_sceneExpanded = m_sceneExpanded == false;
+            }
+
+            if(entityIndex == -3 && rowResponse.row.toggleExpanded == true)
+            {
+                m_collectionsExpanded = m_collectionsExpanded == false;
+            }
+
+            if(entityIndex < 0)
+            {
+                continue;
+            }
+
+            if(rowResponse.row.response.clicked() == true)
+            {
+                selectEntity(static_cast<size_t>(entityIndex), "Scene Hierarchy");
+            }
+
+            if(rowResponse.row.beginRename == true)
+            {
+                m_renamingEntity = entityIndex;
+            }
+
+            if(rowResponse.row.renameCommitted == true || rowResponse.row.renameCancelled == true)
+            {
+                m_renamingEntity = -1;
+            }
+
+            if(rowResponse.row.dropped == true)
+            {
+                m_status = "Scene hierarchy drop requested";
+            }
         }
+
         auto returnedValue = window.id();
 
         return returnedValue;
@@ -1059,6 +1162,8 @@ namespace MosaicExample
             {
                 m_status = "Camera framed ";
                 m_status += selectedEntity().name;
+                m_designSurfaceState.pan = {};
+                m_designSurfaceState.zoom = 1.f;
             }
 
             Mosaic::Response addComponent = Mosaic::button(ui, "Add Component");
@@ -1081,20 +1186,29 @@ namespace MosaicExample
         Mosaic::LayoutOptions canvasLayout;
         canvasLayout.width = Mosaic::SizeRule::Fill;
         canvasLayout.height = Mosaic::SizeRule::Fill;
-        Mosaic::Canvas canvas = Mosaic::canvas(ui, "World viewport", canvasLayout);
+        Mosaic::DesignSurfaceOptions surfaceOptions;
+        surfaceOptions.layout = canvasLayout;
+        surfaceOptions.selectionMode = Mosaic::DesignSelectionMode::None;
+        surfaceOptions.drawGrid = false;
+        Mosaic::DesignSurfaceResponse surfaceResponse;
+        Mosaic::Canvas canvas = Mosaic::beginDesignSurface(ui, Mosaic::Key("World design surface"), "World viewport", &m_designSurfaceState, surfaceOptions, &surfaceResponse);
 
         // The fake editor submits scene-like primitives in local viewport coordinates. Mosaic
         // clips and translates them; Metal only receives the final indexed geometry and states.
         Mosaic::Rect viewportBounds;
         if(Mosaic::debugBounds(ui, window.id(), &viewportBounds) == false)
         {
+            (void)Mosaic::endDesignSurface(&canvas);
+
             return window.id();
         }
 
         float width = std::max(1.f, viewportBounds.width - 12.f);
         float height = std::max(1.f, viewportBounds.height - 66.f);
+        (void)canvas.setLayer(Mosaic::CanvasLayer::Background);
         canvas.rect({0.f, 0.f, width, height}, Mosaic::Color::fromBytes(12, 29, 34));
         canvas.rect({0.f, height * 0.23f, width, height * 0.77f}, Mosaic::Color::fromBytes(16, 25, 27));
+        (void)canvas.setLayer(Mosaic::CanvasLayer::Local);
 
         if(m_showGrid == true)
         {
@@ -1131,11 +1245,13 @@ namespace MosaicExample
 
         const Mosaic::PointerState * pointer = Mosaic::input(ui).primaryPointer();
 
-        if(canvas.focused() == true && pointer != nullptr && pointer->isPressed() == true)
+        if(surfaceResponse.response.hovered() == true && pointer != nullptr && pointer->isPressed() == true)
         {
             Mosaic::Vec2 localPointer;
             if(canvas.localPointerPosition(&localPointer) == true)
             {
+                localPointer = surfaceResponse.pointerWorld;
+
                 for(size_t reverse = blocks.size(); reverse != 0; --reverse)
                 {
                     size_t index = reverse - 1;
@@ -1180,15 +1296,18 @@ namespace MosaicExample
             canvas.line(gizmo, {gizmo.x - width * 0.05f, gizmo.y + height * 0.07f}, 4.f, Mosaic::Color::fromBytes(72, 135, 245));
         }
 
-        if(canvas.focused() == true)
+        if(surfaceResponse.response.hovered() == true)
         {
             Mosaic::Vec2 pointerPosition;
             if(canvas.localPointerPosition(&pointerPosition) == true)
             {
+                pointerPosition = surfaceResponse.pointerWorld;
                 canvas.line({pointerPosition.x - 7.f, pointerPosition.y}, {pointerPosition.x + 7.f, pointerPosition.y}, 1.f, Mosaic::Color::fromBytes(245, 229, 116));
                 canvas.line({pointerPosition.x, pointerPosition.y - 7.f}, {pointerPosition.x, pointerPosition.y + 7.f}, 1.f, Mosaic::Color::fromBytes(245, 229, 116));
             }
         }
+
+        (void)Mosaic::endDesignSurface(&canvas);
 
         auto returnedValue = window.id();
 
@@ -1773,23 +1892,71 @@ namespace MosaicExample
 
         Mosaic::searchField(ui, "Filter assets", &m_assetFilter);
         constexpr AssetNames assets = {"Materials/MetalBlue", "Materials/WarningStripe", "Meshes/Drone", "Meshes/CargoCrate", "Scenes/DemoScene", "Textures/Grid", "Shaders/EditorLit", "Audio/AmbientLoop"};
-        Mosaic::LayoutOptions listLayout;
-        listLayout.width = Mosaic::SizeRule::Fill;
-        listLayout.height = Mosaic::Dimension::fixed(128.f);
-        Mosaic::listBox(ui, "Assets", &m_selectedAsset, assets, listLayout);
+        constexpr AssetNames types = {"Material", "Material", "Mesh", "Mesh", "Scene", "Texture", "Shader", "Audio"};
+        constexpr Mosaic::TypeId assetDragType = 0xa2c0f1d0b0912763ULL;
+        Mosaic::SizeVector visibleAssets;
+
+        for(size_t index = 0; index != assets.size(); ++index)
+        {
+            if(m_assetFilter.empty() == false && assets[index].find(m_assetFilter) == Mosaic::StringView::npos)
+            {
+                continue;
+            }
+
+            visibleAssets.emplace_back(index);
+        }
+
+        Mosaic::IdVector assetIds;
+        assetIds.reserve(visibleAssets.size());
+
+        for(size_t assetIndex : visibleAssets)
+        {
+            assetIds.emplace_back(Mosaic::combineId(Mosaic::hashBytes("FakeEditor Asset"), static_cast<Mosaic::Id>(assetIndex + 1)));
+        }
+
+        Mosaic::ResourceTileVector resources;
+        resources.reserve(visibleAssets.size());
+
+        for(size_t index = 0; index != visibleAssets.size(); ++index)
+        {
+            size_t assetIndex = visibleAssets[index];
+            Mosaic::ResourceTile tile;
+            tile.key = Mosaic::Key(assetIndex);
+            tile.resource = assetIds[index];
+            tile.thumbnail.texture = m_checkerTexture;
+            tile.thumbnail.logicalSize = {20.f, 20.f};
+            tile.thumbnail.semanticFallback = "R";
+            tile.label = assets[assetIndex];
+            tile.type = types[assetIndex];
+            tile.selected = m_assetSelection.selected(tile.resource);
+            tile.dragType = assetDragType;
+            tile.dragPayload = Mosaic::ByteSpan(reinterpret_cast<const std::byte *>(&assetIds[index]), sizeof(assetIds[index]));
+            resources.emplace_back(tile);
+        }
+
+        Mosaic::ResourceBrowserOptions browserOptions;
+        browserOptions.layout.width = Mosaic::SizeRule::Fill;
+        browserOptions.layout.height = Mosaic::SizeRule::Fill;
+        browserOptions.anchor = &m_assetAnchor;
+        browserOptions.orderedItems = assetIds;
+        browserOptions.mode = Mosaic::ResourceBrowserMode::List;
+        Mosaic::ResourceBrowserResponse browserResponse;
+        (void)Mosaic::resourceBrowser(ui, Mosaic::Key("Content resources"), "Content resources", resources, &m_assetSelection, &browserResponse, browserOptions);
+
+        for(const Mosaic::ResourceBrowserItemResponse & itemResponse : browserResponse.items)
+        {
+            if(itemResponse.item.response.clicked() == false && itemResponse.item.activated == false)
+            {
+                continue;
+            }
+
+            m_selectedAsset = static_cast<int>(visibleAssets[itemResponse.index]);
+            m_status = "Selected resource ";
+            m_status += assets[static_cast<size_t>(m_selectedAsset)];
+        }
 
         {
             auto actions = Mosaic::row(ui);
-            Mosaic::imageButton(ui, Mosaic::Key("asset-preview"), m_checkerTexture, {28.f, 28.f});
-            Mosaic::Response dragAsset = Mosaic::button(ui, "Drag Asset");
-            Mosaic::Id asset = static_cast<Mosaic::Id>(m_selectedAsset + 1);
-            Mosaic::ByteSpan bytes(reinterpret_cast<const std::byte *>(&asset), sizeof(asset));
-
-            if(Mosaic::beginDragDropSource(ui, dragAsset, Mosaic::hashBytes("EditorAsset"), bytes) == true)
-            {
-                m_status = "Asset payload prepared";
-            }
-
             if(Mosaic::button(ui, "Import").clicked() == true)
             {
                 m_inspectorTab = 2;

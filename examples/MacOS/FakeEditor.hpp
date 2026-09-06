@@ -92,7 +92,11 @@ namespace MosaicExample
     private:
         EditorPersistence & m_persistence;
         Mosaic::SelectionModel m_selection{Mosaic::SelectionMode::Single};
+        Mosaic::SelectionModel m_assetSelection{Mosaic::SelectionMode::Single};
         Mosaic::SelectionModel m_profilerSelection{Mosaic::SelectionMode::Multiple};
+        Mosaic::VirtualScrollAnchor m_hierarchyAnchor;
+        Mosaic::VirtualScrollAnchor m_assetAnchor;
+        Mosaic::DesignSurfaceState m_designSurfaceState;
         EntityStateArray m_entities;
         Mosaic::TextureHandle m_checkerTexture = 0;
         Mosaic::String m_projectName = "Orbital Workshop";
@@ -144,6 +148,7 @@ namespace MosaicExample
         uint8_t m_roundedRectangleQuality = 8;
         int m_selectedTool = 1;
         int m_selectedEntity = 2;
+        int m_renamingEntity = -1;
         int m_inspectorTab = 0;
         int m_bottomTab = 0;
         int m_selectedAsset = 2;
@@ -158,6 +163,8 @@ namespace MosaicExample
         bool m_liveReload = true;
         bool m_animations = true;
         bool m_touchMode = false;
+        bool m_sceneExpanded = true;
+        bool m_collectionsExpanded = true;
         bool m_modalOpen = false;
         bool m_windowOptionsLabOpen = false;
         bool m_windowOptionsNavigationInputs = true;
