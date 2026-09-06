@@ -6,6 +6,7 @@
 #include "FrameRenderData.hpp"
 
 #include <functional>
+#include <atomic>
 #include <limits>
 
 namespace Mosaic
@@ -15,17 +16,28 @@ namespace Mosaic
         class AllocationTracker final : public Allocator
         {
         public:
-            explicit AllocationTracker(Allocator * allocator) noexcept : m_allocator(allocator)
+            explicit AllocationTracker(Allocator * allocator) noexcept : m_allocator(*allocator)
             {
+            }
+
+            void retain() noexcept override
+            {
+                m_references.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            void release() noexcept override
+            {
+                if(m_references.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                {
+                    Allocator * backing = m_allocator.get();
+                    Detail::AllocatorReference keepBackingAlive(*backing);
+                    this->~AllocationTracker();
+                    backing->deallocate(this, sizeof(AllocationTracker), alignof(AllocationTracker));
+                }
             }
 
             [[nodiscard]] void * allocate(size_t size, size_t alignment) noexcept override
             {
-                if(m_allocator == nullptr)
-                {
-                    return nullptr;
-                }
-
                 void * memory = m_allocator->allocate(size, alignment);
 
                 if(memory != nullptr)
@@ -39,11 +51,6 @@ namespace Mosaic
 
             void deallocate(void * memory, size_t size, size_t alignment) noexcept override
             {
-                if(m_allocator == nullptr)
-                {
-                    return;
-                }
-
                 m_allocator->deallocate(memory, size, alignment);
             }
 
@@ -55,7 +62,7 @@ namespace Mosaic
 
             [[nodiscard]] Allocator * backingAllocator() const noexcept
             {
-                return m_allocator;
+                return m_allocator.get();
             }
 
             [[nodiscard]] size_t allocationCount() const noexcept
@@ -69,12 +76,17 @@ namespace Mosaic
             }
 
         private:
-            Allocator * m_allocator = nullptr;
-            size_t m_allocationCount = 0;
-            size_t m_allocationBytes = 0;
+            Detail::AllocatorReference m_allocator;
+            std::atomic<size_t> m_references{1};
+            std::atomic<size_t> m_allocationCount{0};
+            std::atomic<size_t> m_allocationBytes{0};
         };
 
-        using AllocationTrackerPtr = UniquePtr<AllocationTracker>;
+        struct AllocationTrackerDeleter
+        {
+            void operator()(AllocationTracker * tracker) const noexcept { tracker->release(); }
+        };
+        using AllocationTrackerPtr = std::unique_ptr<AllocationTracker, AllocationTrackerDeleter>;
 
         inline constexpr uint32_t CulledNodeFlag = 1U << 31U;
 
@@ -1309,7 +1321,6 @@ namespace Mosaic
 
         Detail::AllocationTrackerPtr allocationTracker;
         Allocator * allocator = nullptr;
-        Allocator * previousFrameAllocator = nullptr;
         NullPlatformAdapter nullPlatform;
         PlatformAdapter * platform = &nullPlatform;
         FontProvider * fontProvider = nullptr;

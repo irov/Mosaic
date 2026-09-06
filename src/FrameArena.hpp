@@ -46,6 +46,7 @@ namespace Mosaic
         private:
             struct Block
             {
+                AllocatorReference allocator;
                 std::byte * memory = nullptr;
                 size_t capacity = 0;
                 size_t used = 0;
@@ -54,7 +55,7 @@ namespace Mosaic
 
             using BlockVector = Vector<Block>;
 
-            Allocator * m_allocator = nullptr;
+            AllocatorReference m_allocator;
             BlockVector m_blocks;
             size_t m_block = 0;
         };

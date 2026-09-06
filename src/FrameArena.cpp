@@ -24,22 +24,15 @@ namespace Mosaic
 
         FrameArena::~FrameArena()
         {
-            Allocator * allocator = m_allocator;
-
-            if(allocator == nullptr)
-            {
-                allocator = &defaultAllocator();
-            }
-
             for(const Block & block : m_blocks)
             {
-                allocator->deallocate(block.memory, block.capacity, block.alignment);
+                block.allocator->deallocate(block.memory, block.capacity, block.alignment);
             }
         }
 
         void FrameArena::setAllocator(Allocator * allocator) noexcept
         {
-            m_allocator = allocator;
+            m_allocator = AllocatorReference(allocator == nullptr ? defaultAllocator() : *allocator);
         }
 
         void FrameArena::reset() noexcept
@@ -84,17 +77,10 @@ namespace Mosaic
                 }
             }
 
-            Allocator * allocator = m_allocator;
-
-            if(allocator == nullptr)
-            {
-                allocator = &defaultAllocator();
-            }
-
             size_t blockAlignment = std::max(alignment, alignof(std::max_align_t));
-            size_t required = size + alignment - 1U;
-            size_t capacity = std::max(FrameArenaDetail::BlockSize, required);
-            void * memory = allocator->allocate(capacity, blockAlignment);
+            // The allocator already aligns the block base; extra padding can overflow.
+            size_t capacity = std::max(FrameArenaDetail::BlockSize, size);
+            void * memory = m_allocator->allocate(capacity, blockAlignment);
 
             if(memory == nullptr)
             {
@@ -102,6 +88,7 @@ namespace Mosaic
             }
 
             Block block;
+            block.allocator = m_allocator;
             block.memory = static_cast<std::byte *>(memory);
             block.capacity = capacity;
             block.used = 0;

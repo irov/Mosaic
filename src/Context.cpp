@@ -56,8 +56,6 @@ namespace Mosaic
             return "Unknown";
         }
         //////////////////////////////////////////////////////////////////////////
-        Allocator * setConstructionAllocator(Allocator * allocator) noexcept;
-
         inline constexpr size_t MaximumTextCacheEntries = 4096;
         inline constexpr size_t MaximumTextCacheMemory = 32 * 1024 * 1024;
         //////////////////////////////////////////////////////////////////////////
@@ -4712,10 +4710,10 @@ namespace Mosaic
         }
 
         Detail::AllocationTracker * tracker = ::new(trackerMemory) Detail::AllocationTracker(&backingAllocator);
-        Allocator * previousAllocator = Detail::setConstructionAllocator(tracker);
+        Detail::AllocationTrackerPtr trackerOwner(tracker);
+        Detail::ConstructionAllocatorScope allocatorScope(tracker);
         Context * ui = ::new(memory) Context;
-        Detail::setConstructionAllocator(previousAllocator);
-        ui->allocationTracker = Detail::AllocationTrackerPtr(tracker, AllocatorDeleter<Detail::AllocationTracker>(backingAllocator));
+        ui->allocationTracker = std::move(trackerOwner);
         ui->allocator = tracker;
 
         if(options.platform != nullptr)
@@ -4749,12 +4747,7 @@ namespace Mosaic
         }
 
         Allocator * backingAllocator = ui->allocationTracker->backingAllocator();
-
-        if(ui->activeFrame == true)
-        {
-            Detail::setConstructionAllocator(ui->previousFrameAllocator);
-            ui->activeFrame = false;
-        }
+        Detail::AllocatorReference keepBackingAlive(*backingAllocator);
 
         ui->~Context();
         backingAllocator->deallocate(ui, sizeof(Context), alignof(Context));
@@ -4769,7 +4762,7 @@ namespace Mosaic
             return;
         }
 
-        ui->previousFrameAllocator = Detail::setConstructionAllocator(ui->allocator);
+        Detail::ConstructionAllocatorScope allocatorScope(ui->allocator);
         ui->activeFrame = true;
         ui->allocationTracker->reset();
         ui->frameStarted = ui->platform->monotonicTime();
@@ -4840,6 +4833,14 @@ namespace Mosaic
             }
 
             if(ui->blockingInputLayer != InvalidId)
+            {
+                clearFocus = false;
+            }
+
+            // The editor must receive Escape while it still owns focus; clearing
+            // it here turns cancellation into an ordinary commit on focus loss.
+            const Context::Persistent * focusedState = ui->findState(ui->focused);
+            if(focusedState != nullptr && focusedState->editing == true)
             {
                 clearFocus = false;
             }
@@ -5344,6 +5345,8 @@ namespace Mosaic
         {
             return ui->frame;
         }
+
+        Detail::ConstructionAllocatorScope allocatorScope(ui->allocator);
 
         if(ui->scopes.empty() == false)
         {
@@ -6036,8 +6039,6 @@ namespace Mosaic
         }
 
         ui->activeFrame = false;
-        Detail::setConstructionAllocator(ui->previousFrameAllocator);
-        ui->previousFrameAllocator = nullptr;
 
         return ui->frame;
     }

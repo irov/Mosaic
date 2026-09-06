@@ -6,6 +6,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(MOSAIC_BUILD_EXAMPLES "Build Mosaic examples" ${PROJECT_IS_TOP_LEVEL})
+option(MOSAIC_BUILD_TESTS "Build Mosaic regression tests" ${PROJECT_IS_TOP_LEVEL})
 option(MOSAIC_ENABLE_EXCEPTIONS "Compile Mosaic C++ sources with exception support" ON)
 option(MOSAIC_ENABLE_RTTI "Compile Mosaic C++ sources with RTTI support" ON)
 option(MOSAIC_WARNINGS_AS_ERRORS "Treat Mosaic compiler warnings as errors" ${PROJECT_IS_TOP_LEVEL})
@@ -218,6 +219,11 @@ endif()
 
 if(MOSAIC_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(MOSAIC_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 install(TARGETS Mosaic MosaicCore MosaicGraphics MosaicPlatform

@@ -1134,6 +1134,7 @@ namespace Mosaic
             }
 
             Allocator & allocator = *state.allocator;
+            Detail::AllocatorReference keepAllocatorAlive(allocator);
             state.~GraphicsBridgeState();
             allocator.deallocate(&state, sizeof(Detail::GraphicsBridgeState), alignof(Detail::GraphicsBridgeState));
         }

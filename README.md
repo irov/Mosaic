@@ -200,6 +200,12 @@ Mosaic::deleteContext(ui);
 The allocator must outlive every object that was created from it. Passing `nullptr` to
 `setDefaultAllocator` restores Mosaic's built-in system allocator.
 
+Starting a frame does not change the application's default allocator. Nested library containers
+inherit their owning container's allocator during construction. Internal allocation trackers stay
+alive while copied containers still reference them, even after their original context is deleted;
+the host allocator must still outlive those containers. A copied `Frame` owns its metadata, but its
+viewport draw data remains borrowed and expires at the next `beginFrame` or context destruction.
+
 ## Stable identity
 
 Visible text never participates in identity. Without an explicit `Key`, Mosaic combines the
@@ -251,11 +257,13 @@ clips, cached text and images. `custom()` accepts vertices plus `uint32_t` indic
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+ctest --test-dir build --output-on-failure
 ```
 
 Useful options:
 
 - `MOSAIC_BUILD_EXAMPLES`
+- `MOSAIC_BUILD_TESTS`
 - `MOSAIC_GRAPHICS_TARGET`
 - `MOSAIC_GRAPHICS_SOURCE_DIR`
 - `MOSAIC_GRAPHICS_INCLUDE`

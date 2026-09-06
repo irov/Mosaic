@@ -113,6 +113,16 @@ namespace Mosaic
             return false;
         }
 
+        if(placement != DockPlacement::Center && placement != DockPlacement::Left && placement != DockPlacement::Right && placement != DockPlacement::Top && placement != DockPlacement::Bottom)
+        {
+            return false;
+        }
+
+        if(placement != DockPlacement::Center && (std::isfinite(ratio) == false || m_nextId > std::numeric_limits<DockNodeId>::max() - 2))
+        {
+            return false;
+        }
+
         DockNode * targetNode = node(target);
 
         if(targetNode == nullptr)
@@ -120,8 +130,13 @@ namespace Mosaic
             return false;
         }
 
-        if(targetNode->type == DockNodeType::Split)
+        size_t remaining = m_nodes.size();
+        while(targetNode->type == DockNodeType::Split)
         {
+            if(remaining-- == 0)
+            {
+                return false;
+            }
             target = targetNode->children[0];
             targetNode = node(target);
 
@@ -129,6 +144,11 @@ namespace Mosaic
             {
                 return false;
             }
+        }
+
+        if(targetNode->type != DockNodeType::Tabs)
+        {
+            return false;
         }
 
         DockNodeId oldNode = nodeForWindow(window);
@@ -317,8 +337,14 @@ namespace Mosaic
 
         if(m_central == id)
         {
-            m_central = siblingId;
-            sibling->central = true;
+            DockNodeId centralId = siblingId;
+            const DockNode * central = sibling;
+            while(central->type == DockNodeType::Split)
+            {
+                centralId = central->children[0];
+                central = node(centralId);
+            }
+            (void)setCentralNode(centralId);
         }
 
         DockNodeId grandParentId = parentNode->parent;
@@ -450,25 +476,28 @@ namespace Mosaic
             return false;
         }
 
-        m_nodes.assign(input.begin(), input.end());
-        m_root = rootId;
-        m_central = 0;
-        m_nextId = 1;
-        for(const DockNode & value : m_nodes)
+        DockModel candidate;
+        candidate.m_nodes.assign(input.begin(), input.end());
+        candidate.m_root = rootId;
+        candidate.m_central = 0;
+        candidate.m_nextId = 1;
+        for(const DockNode & value : candidate.m_nodes)
         {
-            m_nextId = std::max(m_nextId, value.id + 1);
+            if(value.id == 0 || value.id == std::numeric_limits<DockNodeId>::max())
+            {
+                return false;
+            }
+            candidate.m_nextId = std::max(candidate.m_nextId, value.id + 1);
         }
-        rebuildIndices();
+        candidate.rebuildIndices();
 
-        if(validate() == false)
+        if(candidate.validate() == false)
         {
-            clear();
-
             return false;
         }
 
         DockNodeId restoredCentral = 0;
-        for(const DockNode & value : m_nodes)
+        for(const DockNode & value : candidate.m_nodes)
         {
             if(restoredCentral == 0 && value.central == true && value.type == DockNodeType::Tabs)
             {
@@ -478,30 +507,32 @@ namespace Mosaic
 
         if(restoredCentral != 0)
         {
-            (void)setCentralNode(restoredCentral);
+            (void)candidate.setCentralNode(restoredCentral);
         }
         else
         {
-            DockNodeId candidate = m_root;
-            const DockNode * candidateNode = node(candidate);
+            DockNodeId centralId = candidate.m_root;
+            const DockNode * candidateNode = candidate.node(centralId);
             while(candidateNode != nullptr && candidateNode->type == DockNodeType::Split)
             {
-                candidate = candidateNode->children[0];
-                candidateNode = node(candidate);
+                centralId = candidateNode->children[0];
+                candidateNode = candidate.node(centralId);
             }
 
             if(candidateNode != nullptr)
             {
-                (void)setCentralNode(candidate);
+                (void)candidate.setCentralNode(centralId);
             }
         }
 
+        *this = std::move(candidate);
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
     bool DockModel::validate() const noexcept
     {
-        if(node(m_root) == nullptr)
+        const DockNode * rootNode = node(m_root);
+        if(rootNode == nullptr || rootNode->parent != 0 || m_nodeIndices.size() != m_nodes.size())
         {
             return false;
         }
@@ -528,6 +559,15 @@ namespace Mosaic
 
             if(current->type == DockNodeType::Split)
             {
+                if(current->tabs.empty() == false || current->activeTab != InvalidId || current->central == true || std::isfinite(current->ratio) == false)
+                {
+                    return false;
+                }
+
+                if(current->orientation != Orientation::Horizontal && current->orientation != Orientation::Vertical)
+                {
+                    return false;
+                }
                 if(current->children[0] == 0)
                 {
                     return false;
@@ -565,16 +605,21 @@ namespace Mosaic
                     pending.push_back(child);
                 }
             }
-            else
+            else if(current->type == DockNodeType::Tabs)
             {
-                if(current->tabs.empty() == true && id != m_root)
+                if(current->children[0] != 0 || current->children[1] != 0)
+                {
+                    return false;
+                }
+
+                if(current->tabs.empty() == true && (current->activeTab != InvalidId || (id != m_root && current->central == false)))
                 {
                     return false;
                 }
 
                 for(Id window : current->tabs)
                 {
-                    if(windows.insert(window).second == false)
+                    if(window == InvalidId || windows.insert(window).second == false)
                     {
                         return false;
                     }
@@ -584,6 +629,10 @@ namespace Mosaic
                 {
                     return false;
                 }
+            }
+            else
+            {
+                return false;
             }
         }
         auto returnedValue = visited.size() == m_nodes.size();
