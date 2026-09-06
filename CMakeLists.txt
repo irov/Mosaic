@@ -107,6 +107,7 @@ add_library(MosaicCore
     src/DockSpace.cpp
     src/Docking.cpp
     src/DragDrop.cpp
+    src/DrawList.cpp
     src/Editor.cpp
     src/FrameArena.cpp
     src/Interaction.cpp
@@ -114,6 +115,7 @@ add_library(MosaicCore
     src/Menu.cpp
     src/NativeSurface.cpp
     src/Numeric.cpp
+    src/Platform.cpp
     src/Popup.cpp
     src/Render.cpp
     src/Scope.cpp
@@ -142,7 +144,6 @@ set_target_properties(MosaicCore PROPERTIES
 mosaic_target_warnings(MosaicCore)
 
 add_library(MosaicGraphics
-    src/DrawList.cpp
     src/GraphicsBridge.cpp
 )
 add_library(Mosaic::Graphics ALIAS MosaicGraphics)
@@ -168,22 +169,18 @@ if(MOSAIC_GRAPHICS_DEPENDENCY)
     add_dependencies(MosaicGraphics ${MOSAIC_GRAPHICS_DEPENDENCY})
 endif()
 
-add_library(MosaicPlatform
-    src/Platform.cpp
-)
+add_library(MosaicPlatform INTERFACE)
 add_library(Mosaic::Platform ALIAS MosaicPlatform)
-target_compile_features(MosaicPlatform PUBLIC cxx_std_20)
+target_compile_features(MosaicPlatform INTERFACE cxx_std_20)
 target_include_directories(MosaicPlatform
-    PUBLIC
+    INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_link_libraries(MosaicPlatform PUBLIC MosaicCore)
+target_link_libraries(MosaicPlatform INTERFACE MosaicCore)
 set_target_properties(MosaicPlatform PROPERTIES
-    CXX_EXTENSIONS OFF
     EXPORT_NAME Platform
 )
-mosaic_target_warnings(MosaicPlatform)
 
 add_library(Mosaic INTERFACE)
 add_library(Mosaic::Mosaic ALIAS Mosaic)
@@ -192,6 +189,9 @@ set_target_properties(Mosaic PROPERTIES EXPORT_NAME Mosaic)
 
 if(APPLE)
     enable_language(OBJCXX)
+endif()
+
+if(APPLE OR WIN32)
     add_subdirectory(backends)
 endif()
 
@@ -199,11 +199,9 @@ if(NOT MOSAIC_ENABLE_EXCEPTIONS)
     if(MSVC)
         target_compile_options(MosaicCore PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHs-c->)
         target_compile_options(MosaicGraphics PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHs-c->)
-        target_compile_options(MosaicPlatform PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHs-c->)
     else()
         target_compile_options(MosaicCore PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
         target_compile_options(MosaicGraphics PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
-        target_compile_options(MosaicPlatform PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     endif()
 endif()
 
@@ -211,11 +209,9 @@ if(NOT MOSAIC_ENABLE_RTTI)
     if(MSVC)
         target_compile_options(MosaicCore PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/GR->)
         target_compile_options(MosaicGraphics PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/GR->)
-        target_compile_options(MosaicPlatform PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/GR->)
     else()
         target_compile_options(MosaicCore PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
         target_compile_options(MosaicGraphics PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
-        target_compile_options(MosaicPlatform PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
     endif()
 endif()
 

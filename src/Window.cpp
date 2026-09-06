@@ -791,7 +791,7 @@ namespace Mosaic
         float resizeHitThickness = std::max(1.f, windowNode.style->metrics.windowBorderSize + windowNode.style->metrics.windowBorderHoverPadding);
         bool canPoint = windowNode.visible && dockActive == true && acceptsPointerInput == true && windowNode.disabled == false && windowNode.inputBlocked == false && Detail::inputLayerBlocked(ui, windowNode) == false && pointer != nullptr && (ui->pointerWindow == InvalidId || ui->pointerWindow == windowNode.id || ui->captured == windowNode.id) && (ui->captured == InvalidId || ui->captured == windowNode.id);
         Detail::WindowScrollResult scrollInteraction = Detail::windowScrollBehavior(ui, windowNode, persistentState, canPoint);
-        uint8_t resizeEdges = pointer == nullptr || scrollInteraction.hovered == true || scrollInteraction.active ? Detail::WindowResizeNone : Detail::windowResizeEdgesAt(resizeBounds, pointer->position, resizeHitThickness);
+        uint8_t resizeEdges = pointer == nullptr || scrollInteraction.hovered == true || scrollInteraction.active ? static_cast<uint8_t>(Detail::WindowResizeNone) : Detail::windowResizeEdgesAt(resizeBounds, pointer->position, resizeHitThickness);
 
         if(options.resizeHorizontal == false)
         {
@@ -806,7 +806,7 @@ namespace Mosaic
         if(ui->configuration.windowResizeFromEdges == false && resizeEdges != Detail::WindowResizeNone)
         {
             bool bottomRight = (resizeEdges & Detail::WindowResizeRight) != 0 && (resizeEdges & Detail::WindowResizeBottom) != 0;
-            resizeEdges = bottomRight ? static_cast<uint8_t>(Detail::WindowResizeRight | Detail::WindowResizeBottom) : Detail::WindowResizeNone;
+            resizeEdges = bottomRight ? static_cast<uint8_t>(Detail::WindowResizeRight | Detail::WindowResizeBottom) : static_cast<uint8_t>(Detail::WindowResizeNone);
         }
 
         bool dockHostPointerOwner = dockNodeId == 0;

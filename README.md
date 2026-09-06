@@ -311,9 +311,10 @@ target_link_libraries(your_app PRIVATE Mosaic::Mosaic)
 
 ## Targets
 
-- `Mosaic::Core` — context, identity, input, layout, widgets, docking, semantics, persistence and debugging.
-- `Mosaic::Graphics` — draw lists, CPU mesh generation and renderer-facing batches.
-- `Mosaic::Platform` — native integration interfaces and the headless null adapter.
+- `Mosaic::Core` — context, identity, input, layout, widgets, docking, semantics, persistence,
+  debugging, draw-list recording and the headless null adapter.
+- `Mosaic::Graphics` — CPU mesh generation and renderer-facing batches.
+- `Mosaic::Platform` — compatibility target exposing the platform interfaces and linking Core.
 - `Mosaic::Mosaic` — convenience target linking all modules.
 
 See [examples/Headless.cpp](examples/Headless.cpp) for a complete renderer-independent frame.

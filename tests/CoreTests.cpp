@@ -229,7 +229,7 @@ namespace
         (void)Mosaic::endFrame(ui);
         check(value != "original", "text editor accepts changes");
         Mosaic::Input escape;
-        escape.keyboard.push_back({.key = Mosaic::KeyCode::Escape, .pressed = true});
+        escape.keyboard.push_back({.key = Mosaic::KeyCode::Escape, .pressed = true, .modifiers = {}});
         Mosaic::beginFrame(ui, escape);
         const Mosaic::Response response = submit();
         (void)Mosaic::endFrame(ui);

@@ -1,5 +1,5 @@
 add_executable(MosaicCoreTests CoreTests.cpp)
-target_link_libraries(MosaicCoreTests PRIVATE Mosaic::Mosaic)
+target_link_libraries(MosaicCoreTests PRIVATE Mosaic::Core)
 target_include_directories(MosaicCoreTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 mosaic_target_warnings(MosaicCoreTests)
 add_test(NAME MosaicCoreTests COMMAND MosaicCoreTests)
