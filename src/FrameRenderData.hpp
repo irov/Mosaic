@@ -11,6 +11,7 @@ namespace Mosaic
         {
             DrawCommandVector commands;
             DrawCommandStorage storage;
+            const DrawCommandStorage * sharedStorage = nullptr;
         };
 
         struct FrameViewportAccess
@@ -62,6 +63,11 @@ namespace Mosaic
                 if(data == nullptr)
                 {
                     return nullptr;
+                }
+
+                if(data->sharedStorage != nullptr)
+                {
+                    return data->sharedStorage;
                 }
 
                 return &data->storage;

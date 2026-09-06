@@ -13,12 +13,12 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         bool isContainer(NodeKind kind) noexcept
         {
-            return kind <= NodeKind::Style || kind == NodeKind::Tree || kind == NodeKind::Table || kind == NodeKind::TableRow || kind == NodeKind::TableCell || kind == NodeKind::Canvas;
+            return kind <= NodeKind::Style || kind == NodeKind::Tree || kind == NodeKind::Table || kind == NodeKind::TableRow || kind == NodeKind::TableCell || kind == NodeKind::Canvas || kind == NodeKind::NativeSurface;
         }
         //////////////////////////////////////////////////////////////////////////
         bool clipsDescendants(NodeKind kind) noexcept
         {
-            return kind == NodeKind::Root || kind == NodeKind::Window || kind == NodeKind::Scroll || kind == NodeKind::Clip || kind == NodeKind::Table || kind == NodeKind::TableRow || kind == NodeKind::TableCell || kind == NodeKind::Canvas;
+            return kind == NodeKind::Root || kind == NodeKind::Window || kind == NodeKind::Scroll || kind == NodeKind::Clip || kind == NodeKind::Table || kind == NodeKind::TableRow || kind == NodeKind::TableCell || kind == NodeKind::Canvas || kind == NodeKind::NativeSurface;
         }
         //////////////////////////////////////////////////////////////////////////
         bool isFloatingRootChild(NodeKind kind) noexcept
@@ -39,6 +39,7 @@ namespace Mosaic
             case NodeKind::Interaction:
             case NodeKind::Style:
             case NodeKind::Canvas:
+            case NodeKind::NativeSurface:
             {
                 result = true;
                 break;
@@ -64,6 +65,7 @@ namespace Mosaic
             case NodeKind::Interaction:
             case NodeKind::Style:
             case NodeKind::Canvas:
+            case NodeKind::NativeSurface:
             {
                 result = true;
                 break;
@@ -271,6 +273,7 @@ namespace Mosaic
             contentSize = node.measured;
             break;
         case Detail::NodeKind::Canvas:
+        case Detail::NodeKind::NativeSurface:
             contentSize = {240.f, 160.f};
             break;
         default:

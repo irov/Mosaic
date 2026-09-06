@@ -1405,6 +1405,16 @@ namespace Mosaic
             return false;
         }
 
+        gp_result_t viewportTransformResult = gp_set_transform(canvas, -viewport.bounds.x, -viewport.bounds.y, 1.f, 0.f, 0.f, 1.f);
+
+        if(viewportTransformResult != GP_SUCCESSFUL)
+        {
+            output.clear();
+            m_lastError = "Graphics viewport transform setup failed";
+
+            return false;
+        }
+
         bool hasSegment = false;
         uint64_t renderKey = 0;
 

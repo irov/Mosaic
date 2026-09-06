@@ -606,6 +606,36 @@ namespace Mosaic
         Vec2 maximumSize = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
     };
 
+    struct NativeSurfaceOptions
+    {
+        NativeSurfaceKind kind = NativeSurfaceKind::Scene;
+        NativeSurfaceHandle parent = nullptr;
+        RenderTargetHandle renderTarget = 0;
+        uint64_t applicationTag = 0;
+        NativeSurfaceInputCallback inputCallback = nullptr;
+        void * inputUserData = nullptr;
+        bool visible = true;
+        bool focusable = true;
+        bool forwardInput = true;
+        bool requestFocus = false;
+    };
+
+    struct NativeSurfaceResponse
+    {
+        Id id = InvalidId;
+        uint64_t surfaceId = 0;
+        NativeSurfaceHandle handle = nullptr;
+        NativeSurfaceHandle renderHandle = nullptr;
+        Rect bounds;
+        Rect localBounds;
+        Rect screenBounds;
+        float dpiScale = 1.f;
+        uint64_t generation = 0;
+        bool created = false;
+        bool visible = false;
+        bool focused = false;
+    };
+
     struct WindowOptions
     {
         Rect initialBounds = {40.f, 40.f, 520.f, 420.f};
@@ -1722,6 +1752,9 @@ namespace Mosaic
     [[nodiscard]] Scope scrollArea(Context * ui, const Key & key, StringView label, Orientation orientation = Orientation::Vertical, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope scrollArea(Context * ui, StringView label, const ScrollOptions & scrollOptions, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope scrollArea(Context * ui, const Key & key, StringView label, const ScrollOptions & scrollOptions, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Scope nativeSurface(Context * ui, const Key & key, StringView label, const NativeSurfaceOptions & surfaceOptions, const LayoutOptions & layout, NativeSurfaceResponse * const _out = nullptr, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] bool nativeSurfaceResponse(const Context * ui, Id id, NativeSurfaceResponse * const _out) noexcept;
+    bool releaseNativeSurface(Context * ui, Id id) noexcept;
     [[nodiscard]] Canvas dockSpace(Context * ui, const Key & key, StringView label, const DockSpaceOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Canvas dockSpace(Context * ui, StringView label, const DockSpaceOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Scope split(Context * ui, StringView label, Orientation orientation, float ratio = 0.5f, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());

@@ -2,6 +2,7 @@
 #include "ContextDetail.hpp"
 #include "Interaction.hpp"
 #include "Layout.hpp"
+#include "NativeSurface.hpp"
 #include "Popup.hpp"
 #include "Render.hpp"
 #include "TextEdit.hpp"
@@ -581,6 +582,8 @@ namespace Mosaic
                 return "TableCell";
             case Detail::NodeKind::Canvas:
                 return "Canvas";
+            case Detail::NodeKind::NativeSurface:
+                return "NativeSurface";
             }
 
             return "Unknown";
@@ -4254,6 +4257,17 @@ namespace Mosaic
             }
         }
 
+        if(kind == Detail::NodeKind::NativeSurface)
+        {
+            node.nativeSurfacePayload = frameArena.make<NativeSurfaceNodePayload>();
+
+            if(node.nativeSurfacePayload == nullptr)
+            {
+                node.nativeSurfacePayload = &fallbackNativeSurfaceNodePayload;
+                frame.diagnostics.emplace_back("Frame arena could not allocate native surface node payload");
+            }
+        }
+
         if(nodes[currentParent].kind == Detail::NodeKind::Table)
         {
             node.tableItemPayload = frameArena.make<TableItemNodePayload>();
@@ -4805,6 +4819,8 @@ namespace Mosaic
 
         Allocator * backingAllocator = ui->allocationTracker->backingAllocator();
         Detail::AllocatorReference keepBackingAlive(*backingAllocator);
+
+        Detail::destroyNativeSurfaces(ui);
 
         ui->~Context();
         backingAllocator->deallocate(ui, sizeof(Context), alignof(Context));
@@ -5475,6 +5491,7 @@ namespace Mosaic
         ui->measureNode(0, {rootBounds.width, rootBounds.height});
         Detail::arrangeFrame(ui, rootBounds);
         Detail::arrangeScrollChanges(ui);
+        Detail::syncNativeSurfaces(ui);
         // Logical text metrics were resolved before layout. Only glyph placement and cached
         // Graphics geometry are deferred until final visibility is known.
         ui->prepareVisibleText();
@@ -5521,7 +5538,10 @@ namespace Mosaic
 
         FrameViewport outputViewport;
         outputViewport.id = ui->viewport.id;
+        outputViewport.surfaceId = 0;
         outputViewport.bounds = ui->viewport.bounds;
+        outputViewport.localBounds = {0.f, 0.f, ui->viewport.bounds.width, ui->viewport.bounds.height};
+        outputViewport.screenBounds = ui->viewport.bounds;
         outputViewport.dpiScale = ui->viewport.dpiScale;
         outputViewport.nativeHandle = ui->viewport.nativeHandle;
         outputViewport.renderTarget = ui->viewport.renderTarget;
@@ -5750,9 +5770,130 @@ namespace Mosaic
         }
         Detail::FrameRenderData * renderData = ui->frameRenderData[ui->frameRenderDataCount].get();
         ++ui->frameRenderDataCount;
+        renderData->sharedStorage = nullptr;
         renderData->commands.swap(drawList.commands());
-        renderData->storage.swap(ui->drawCommandStorage);
         Detail::FrameViewportAccess::setRenderData(frameViewport, renderData);
+
+        Viewport mainViewport = ui->viewport;
+        for(size_t surfaceNodeIndex : ui->visibleNativeSurfaceNodes)
+        {
+            Context::Node & surfaceNode = ui->nodes[surfaceNodeIndex];
+            auto surfaceIterator = ui->nativeSurfaces.find(surfaceNode.id);
+
+            if(surfaceIterator == ui->nativeSurfaces.end())
+            {
+                continue;
+            }
+
+            Context::NativeSurfaceState & surface = surfaceIterator->second;
+            FrameViewport surfaceViewport;
+            surfaceViewport.id = surfaceNode.id;
+            surfaceViewport.surfaceId = surfaceNode.id;
+            surfaceViewport.kind = surface.kind;
+            surfaceViewport.bounds = surface.bounds;
+            surfaceViewport.localBounds = {0.f, 0.f, surface.bounds.width, surface.bounds.height};
+            surfaceViewport.screenBounds = surface.screenBounds;
+            surfaceViewport.dpiScale = surface.dpiScale;
+            surfaceViewport.nativeHandle = surface.renderHandle;
+            surfaceViewport.renderTarget = surface.renderTarget;
+            surfaceViewport.generation = surface.generation;
+            surfaceViewport.applicationTag = surface.applicationTag;
+            surfaceViewport.visible = surface.visible;
+            ui->frame.viewports.emplace_back(surfaceViewport);
+
+            Viewport emissionViewport;
+            emissionViewport.id = surfaceNode.id;
+            emissionViewport.bounds = surface.bounds;
+            emissionViewport.workArea = surface.bounds;
+            emissionViewport.dpiScale = surface.dpiScale;
+            emissionViewport.focused = surface.focused;
+            emissionViewport.nativeHandle = surface.renderHandle;
+            emissionViewport.renderTarget = surface.renderTarget;
+            ui->viewport = emissionViewport;
+            ui->emittingNativeSurface = surfaceNode.id;
+
+            if(ui->frameRenderDataCount == ui->frameRenderData.size())
+            {
+                ui->frameRenderData.emplace_back(makeUnique<Detail::FrameRenderData>(*ui->allocator));
+            }
+
+            Detail::FrameRenderData * surfaceRenderData = ui->frameRenderData[ui->frameRenderDataCount].get();
+            ++ui->frameRenderDataCount;
+            DrawList surfaceDrawList;
+            surfaceDrawList.setStorage(&ui->drawCommandStorage);
+            surfaceDrawList.commands().swap(surfaceRenderData->commands);
+            surfaceDrawList.clear();
+
+            for(size_t child = surfaceNode.firstChild; child != std::numeric_limits<size_t>::max(); child = ui->nodes[child].nextSibling)
+            {
+                if(ui->nodes[child].kind == Detail::NodeKind::Canvas && ui->hasCanvasCommands(ui->nodes[child], CanvasLayer::Background) == true)
+                {
+                    ui->emitNode(child, surfaceDrawList, CanvasLayer::Background);
+                }
+            }
+
+            ui->emitNode(surfaceNodeIndex, surfaceDrawList, CanvasLayer::Local);
+
+            for(size_t child = surfaceNode.firstChild; child != std::numeric_limits<size_t>::max(); child = ui->nodes[child].nextSibling)
+            {
+                if(ui->nodes[child].kind == Detail::NodeKind::Canvas && ui->hasCanvasCommands(ui->nodes[child], CanvasLayer::Foreground) == true)
+                {
+                    ui->emitNode(child, surfaceDrawList, CanvasLayer::Foreground);
+                }
+            }
+
+            for(size_t child = ui->nodes[0].firstChild; child != std::numeric_limits<size_t>::max(); child = ui->nodes[child].nextSibling)
+            {
+                Context::Node & overlayNode = ui->nodes[child];
+
+                if(overlayNode.kind != Detail::NodeKind::Backdrop)
+                {
+                    continue;
+                }
+
+                Rect overlap = Rect::intersection(overlayNode.bounds, surface.bounds);
+
+                if(overlap.empty() == true)
+                {
+                    continue;
+                }
+
+                ui->emitNode(child, surfaceDrawList, CanvasLayer::Local);
+            }
+
+            for(size_t popupIndex : ui->windowRenderOrder)
+            {
+                Context::Node & popupNode = ui->nodes[popupIndex];
+
+                if(popupNode.windowData().popup == false)
+                {
+                    continue;
+                }
+
+                Rect overlap = Rect::intersection(popupNode.bounds, surface.bounds);
+
+                if(overlap.empty() == true)
+                {
+                    continue;
+                }
+
+                ui->emitNode(popupIndex, surfaceDrawList, CanvasLayer::Local);
+            }
+
+            surfaceRenderData->sharedStorage = &renderData->storage;
+            surfaceRenderData->commands.swap(surfaceDrawList.commands());
+            FrameViewport & addedViewport = ui->frame.viewports.back();
+            Detail::FrameViewportAccess::setRenderData(addedViewport, surfaceRenderData);
+        }
+
+        ui->emittingNativeSurface = InvalidId;
+        ui->viewport = mainViewport;
+        renderData->storage.swap(ui->drawCommandStorage);
+
+        for(size_t index = 1; index != ui->frameRenderDataCount; ++index)
+        {
+            ui->frameRenderData[index]->sharedStorage = &renderData->storage;
+        }
 
         const PointerState * pointer = ui->input.primaryPointer();
 
@@ -6348,7 +6489,15 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     void setPlatformAdapter(Context * ui, PlatformAdapter * platform) noexcept
     {
-        ui->platform = platform == nullptr ? &ui->nullPlatform : platform;
+        PlatformAdapter * replacement = platform == nullptr ? &ui->nullPlatform : platform;
+        if(ui->platform == replacement)
+        {
+            return;
+        }
+
+        Detail::destroyNativeSurfaces(ui);
+        ui->visibleNativeSurfaceNodes.clear();
+        ui->platform = replacement;
     }
     //////////////////////////////////////////////////////////////////////////
     void setFontProvider(Context * ui, FontProvider * fontProvider) noexcept

@@ -258,7 +258,8 @@ namespace Mosaic
             Table,
             TableRow,
             TableCell,
-            Canvas
+            Canvas,
+            NativeSurface
         };
     } // namespace Detail
 
@@ -496,6 +497,31 @@ namespace Mosaic
             bool colorMarkerEnabled : 1 = false;
         };
 
+        struct NativeSurfaceNodePayload
+        {
+            NativeSurfaceOptions options;
+        };
+
+        struct NativeSurfaceState
+        {
+            NativeSurfaceHandle handle = nullptr;
+            NativeSurfaceHandle renderHandle = nullptr;
+            NativeSurfaceHandle parent = nullptr;
+            Rect bounds;
+            Rect screenBounds;
+            float dpiScale = 1.f;
+            RenderTargetHandle renderTarget = 0;
+            NativeSurfaceKind kind = NativeSurfaceKind::Scene;
+            uint64_t generation = 0;
+            uint64_t applicationTag = 0;
+            uint64_t lastFrame = 0;
+            NativeSurfaceInputCallback inputCallback = nullptr;
+            void * inputUserData = nullptr;
+            bool visible = false;
+            bool focused = false;
+            bool createdThisFrame = false;
+        };
+
         struct CanvasInteractionState
         {
             Transform2D transform;
@@ -538,6 +564,8 @@ namespace Mosaic
             NodePinDirection direction = NodePinDirection::Input;
             bool connecting = false;
         };
+
+        using NativeSurfaceStateMap = UnorderedMap<Id, NativeSurfaceState>;
 
         struct Node
         {
@@ -648,6 +676,7 @@ namespace Mosaic
             TextEditNodePayload * textEditPayload = nullptr;
             NodeDebugPayload * debugPayload = nullptr;
             ValueNodePayload * valuePayload = nullptr;
+            NativeSurfaceNodePayload * nativeSurfacePayload = nullptr;
             const CachedText * textRun = nullptr;
             const CachedText * valueTextRun = nullptr;
             size_t canvasCommandIndex = std::numeric_limits<size_t>::max();
@@ -1408,6 +1437,7 @@ namespace Mosaic
         TextEditNodePayload fallbackTextEditNodePayload;
         NodeDebugPayload fallbackNodeDebugPayload;
         ValueNodePayload fallbackValueNodePayload;
+        NativeSurfaceNodePayload fallbackNativeSurfaceNodePayload;
         NodeVector nodes;
         RecycledNodeStorageVector recycledNodeStorage;
         ColorTextDataVector frameColorTextData;
@@ -1449,6 +1479,9 @@ namespace Mosaic
         size_t frameCanvasCommandCount = 0;
         Detail::FrameRenderDataPtrVector frameRenderData;
         size_t frameRenderDataCount = 0;
+        NativeSurfaceStateMap nativeSurfaces;
+        NodeIndexVector visibleNativeSurfaceNodes;
+        Id emittingNativeSurface = InvalidId;
         UnorderedMap<Id, CanvasInteractionState> canvasInteractionStates;
         UnorderedMap<TypeId, PropertyEditorRegistration> propertyEditors;
         UnorderedMap<Id, Id> editorActiveItems;

@@ -25,6 +25,30 @@ namespace Mosaic
         bool alwaysOnTop = false;
     };
 
+    using NativeSurfaceHandle = void *;
+
+    enum class NativeSurfaceKind : uint8_t
+    {
+        Scene,
+        Design,
+        Motion,
+        Custom
+    };
+
+    struct NativeSurfaceDescription
+    {
+        uint64_t id = 0;
+        NativeSurfaceKind kind = NativeSurfaceKind::Scene;
+        NativeSurfaceHandle parent = nullptr;
+        Rect bounds;
+        uint64_t applicationTag = 0;
+        bool visible = true;
+        bool focusable = true;
+        bool forwardInput = true;
+    };
+
+    using NativeSurfaceInputCallback = void (*)(NativeSurfaceHandle surface, const Input & input, void * userData);
+
     class PlatformAdapter
     {
     public:
@@ -67,6 +91,101 @@ namespace Mosaic
         virtual void destroyWindow(void * nativeHandle) = 0;
         virtual void showWindow(void * nativeHandle, bool visible) = 0;
         virtual void setWindowBounds(void * nativeHandle, const Rect & bounds) = 0;
+
+        [[nodiscard]] virtual bool createNativeSurface(const NativeSurfaceDescription & description, NativeSurfaceHandle * const _out)
+        {
+            (void)description;
+            (void)_out;
+
+            return false;
+        }
+
+        virtual bool destroyNativeSurface(NativeSurfaceHandle surface)
+        {
+            (void)surface;
+
+            return false;
+        }
+
+        virtual bool showNativeSurface(NativeSurfaceHandle surface, bool visible)
+        {
+            (void)surface;
+            (void)visible;
+
+            return false;
+        }
+
+        virtual bool setNativeSurfaceBounds(NativeSurfaceHandle surface, const Rect & bounds)
+        {
+            (void)surface;
+            (void)bounds;
+
+            return false;
+        }
+
+        [[nodiscard]] virtual bool nativeSurfaceBounds(NativeSurfaceHandle surface, Rect * const _out) const
+        {
+            (void)surface;
+            (void)_out;
+
+            return false;
+        }
+
+        [[nodiscard]] virtual bool nativeSurfaceScreenBounds(NativeSurfaceHandle surface, Rect * const _out) const
+        {
+            (void)surface;
+            (void)_out;
+
+            return false;
+        }
+
+        [[nodiscard]] virtual bool nativeSurfaceDpiScale(NativeSurfaceHandle surface, float * const _out) const
+        {
+            (void)surface;
+            (void)_out;
+
+            return false;
+        }
+
+        virtual bool focusNativeSurface(NativeSurfaceHandle surface)
+        {
+            (void)surface;
+
+            return false;
+        }
+
+        [[nodiscard]] virtual bool nativeSurfaceFocused(NativeSurfaceHandle surface, bool * const _out) const
+        {
+            (void)surface;
+            (void)_out;
+
+            return false;
+        }
+
+        virtual bool setNativeSurfaceParent(NativeSurfaceHandle surface, NativeSurfaceHandle parent)
+        {
+            (void)surface;
+            (void)parent;
+
+            return false;
+        }
+
+        [[nodiscard]] virtual bool nativeSurfaceRenderHandle(NativeSurfaceHandle surface, NativeSurfaceHandle * const _out) const
+        {
+            (void)surface;
+            (void)_out;
+
+            return false;
+        }
+
+        virtual bool setNativeSurfaceInputCallback(NativeSurfaceHandle surface, NativeSurfaceInputCallback callback, void * userData)
+        {
+            (void)surface;
+            (void)callback;
+            (void)userData;
+
+            return false;
+        }
 
         [[nodiscard]] virtual MonitorSpan monitors() const noexcept = 0;
         virtual void publishAccessibilityTree(SemanticNodeSpan semantics) = 0;

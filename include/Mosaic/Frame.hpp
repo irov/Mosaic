@@ -2,6 +2,7 @@
 
 #include "Mosaic/DrawTypes.hpp"
 #include "Mosaic/Input.hpp"
+#include "Mosaic/Platform.hpp"
 
 namespace Mosaic
 {
@@ -15,10 +16,17 @@ namespace Mosaic
     {
     public:
         uint64_t id = 0;
+        uint64_t surfaceId = 0;
+        NativeSurfaceKind kind = NativeSurfaceKind::Scene;
         Rect bounds;
+        Rect localBounds;
+        Rect screenBounds;
         float dpiScale = 1.f;
-        void * nativeHandle = nullptr;
+        NativeSurfaceHandle nativeHandle = nullptr;
         RenderTargetHandle renderTarget = 0;
+        uint64_t generation = 0;
+        uint64_t applicationTag = 0;
+        bool visible = true;
 
         [[nodiscard]] size_t drawCommandCount() const noexcept
         {

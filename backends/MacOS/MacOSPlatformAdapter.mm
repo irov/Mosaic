@@ -5,6 +5,246 @@
 #include <cstdio>
 #include <cstring>
 
+#import <QuartzCore/CAMetalLayer.h>
+
+@interface MosaicMacOSNativeSurfaceView : NSView
+{
+@public
+    Mosaic::NativeSurfaceInputCallback inputCallback;
+    void * inputUserData;
+    __unsafe_unretained NSView * rootView;
+    Mosaic::Vec2 previousPointer;
+    uint8_t pointerButtons;
+    NSTrackingArea * trackingArea;
+}
+@end
+
+static Mosaic::Modifiers MosaicMacOSModifiers(NSEventModifierFlags flags)
+{
+    Mosaic::Modifiers result;
+    result.shift = (flags & NSEventModifierFlagShift) != 0;
+    result.control = (flags & NSEventModifierFlagControl) != 0;
+    result.alt = (flags & NSEventModifierFlagOption) != 0;
+    result.super = (flags & NSEventModifierFlagCommand) != 0;
+    result.primary = result.super;
+
+    return result;
+}
+
+@implementation MosaicMacOSNativeSurfaceView
+
++ (Class)layerClass
+{
+    return CAMetalLayer.class;
+}
+
+- (BOOL)isFlipped
+{
+    return YES;
+}
+
+- (BOOL)acceptsFirstResponder
+{
+    return YES;
+}
+
+- (void)updateTrackingAreas
+{
+    [super updateTrackingAreas];
+
+    if(trackingArea != nil)
+    {
+        [self removeTrackingArea:trackingArea];
+    }
+
+    NSTrackingAreaOptions options = NSTrackingActiveInKeyWindow | NSTrackingMouseMoved | NSTrackingInVisibleRect | NSTrackingMouseEnteredAndExited;
+    trackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect options:options owner:self userInfo:nil];
+    [self addTrackingArea:trackingArea];
+}
+
+- (BOOL)becomeFirstResponder
+{
+    BOOL result = [super becomeFirstResponder];
+
+    if(result == YES && inputCallback != nullptr)
+    {
+        Mosaic::Input input;
+        input.windowFocused = true;
+        input.modifiers = MosaicMacOSModifiers(NSEvent.modifierFlags);
+        inputCallback((__bridge void *)self, input, inputUserData);
+    }
+
+    return result;
+}
+
+- (BOOL)resignFirstResponder
+{
+    BOOL result = [super resignFirstResponder];
+
+    if(result == YES && inputCallback != nullptr)
+    {
+        Mosaic::Input input;
+        input.windowFocused = false;
+        input.modifiers = MosaicMacOSModifiers(NSEvent.modifierFlags);
+        inputCallback((__bridge void *)self, input, inputUserData);
+    }
+
+    return result;
+}
+
+- (void)forwardPointerEvent:(NSEvent *)event pressed:(uint8_t)pressed released:(uint8_t)released
+{
+    if(inputCallback == nullptr)
+    {
+        return;
+    }
+
+    NSPoint localPoint = [self convertPoint:event.locationInWindow fromView:nil];
+    Mosaic::Vec2 position = {static_cast<float>(localPoint.x), static_cast<float>(localPoint.y)};
+
+    pointerButtons |= pressed;
+    pointerButtons &= static_cast<uint8_t>(~released);
+    Mosaic::Input input;
+    Mosaic::PointerState pointer;
+    pointer.id = 1;
+    pointer.type = Mosaic::PointerType::Mouse;
+    pointer.position = position;
+    pointer.delta = position - previousPointer;
+    pointer.down = pointerButtons;
+    pointer.pressed = pressed;
+    pointer.released = released;
+    input.pointers.push_back(pointer);
+    input.modifiers = MosaicMacOSModifiers(event.modifierFlags);
+    input.timestamp = event.timestamp;
+    previousPointer = position;
+    inputCallback((__bridge void *)self, input, inputUserData);
+}
+
+- (void)mouseDown:(NSEvent *)event
+{
+    [self.window makeFirstResponder:self];
+    [self forwardPointerEvent:event pressed:1U << static_cast<unsigned>(Mosaic::PointerButton::Primary) released:0];
+}
+
+- (void)mouseUp:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:1U << static_cast<unsigned>(Mosaic::PointerButton::Primary)];
+}
+
+- (void)mouseDragged:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:0];
+}
+
+- (void)mouseMoved:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:0];
+}
+
+- (void)rightMouseDown:(NSEvent *)event
+{
+    [self.window makeFirstResponder:self];
+    [self forwardPointerEvent:event pressed:1U << static_cast<unsigned>(Mosaic::PointerButton::Secondary) released:0];
+}
+
+- (void)rightMouseUp:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:1U << static_cast<unsigned>(Mosaic::PointerButton::Secondary)];
+}
+
+- (void)rightMouseDragged:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:0];
+}
+
+- (void)otherMouseDown:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:1U << static_cast<unsigned>(Mosaic::PointerButton::Middle) released:0];
+}
+
+- (void)otherMouseUp:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:1U << static_cast<unsigned>(Mosaic::PointerButton::Middle)];
+}
+
+- (void)otherMouseDragged:(NSEvent *)event
+{
+    [self forwardPointerEvent:event pressed:0 released:0];
+}
+
+- (void)scrollWheel:(NSEvent *)event
+{
+    if(inputCallback == nullptr)
+    {
+        return;
+    }
+
+    Mosaic::Input input;
+    (void)Mosaic::MacOSPlatformAdapter::wheelDelta(event, &input.wheel);
+    NSPoint localPoint = [self convertPoint:event.locationInWindow fromView:nil];
+    Mosaic::PointerState pointer;
+    pointer.id = 1;
+    pointer.type = Mosaic::PointerType::Mouse;
+    pointer.position = {static_cast<float>(localPoint.x), static_cast<float>(localPoint.y)};
+    pointer.delta = pointer.position - previousPointer;
+    pointer.down = pointerButtons;
+    input.pointers.push_back(pointer);
+    input.modifiers = MosaicMacOSModifiers(event.modifierFlags);
+    input.timestamp = event.timestamp;
+    previousPointer = pointer.position;
+    inputCallback((__bridge void *)self, input, inputUserData);
+}
+
+- (void)keyDown:(NSEvent *)event
+{
+    if(inputCallback == nullptr)
+    {
+        return;
+    }
+
+    Mosaic::Input input;
+    input.modifiers = MosaicMacOSModifiers(event.modifierFlags);
+    Mosaic::KeyEvent key;
+    key.key = Mosaic::MacOSPlatformAdapter::keyCode(event);
+    key.modifiers = input.modifiers;
+    key.pressed = true;
+    key.repeat = event.isARepeat;
+    input.keyboard.push_back(key);
+
+    if(event.characters.length != 0)
+    {
+        const char * text = event.characters.UTF8String;
+
+        if(text != nullptr)
+        {
+            input.text.emplace_back(text);
+        }
+    }
+
+    input.timestamp = event.timestamp;
+    inputCallback((__bridge void *)self, input, inputUserData);
+}
+
+- (void)keyUp:(NSEvent *)event
+{
+    if(inputCallback == nullptr)
+    {
+        return;
+    }
+
+    Mosaic::Input input;
+    input.modifiers = MosaicMacOSModifiers(event.modifierFlags);
+    Mosaic::KeyEvent key;
+    key.key = Mosaic::MacOSPlatformAdapter::keyCode(event);
+    key.modifiers = input.modifiers;
+    key.released = true;
+    input.keyboard.push_back(key);
+    input.timestamp = event.timestamp;
+    inputCallback((__bridge void *)self, input, inputUserData);
+}
+
+@end
+
 @interface MosaicMacOSColorSamplerState : NSObject
 {
 @public
@@ -47,6 +287,34 @@ namespace Mosaic
             auto returnedValue = NSMakeRect(desktop.origin.x + bounds.x, NSMaxY(desktop) - bounds.y - bounds.height, bounds.width, bounds.height);
 
             return returnedValue;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] NSRect nativeSurfaceFrame(NSView * root, NSView * parent, const Rect & bounds) noexcept
+        {
+            if(root == nil || parent == nil)
+            {
+                return NSMakeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            }
+
+            float rootY = root.isFlipped ? bounds.y : static_cast<float>(root.bounds.size.height) - bounds.y - bounds.height;
+            NSRect rootRect = NSMakeRect(bounds.x, rootY, bounds.width, bounds.height);
+            NSRect parentRect = [root convertRect:rootRect toView:parent];
+
+            return parentRect;
+        }
+        //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] Rect mosaicSurfaceBounds(NSView * root, NSView * surface) noexcept
+        {
+            if(root == nil || surface == nil || surface.superview == nil)
+            {
+                return {};
+            }
+
+            NSRect rootRect = [surface.superview convertRect:surface.frame toView:root];
+            float y = root.isFlipped ? static_cast<float>(rootRect.origin.y) : static_cast<float>(root.bounds.size.height - NSMaxY(rootRect));
+            Rect result = {static_cast<float>(rootRect.origin.x), y, static_cast<float>(rootRect.size.width), static_cast<float>(rootRect.size.height)};
+
+            return result;
         }
         //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] NSString * accessibilityRole(SemanticRole role) noexcept
@@ -780,6 +1048,234 @@ namespace Mosaic
     {
         NSWindow * window = (__bridge NSWindow *)nativeHandle;
         [window setFrame:Detail::nativeBounds(bounds) display:YES];
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::createNativeSurface(const NativeSurfaceDescription & description, NativeSurfaceHandle * const _out)
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        NSView * parent = description.parent == nullptr ? m_view : (__bridge NSView *)description.parent;
+
+        if(parent == nil)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = [[MosaicMacOSNativeSurfaceView alloc] initWithFrame:Detail::nativeSurfaceFrame(m_view, parent, description.bounds)];
+        view->inputCallback = nullptr;
+        view->inputUserData = nullptr;
+        view->rootView = m_view;
+        view->previousPointer = {};
+        view->pointerButtons = 0;
+        view.wantsLayer = YES;
+        CAMetalLayer * layer = [CAMetalLayer layer];
+        layer.contentsScale = parent.window.backingScaleFactor;
+        layer.framebufferOnly = YES;
+        view.layer = layer;
+        view.hidden = description.visible == false;
+        [parent addSubview:view];
+        *_out = (__bridge_retained void *)view;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::destroyNativeSurface(NativeSurfaceHandle surface)
+    {
+        if(surface == nullptr)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = (__bridge_transfer MosaicMacOSNativeSurfaceView *)surface;
+        [view removeFromSuperview];
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::showNativeSurface(NativeSurfaceHandle surface, bool visible)
+    {
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil)
+        {
+            return false;
+        }
+
+        view.hidden = visible == false;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::setNativeSurfaceBounds(NativeSurfaceHandle surface, const Rect & bounds)
+    {
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil || view.superview == nil)
+        {
+            return false;
+        }
+
+        view.frame = Detail::nativeSurfaceFrame(m_view, view.superview, bounds);
+        view.layer.contentsScale = view.window.backingScaleFactor;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::nativeSurfaceBounds(NativeSurfaceHandle surface, Rect * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil)
+        {
+            return false;
+        }
+
+        *_out = Detail::mosaicSurfaceBounds(m_view, view);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::nativeSurfaceScreenBounds(NativeSurfaceHandle surface, Rect * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil || view.window == nil)
+        {
+            return false;
+        }
+
+        NSRect screenRect;
+        Rect localBounds = {0.f, 0.f, static_cast<float>(view.bounds.size.width), static_cast<float>(view.bounds.size.height)};
+
+        if(Detail::accessibilityFrame(view, localBounds, &screenRect) == false)
+        {
+            return false;
+        }
+
+        NSScreen * screen = NSScreen.screens.firstObject;
+        NSRect desktop = screen == nil ? screenRect : screen.frame;
+        *_out = Detail::mosaicBounds(screenRect, desktop);
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::nativeSurfaceDpiScale(NativeSurfaceHandle surface, float * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil)
+        {
+            return false;
+        }
+
+        CGFloat scale = view.window == nil ? NSScreen.mainScreen.backingScaleFactor : view.window.backingScaleFactor;
+        *_out = static_cast<float>(std::max<CGFloat>(1.0, scale));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::focusNativeSurface(NativeSurfaceHandle surface)
+    {
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil || view.window == nil)
+        {
+            return false;
+        }
+
+        auto returnedValue = [view.window makeFirstResponder:view] == YES;
+
+        return returnedValue;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::nativeSurfaceFocused(NativeSurfaceHandle surface, bool * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil || view.window == nil)
+        {
+            return false;
+        }
+
+        NSResponder * responder = view.window.firstResponder;
+        *_out = responder == view;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::setNativeSurfaceParent(NativeSurfaceHandle surface, NativeSurfaceHandle parent)
+    {
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+        NSView * parentView = parent == nullptr ? m_view : (__bridge NSView *)parent;
+
+        if(view == nil || parentView == nil)
+        {
+            return false;
+        }
+
+        Rect bounds = Detail::mosaicSurfaceBounds(m_view, view);
+        [view removeFromSuperviewWithoutNeedingDisplay];
+        view.frame = Detail::nativeSurfaceFrame(m_view, parentView, bounds);
+        [parentView addSubview:view];
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::nativeSurfaceRenderHandle(NativeSurfaceHandle surface, NativeSurfaceHandle * const _out) const
+    {
+        if(_out == nullptr)
+        {
+            return false;
+        }
+
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil || view.layer == nil)
+        {
+            return false;
+        }
+
+        *_out = (__bridge void *)view.layer;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool MacOSPlatformAdapter::setNativeSurfaceInputCallback(NativeSurfaceHandle surface, NativeSurfaceInputCallback callback, void * userData)
+    {
+        MosaicMacOSNativeSurfaceView * view = (__bridge MosaicMacOSNativeSurfaceView *)surface;
+
+        if(view == nil)
+        {
+            return false;
+        }
+
+        view->inputCallback = callback;
+        view->inputUserData = userData;
+
+        return true;
     }
     //////////////////////////////////////////////////////////////////////////
     MonitorSpan MacOSPlatformAdapter::monitors() const noexcept

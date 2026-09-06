@@ -18,6 +18,7 @@ target_link_libraries(MosaicBackendMacOS
         "-framework Cocoa"
         "-framework CoreGraphics"
         "-framework CoreText"
+        "-framework QuartzCore"
 )
 set_target_properties(MosaicBackendMacOS PROPERTIES
     CXX_EXTENSIONS OFF

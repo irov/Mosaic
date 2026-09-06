@@ -29,6 +29,7 @@ namespace Mosaic
             case NodeKind::Style:
             case NodeKind::Spacer:
             case NodeKind::TableCell:
+            case NodeKind::NativeSurface:
                 return false;
             default:
                 return true;
@@ -177,6 +178,14 @@ namespace Mosaic
     void Context::emitNode(size_t index, DrawList & drawList, CanvasLayer canvasPass)
     {
         Node & node = nodes[index];
+
+        if(node.kind == Detail::NodeKind::NativeSurface)
+        {
+            if(emittingNativeSurface != node.id)
+            {
+                return;
+            }
+        }
 
         if(node.kind == Detail::NodeKind::Canvas && hasCanvasCommands(node, canvasPass) == false)
         {

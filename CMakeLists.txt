@@ -112,6 +112,7 @@ add_library(MosaicCore
     src/Interaction.cpp
     src/Layout.cpp
     src/Menu.cpp
+    src/NativeSurface.cpp
     src/Numeric.cpp
     src/Popup.cpp
     src/Render.cpp
