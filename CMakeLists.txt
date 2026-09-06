@@ -107,6 +107,7 @@ add_library(MosaicCore
     src/DockSpace.cpp
     src/Docking.cpp
     src/DragDrop.cpp
+    src/Editor.cpp
     src/FrameArena.cpp
     src/Interaction.cpp
     src/Layout.cpp

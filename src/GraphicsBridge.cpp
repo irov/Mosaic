@@ -15,8 +15,8 @@ extern "C"
 #include <graphics/graphics.h>
 }
 
-#if GP_API_VERSION < 3U
-#error Mosaic requires Graphics API version 3 or newer
+#if GP_API_VERSION < 5U
+#error Mosaic requires Graphics API version 5 or newer
 #endif
 #endif
 
@@ -641,6 +641,64 @@ namespace Mosaic
         {
             gp_canvas_t * canvas = state.canvas;
 
+            if(command.type == DrawCommandType::PushTransform)
+            {
+                if(gp_push_state(canvas) != GP_SUCCESSFUL)
+                {
+                    return false;
+                }
+
+                float translationX = 0.f;
+                float translationY = 0.f;
+                float axisXX = 1.f;
+                float axisXY = 0.f;
+                float axisYX = 0.f;
+                float axisYY = 1.f;
+                gp_result_t getResult = gp_get_transform(canvas, &translationX, &translationY, &axisXX, &axisXY, &axisYX, &axisYY);
+
+                if(getResult != GP_SUCCESSFUL)
+                {
+                    gp_pop_state(canvas);
+
+                    return false;
+                }
+
+                const Transform2D & relative = command.payload.transform.transform;
+                float composedTranslationX = translationX + axisXX * relative.translation.x + axisYX * relative.translation.y;
+                float composedTranslationY = translationY + axisXY * relative.translation.x + axisYY * relative.translation.y;
+                float composedAxisXX = axisXX * relative.axisX.x + axisYX * relative.axisX.y;
+                float composedAxisXY = axisXY * relative.axisX.x + axisYY * relative.axisX.y;
+                float composedAxisYX = axisXX * relative.axisY.x + axisYX * relative.axisY.y;
+                float composedAxisYY = axisXY * relative.axisY.x + axisYY * relative.axisY.y;
+                gp_result_t transformResult = gp_set_transform(canvas, composedTranslationX, composedTranslationY, composedAxisXX, composedAxisXY, composedAxisYX, composedAxisYY);
+
+                if(transformResult != GP_SUCCESSFUL)
+                {
+                    gp_pop_state(canvas);
+
+                    return false;
+                }
+
+                gp_stroke_scale_t scale = command.payload.transform.strokeScale == StrokeScale::Screen ? GP_STROKE_SCALE_SCREEN : GP_STROKE_SCALE_WORLD;
+                gp_result_t scaleResult = gp_set_stroke_scale(canvas, scale);
+
+                if(scaleResult != GP_SUCCESSFUL)
+                {
+                    gp_pop_state(canvas);
+
+                    return false;
+                }
+
+                return true;
+            }
+
+            if(command.type == DrawCommandType::PopTransform)
+            {
+                gp_result_t result = gp_pop_state(canvas);
+
+                return result == GP_SUCCESSFUL;
+            }
+
             if(command.type == DrawCommandType::PushClip)
             {
                 return true;
@@ -982,6 +1040,51 @@ namespace Mosaic
                 result = rectanglesResult == GP_SUCCESSFUL;
                 break;
             }
+            case DrawCommandType::NineSlice:
+            {
+                const NineSliceDrawCommand & nineSlice = command.payload.nineSlice;
+                const NineSliceOptions & options = nineSlice.options;
+                gp_result_t colorResult = gp_set_color(canvas, options.tint.r, options.tint.g, options.tint.b, options.tint.a);
+
+                if(colorResult != GP_SUCCESSFUL)
+                {
+                    break;
+                }
+
+                gp_nine_slice_mode_t edgeMode = options.edges == NineSliceMode::Tile ? GP_NINE_SLICE_TILE : GP_NINE_SLICE_STRETCH;
+                gp_nine_slice_mode_t centerMode = options.center == NineSliceMode::Tile ? GP_NINE_SLICE_TILE : GP_NINE_SLICE_STRETCH;
+                gp_result_t primitiveResult = gp_nine_slice(canvas, nineSlice.bounds.x, nineSlice.bounds.y, nineSlice.bounds.width, nineSlice.bounds.height, options.sourceSize.x, options.sourceSize.y, options.uv.x, options.uv.y, options.uv.width, options.uv.height, options.left, options.top, options.right, options.bottom, edgeMode, centerMode);
+                result = primitiveResult == GP_SUCCESSFUL;
+                break;
+            }
+            case DrawCommandType::Grid:
+            {
+                const GridDrawCommand & grid = command.payload.grid;
+                const GridStyle & style = grid.style;
+                gp_stroke_scale_t scale = style.strokeScale == StrokeScale::Screen ? GP_STROKE_SCALE_SCREEN : GP_STROKE_SCALE_WORLD;
+                gp_result_t scaleResult = gp_set_stroke_scale(canvas, scale);
+
+                if(scaleResult != GP_SUCCESSFUL)
+                {
+                    break;
+                }
+
+                gp_result_t primitiveResult;
+
+                if(style.bounded == true)
+                {
+                    primitiveResult = gp_grid_bounded(canvas, grid.bounds.x, grid.bounds.y, grid.bounds.width, grid.bounds.height, style.range.x, style.range.y, style.range.width, style.range.height, style.origin.x, style.origin.y, style.axisX.x, style.axisX.y, style.axisY.x, style.axisY.y, style.minorSpacing, style.majorInterval, style.minorThickness, style.majorThickness, style.minorColor.r, style.minorColor.g, style.minorColor.b, style.minorColor.a, style.majorColor.r, style.majorColor.g, style.majorColor.b, style.majorColor.a);
+                }
+                else
+                {
+                    primitiveResult = gp_grid(canvas, grid.bounds.x, grid.bounds.y, grid.bounds.width, grid.bounds.height, style.origin.x, style.origin.y, style.axisX.x, style.axisX.y, style.axisY.x, style.axisY.y, style.minorSpacing, style.majorInterval, style.minorThickness, style.majorThickness, style.minorColor.r, style.minorColor.g, style.minorColor.b, style.minorColor.a, style.majorColor.r, style.majorColor.g, style.majorColor.b, style.majorColor.a);
+                }
+
+                result = primitiveResult == GP_SUCCESSFUL;
+                break;
+            }
+            case DrawCommandType::PushTransform:
+            case DrawCommandType::PopTransform:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 break;
@@ -1370,6 +1473,8 @@ namespace Mosaic
             case DrawCommandType::Polyline:
             case DrawCommandType::Image:
             case DrawCommandType::Path:
+            case DrawCommandType::NineSlice:
+            case DrawCommandType::Grid:
                 result = false;
                 break;
             case DrawCommandType::CustomGeometry:
@@ -1378,6 +1483,8 @@ namespace Mosaic
             case DrawCommandType::TextGeometry:
                 result = false;
                 break;
+            case DrawCommandType::PushTransform:
+            case DrawCommandType::PopTransform:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 break;

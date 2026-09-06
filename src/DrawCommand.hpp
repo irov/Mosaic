@@ -18,6 +18,10 @@ namespace Mosaic
         Image,
         CustomGeometry,
         TextGeometry,
+        NineSlice,
+        Grid,
+        PushTransform,
+        PopTransform,
         PushClip,
         PopClip
     };
@@ -127,6 +131,24 @@ namespace Mosaic
         Vec2 axisX = {1.f, 0.f};
         Vec2 axisY = {0.f, 1.f};
         Color tint;
+    };
+
+    struct NineSliceDrawCommand
+    {
+        Rect bounds;
+        NineSliceOptions options;
+    };
+
+    struct GridDrawCommand
+    {
+        Rect bounds;
+        GridStyle style;
+    };
+
+    struct TransformDrawCommand
+    {
+        Transform2D transform;
+        StrokeScale strokeScale = StrokeScale::World;
     };
 
     struct DrawCommandStorage
@@ -240,6 +262,9 @@ namespace Mosaic
         PathDrawCommand path;
         CustomGeometryDrawCommand custom;
         TextGeometryDrawCommand textGeometry;
+        NineSliceDrawCommand nineSlice;
+        GridDrawCommand grid;
+        TransformDrawCommand transform;
 
         DrawCommandPayload() noexcept
         {
@@ -310,6 +335,7 @@ namespace Mosaic
             case DrawCommandType::Rect:
             case DrawCommandType::RoundedRect:
             case DrawCommandType::Image:
+            case DrawCommandType::PopTransform:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 ::new(&payload.rectangle) RectDrawCommand;
@@ -341,6 +367,15 @@ namespace Mosaic
             case DrawCommandType::TextGeometry:
                 ::new(&payload.textGeometry) TextGeometryDrawCommand;
                 break;
+            case DrawCommandType::NineSlice:
+                ::new(&payload.nineSlice) NineSliceDrawCommand;
+                break;
+            case DrawCommandType::Grid:
+                ::new(&payload.grid) GridDrawCommand;
+                break;
+            case DrawCommandType::PushTransform:
+                ::new(&payload.transform) TransformDrawCommand;
+                break;
             }
         }
 
@@ -351,6 +386,7 @@ namespace Mosaic
             case DrawCommandType::Rect:
             case DrawCommandType::RoundedRect:
             case DrawCommandType::Image:
+            case DrawCommandType::PopTransform:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 ::new(&payload.rectangle) RectDrawCommand(std::move(other.payload.rectangle));
@@ -382,6 +418,15 @@ namespace Mosaic
             case DrawCommandType::TextGeometry:
                 ::new(&payload.textGeometry) TextGeometryDrawCommand(std::move(other.payload.textGeometry));
                 break;
+            case DrawCommandType::NineSlice:
+                ::new(&payload.nineSlice) NineSliceDrawCommand(std::move(other.payload.nineSlice));
+                break;
+            case DrawCommandType::Grid:
+                ::new(&payload.grid) GridDrawCommand(std::move(other.payload.grid));
+                break;
+            case DrawCommandType::PushTransform:
+                ::new(&payload.transform) TransformDrawCommand(std::move(other.payload.transform));
+                break;
             }
         }
 
@@ -392,6 +437,7 @@ namespace Mosaic
             case DrawCommandType::Rect:
             case DrawCommandType::RoundedRect:
             case DrawCommandType::Image:
+            case DrawCommandType::PopTransform:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 ::new(&payload.rectangle) RectDrawCommand(other.payload.rectangle);
@@ -423,6 +469,15 @@ namespace Mosaic
             case DrawCommandType::TextGeometry:
                 ::new(&payload.textGeometry) TextGeometryDrawCommand(other.payload.textGeometry);
                 break;
+            case DrawCommandType::NineSlice:
+                ::new(&payload.nineSlice) NineSliceDrawCommand(other.payload.nineSlice);
+                break;
+            case DrawCommandType::Grid:
+                ::new(&payload.grid) GridDrawCommand(other.payload.grid);
+                break;
+            case DrawCommandType::PushTransform:
+                ::new(&payload.transform) TransformDrawCommand(other.payload.transform);
+                break;
             }
         }
 
@@ -452,6 +507,10 @@ namespace Mosaic
             case DrawCommandType::Line:
             case DrawCommandType::Image:
             case DrawCommandType::TextGeometry:
+            case DrawCommandType::NineSlice:
+            case DrawCommandType::Grid:
+            case DrawCommandType::PushTransform:
+            case DrawCommandType::PopTransform:
             case DrawCommandType::PushClip:
             case DrawCommandType::PopClip:
                 break;

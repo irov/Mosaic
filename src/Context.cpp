@@ -47,6 +47,14 @@ namespace Mosaic
                 return "CustomGeometry";
             case DrawCommandType::TextGeometry:
                 return "TextGeometry";
+            case DrawCommandType::NineSlice:
+                return "NineSlice";
+            case DrawCommandType::Grid:
+                return "Grid";
+            case DrawCommandType::PushTransform:
+                return "PushTransform";
+            case DrawCommandType::PopTransform:
+                return "PopTransform";
             case DrawCommandType::PushClip:
                 return "PushClip";
             case DrawCommandType::PopClip:
@@ -2659,21 +2667,70 @@ namespace Mosaic
     //////////////////////////////////////////////////////////////////////////
     DrawCommandVector & Context::canvasCommands(Node & node)
     {
-        if(node.canvasCommandIndex == std::numeric_limits<size_t>::max())
-        {
-            node.canvasCommandIndex = frameCanvasCommandCount++;
+        DrawCommandVector & commands = canvasCommands(node, node.canvasLayer);
 
-            if(node.canvasCommandIndex == frameCanvasCommands.size())
+        return commands;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    DrawCommandVector & Context::canvasCommands(Node & node, CanvasLayer layer)
+    {
+        size_t * commandIndex = &node.canvasCommandIndex;
+
+        if(layer == CanvasLayer::Overlay)
+        {
+            commandIndex = &node.canvasOverlayCommandIndex;
+        }
+        else if(layer == CanvasLayer::Background)
+        {
+            commandIndex = &node.canvasBackgroundCommandIndex;
+        }
+        else if(layer == CanvasLayer::Foreground)
+        {
+            commandIndex = &node.canvasForegroundCommandIndex;
+        }
+
+        if(*commandIndex == std::numeric_limits<size_t>::max())
+        {
+            *commandIndex = frameCanvasCommandCount++;
+
+            if(*commandIndex == frameCanvasCommands.size())
             {
                 frameCanvasCommands.emplace_back();
             }
             else
             {
-                frameCanvasCommands[node.canvasCommandIndex].clear();
+                frameCanvasCommands[*commandIndex].clear();
             }
         }
 
-        return frameCanvasCommands[node.canvasCommandIndex];
+        return frameCanvasCommands[*commandIndex];
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Context::hasCanvasCommands(const Node & node, CanvasLayer layer) const noexcept
+    {
+        size_t commandIndex = node.canvasCommandIndex;
+
+        if(layer == CanvasLayer::Local && node.canvasOverlayCommandIndex != std::numeric_limits<size_t>::max())
+        {
+            return true;
+        }
+
+        if(layer == CanvasLayer::Overlay)
+        {
+            commandIndex = node.canvasOverlayCommandIndex;
+        }
+        else if(layer == CanvasLayer::Background)
+        {
+            commandIndex = node.canvasBackgroundCommandIndex;
+        }
+        else if(layer == CanvasLayer::Foreground)
+        {
+            commandIndex = node.canvasForegroundCommandIndex;
+        }
+
+        auto returnedValue = commandIndex != std::numeric_limits<size_t>::max();
+
+        return returnedValue;
     }
     //////////////////////////////////////////////////////////////////////////
     Context::FrameNodeStrings & Context::ensureNodeStrings(Node & node)
@@ -5005,6 +5062,7 @@ namespace Mosaic
             ui->frameCanvasCommands[index].clear();
         }
         ui->frameCanvasCommandCount = 0;
+        ui->canvasInteractionStates.clear();
         for(size_t index = 0; index != ui->frameNodeStringCount; ++index)
         {
             ui->frameNodeStrings[index].semanticName.clear();
@@ -5494,7 +5552,7 @@ namespace Mosaic
         ui->frame.debug.clear();
         for(size_t index = 1; index != ui->nodes.size(); ++index)
         {
-            if(ui->nodes[index].kind == Detail::NodeKind::Canvas && ui->nodes[index].canvasLayer == CanvasLayer::Background)
+            if(ui->nodes[index].kind == Detail::NodeKind::Canvas && ui->hasCanvasCommands(ui->nodes[index], CanvasLayer::Background) == true)
             {
                 ui->emitNode(index, drawList, CanvasLayer::Background);
             }
@@ -5502,7 +5560,7 @@ namespace Mosaic
         ui->emitNode(0, drawList, CanvasLayer::Local);
         for(size_t index = 1; index != ui->nodes.size(); ++index)
         {
-            if(ui->nodes[index].kind == Detail::NodeKind::Canvas && ui->nodes[index].canvasLayer == CanvasLayer::Foreground)
+            if(ui->nodes[index].kind == Detail::NodeKind::Canvas && ui->hasCanvasCommands(ui->nodes[index], CanvasLayer::Foreground) == true)
             {
                 ui->emitNode(index, drawList, CanvasLayer::Foreground);
             }
@@ -5908,6 +5966,11 @@ namespace Mosaic
                 }
 
                 if(command.type == DrawCommandType::PopClip)
+                {
+                    continue;
+                }
+
+                if(command.type == DrawCommandType::PushTransform || command.type == DrawCommandType::PopTransform)
                 {
                     continue;
                 }
@@ -8826,6 +8889,14 @@ namespace Mosaic
                     snapshot.elementCount = 1;
                     snapshot.bounds = command.payload.rectangle.bounds;
                     break;
+                case DrawCommandType::NineSlice:
+                    snapshot.elementCount = 9;
+                    snapshot.bounds = command.payload.nineSlice.bounds;
+                    break;
+                case DrawCommandType::Grid:
+                    snapshot.elementCount = 1;
+                    snapshot.bounds = command.payload.grid.bounds;
+                    break;
                 case DrawCommandType::Gradient:
                     snapshot.elementCount = 1;
                     snapshot.bounds = command.payload.gradient.bounds;
@@ -8924,6 +8995,8 @@ namespace Mosaic
                     break;
                 case DrawCommandType::PushClip:
                 case DrawCommandType::PopClip:
+                case DrawCommandType::PushTransform:
+                case DrawCommandType::PopTransform:
                     snapshot.elementCount = 1;
                     break;
                 }
@@ -10567,6 +10640,84 @@ namespace Mosaic
         return true;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool canvasPushTransform(Context * ui, Id canvas, const Transform2D & transform, StrokeScale strokeScale)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas transform target is not a canvas");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::PushTransform);
+        command.payload.transform.transform = transform;
+        command.payload.transform.strokeScale = strokeScale;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        Context::CanvasInteractionState & interaction = ui->canvasInteractionStates[canvas];
+        interaction.stack.push_back(interaction.transform);
+        Transform2D parent = interaction.transform;
+        Transform2D combined;
+        combined.translation.x = parent.translation.x + parent.axisX.x * transform.translation.x + parent.axisY.x * transform.translation.y;
+        combined.translation.y = parent.translation.y + parent.axisX.y * transform.translation.x + parent.axisY.y * transform.translation.y;
+        combined.axisX.x = parent.axisX.x * transform.axisX.x + parent.axisY.x * transform.axisX.y;
+        combined.axisX.y = parent.axisX.y * transform.axisX.x + parent.axisY.y * transform.axisX.y;
+        combined.axisY.x = parent.axisX.x * transform.axisY.x + parent.axisY.x * transform.axisY.y;
+        combined.axisY.y = parent.axisX.y * transform.axisY.x + parent.axisY.y * transform.axisY.y;
+        interaction.transform = combined;
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasPopTransform(Context * ui, Id canvas)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas transform target is not a canvas");
+
+            return false;
+        }
+
+        auto iterator = ui->canvasInteractionStates.find(canvas);
+
+        if(iterator == ui->canvasInteractionStates.end())
+        {
+            ui->frame.diagnostics.emplace_back("Canvas interaction transform stack underflow");
+
+            return false;
+        }
+
+        Context::CanvasInteractionState & interaction = iterator->second;
+
+        if(interaction.stack.empty() == true)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas interaction transform stack underflow");
+
+            return false;
+        }
+
+        DrawCommand command(DrawCommandType::PopTransform);
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+        interaction.transform = interaction.stack.back();
+        interaction.stack.pop_back();
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool canvasRects(Context * ui, Id canvas, RectInstanceSpan instances)
     {
         Context::Node * node = Detail::findCanvasNode(ui, canvas);
@@ -11556,6 +11707,93 @@ namespace Mosaic
         command.payload.rectangle.bounds = bounds;
         command.payload.rectangle.uv = uv;
         command.payload.rectangle.color = tint;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasNineSlice(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const NineSliceOptions & options, SamplerFilter sampler)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas nine-slice target is not a canvas");
+
+            return false;
+        }
+
+        if(bounds.empty() == true)
+        {
+            return true;
+        }
+
+        if(options.sourceSize.x <= 0.f || options.sourceSize.y <= 0.f)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas nine-slice source size must be positive");
+
+            return false;
+        }
+
+        RenderState state;
+        state.texture = texture;
+        state.sampler = sampler;
+        state.renderTarget = ui->viewport.renderTarget;
+        DrawCommand command(DrawCommandType::NineSlice);
+        command.renderKey = ui->internRenderState(state);
+        command.payload.nineSlice.bounds = bounds;
+        command.payload.nineSlice.options = options;
+        ui->canvasCommands(*node).emplace_back(std::move(command));
+
+        return true;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool canvasGrid(Context * ui, Id canvas, const Rect & bounds, const GridStyle & style)
+    {
+        Context::Node * node = Detail::findCanvasNode(ui, canvas);
+
+        if(node == nullptr)
+        {
+            return false;
+        }
+
+        if(node->kind != Detail::NodeKind::Canvas)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas grid target is not a canvas");
+
+            return false;
+        }
+
+        if(bounds.empty() == true)
+        {
+            return true;
+        }
+
+        if(style.minorSpacing <= 0.f || style.majorInterval == 0)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas grid spacing and major interval must be positive");
+
+            return false;
+        }
+
+        if(style.bounded == true && style.range.empty() == true)
+        {
+            ui->frame.diagnostics.emplace_back("Canvas bounded grid range must be positive");
+
+            return false;
+        }
+
+        RenderState state;
+        state.renderTarget = ui->viewport.renderTarget;
+        DrawCommand command(DrawCommandType::Grid);
+        command.renderKey = ui->internRenderState(state);
+        command.payload.grid.bounds = bounds;
+        command.payload.grid.style = style;
         ui->canvasCommands(*node).emplace_back(std::move(command));
 
         return true;

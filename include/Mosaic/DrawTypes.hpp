@@ -6,6 +6,594 @@ namespace Mosaic
 {
     inline constexpr size_t FillStopCapacity = 32;
 
+    struct Transform2D
+    {
+        Vec2 translation;
+        Vec2 axisX = {1.f, 0.f};
+        Vec2 axisY = {0.f, 1.f};
+    };
+
+    enum class StrokeScale : uint8_t
+    {
+        World,
+        Screen
+    };
+
+    enum class NineSliceMode : uint8_t
+    {
+        Stretch,
+        Tile
+    };
+
+    struct NineSliceOptions
+    {
+        Vec2 sourceSize;
+        Rect uv = {0.f, 0.f, 1.f, 1.f};
+        float left = 0.f;
+        float top = 0.f;
+        float right = 0.f;
+        float bottom = 0.f;
+        NineSliceMode edges = NineSliceMode::Stretch;
+        NineSliceMode center = NineSliceMode::Stretch;
+        Color tint = {1.f, 1.f, 1.f, 1.f};
+    };
+
+    struct GridStyle
+    {
+        Vec2 origin;
+        Vec2 axisX = {1.f, 0.f};
+        Vec2 axisY = {0.f, 1.f};
+        Rect range;
+        float minorSpacing = 16.f;
+        uint32_t majorInterval = 8;
+        float minorThickness = 1.f;
+        float majorThickness = 1.f;
+        Color minorColor = {1.f, 1.f, 1.f, 0.08f};
+        Color majorColor = {1.f, 1.f, 1.f, 0.2f};
+        StrokeScale strokeScale = StrokeScale::Screen;
+        bool bounded = false;
+    };
+
+    struct Icon
+    {
+        TextureHandle texture = 0;
+        Rect uv = {0.f, 0.f, 1.f, 1.f};
+        Vec2 logicalSize = {16.f, 16.f};
+        Color tint = {1.f, 1.f, 1.f, 1.f};
+        StringView semanticFallback;
+    };
+
+    struct HighlightedTextRange
+    {
+        size_t begin = 0;
+        size_t end = 0;
+        Color color = {1.f, 0.78f, 0.24f, 1.f};
+    };
+
+    using HighlightedTextRangeVector = Vector<HighlightedTextRange>;
+    using HighlightedTextRangeSpan = Span<const HighlightedTextRange>;
+
+    enum class EditorTransactionPhase : uint8_t
+    {
+        Begin,
+        Change,
+        Commit,
+        Cancel
+    };
+
+    struct EditorTransaction
+    {
+        Id owner = InvalidId;
+        TypeId type = 0;
+        EditorTransactionPhase phase = EditorTransactionPhase::Begin;
+        ByteSpan before;
+        ByteSpan after;
+    };
+
+    using EditorTransactionCallback = void (*)(const EditorTransaction & transaction, void * userData);
+
+    enum class TreeDropZone : uint8_t
+    {
+        None,
+        Before,
+        Inside,
+        After
+    };
+
+    struct TreeBadge
+    {
+        StringView text;
+        Color color = {0.36f, 0.62f, 0.92f, 1.f};
+    };
+
+    using TreeBadgeVector = Vector<TreeBadge>;
+    using TreeBadgeSpan = Span<const TreeBadge>;
+
+    struct TreeTrailingAction
+    {
+        Key key;
+        Icon icon;
+        StringView tooltip;
+        bool enabled = true;
+    };
+
+    using TreeTrailingActionVector = Vector<TreeTrailingAction>;
+    using TreeTrailingActionSpan = Span<const TreeTrailingAction>;
+
+    struct TreeRow
+    {
+        Key key;
+        Id item = InvalidId;
+        uint32_t depth = 0;
+        bool leaf = false;
+        bool expanded = false;
+        bool selected = false;
+        bool renameActive = false;
+        bool dragEnabled = false;
+        bool dropEnabled = false;
+        Icon leadingIcon;
+        StringView label;
+        TreeBadgeSpan badges;
+        TreeTrailingActionSpan trailingActions;
+        String * renameValue = nullptr;
+        TypeId dragType = 0;
+        ByteSpan dragPayload;
+        TypeId acceptedDropType = 0;
+        Id scrollArea = InvalidId;
+        float autoScrollMargin = 24.f;
+        float autoScrollSpeed = 320.f;
+        float autoExpandDelay = 0.65f;
+    };
+
+    using TreeRowVector = Vector<TreeRow>;
+    using TreeRowSpan = Span<const TreeRow>;
+
+    using VirtualItemExtent = float (*)(size_t item, void * userData);
+    using VirtualItemOffset = float (*)(size_t item, void * userData);
+
+    struct VirtualScrollAnchor
+    {
+        size_t item = 0;
+        size_t itemCount = 0;
+        Id identity = InvalidId;
+        float offset = 0.f;
+        bool valid = false;
+    };
+
+    using VirtualItemIdentity = Id (*)(size_t item, void * userData);
+
+    struct VirtualListOptions
+    {
+        Orientation orientation = Orientation::Vertical;
+        float fixedExtent = 0.f;
+        float estimatedExtent = 20.f;
+        float spacing = 0.f;
+        size_t overscan = 2;
+        Id scrollArea = InvalidId;
+        VirtualItemExtent extent = nullptr;
+        VirtualItemOffset offset = nullptr;
+        VirtualItemIdentity identity = nullptr;
+        void * userData = nullptr;
+        VirtualScrollAnchor * anchor = nullptr;
+        size_t scrollToItem = std::numeric_limits<size_t>::max();
+        float scrollToAlignment = 0.f;
+    };
+
+    struct VirtualListState
+    {
+        VisibleRange range;
+        size_t itemCount = 0;
+        float leadingExtent = 0.f;
+        float trailingExtent = 0.f;
+        float totalExtent = 0.f;
+    };
+
+    struct VirtualGridOptions
+    {
+        Vec2 itemSize = {96.f, 96.f};
+        Vec2 spacing = {8.f, 8.f};
+        size_t minimumColumns = 1;
+        size_t overscanRows = 1;
+        Id scrollArea = InvalidId;
+        VirtualItemIdentity identity = nullptr;
+        void * userData = nullptr;
+        VirtualScrollAnchor * anchor = nullptr;
+        size_t scrollToItem = std::numeric_limits<size_t>::max();
+        float scrollToAlignment = 0.f;
+    };
+
+    struct VirtualGridState
+    {
+        VisibleRange range;
+        size_t columns = 1;
+        size_t firstRow = 0;
+        size_t lastRow = 0;
+        float leadingExtent = 0.f;
+        float trailingExtent = 0.f;
+    };
+
+    struct ResourceTile
+    {
+        Key key;
+        Id resource = InvalidId;
+        Icon thumbnail;
+        StringView label;
+        StringView type;
+        bool selected = false;
+        bool loading = false;
+        bool error = false;
+        TypeId dragType = 0;
+        ByteSpan dragPayload;
+    };
+
+    using ResourceTileVector = Vector<ResourceTile>;
+    using ResourceTileSpan = Span<const ResourceTile>;
+
+    enum class ResourceBrowserMode : uint8_t
+    {
+        Tiles,
+        List
+    };
+
+    enum class DesignSelectionMode : uint8_t
+    {
+        None,
+        Marquee,
+        Lasso
+    };
+
+    struct DesignGuide
+    {
+        Vec2 begin;
+        Vec2 end;
+        Color color = {0.2f, 0.72f, 1.f, 0.72f};
+    };
+
+    using DesignGuideVector = Vector<DesignGuide>;
+    using DesignGuideSpan = Span<const DesignGuide>;
+
+    struct DesignSurfaceState
+    {
+        Vec2 pan;
+        float zoom = 1.f;
+        Vec2 pointerAnchor;
+        Vec2 selectionAnchor;
+        Rect selectionBounds;
+        Vec2Vector lasso;
+        bool pointerTracked = false;
+        bool selecting = false;
+    };
+
+    struct PropertyEditOptions
+    {
+        bool mixed = false;
+        bool readOnly = false;
+        bool resettable = false;
+        Validation validation = Validation::Normal;
+        StringView validationMessage;
+        Id resource = InvalidId;
+        TypeId resourceType = 0;
+    };
+
+
+    enum class GizmoKind : uint8_t
+    {
+        Point,
+        Axis,
+        Box,
+        ResizeEdge,
+        ResizeCorner,
+        Rotation,
+        Padding,
+        Gap,
+        Splitter
+    };
+
+    struct GizmoOptions
+    {
+        GizmoKind kind = GizmoKind::Point;
+        StrokeScale strokeScale = StrokeScale::Screen;
+        Color color = {0.16f, 0.65f, 1.f, 1.f};
+        float size = 8.f;
+        float thickness = 1.f;
+        bool enabled = true;
+    };
+
+    struct SnapQuery
+    {
+        Id owner = InvalidId;
+        Rect movingBounds;
+        Vec2 proposedDelta;
+        float threshold = 6.f;
+    };
+
+    struct SnapResult
+    {
+        Vec2 adjustedDelta;
+        Vec2 firstGuideBegin;
+        Vec2 firstGuideEnd;
+        Vec2 secondGuideBegin;
+        Vec2 secondGuideEnd;
+        bool snappedX = false;
+        bool snappedY = false;
+    };
+
+    using SnapProvider = bool (*)(const SnapQuery & query, SnapResult * const _out, void * userData);
+
+    enum class LayoutTrackSizeKind : uint8_t
+    {
+        Fixed,
+        Weight,
+        Content
+    };
+
+    struct LayoutBoxCell
+    {
+        Id id = InvalidId;
+        Id box = InvalidId;
+        Id parent = InvalidId;
+        Rect bounds;
+        Rect contentBounds;
+        uint32_t depth = 0;
+        int32_t renderOrder = 0;
+        LayoutTrackSizeKind sizeKind = LayoutTrackSizeKind::Weight;
+        float size = 1.f;
+        float minimumSize = 0.f;
+        float gap = 0.f;
+        EdgeInsets padding;
+        bool leaf = true;
+        bool selected = false;
+        bool safeArea = false;
+    };
+
+    using LayoutBoxCellVector = Vector<LayoutBoxCell>;
+    using LayoutBoxCellSpan = Span<const LayoutBoxCell>;
+
+    struct LayoutBoxSplitter
+    {
+        Id id = InvalidId;
+        Id box = InvalidId;
+        Id before = InvalidId;
+        Id after = InvalidId;
+        Orientation orientation = Orientation::Horizontal;
+        Rect bounds;
+        float beforeMinimum = 0.f;
+        float afterMinimum = 0.f;
+    };
+
+    using LayoutBoxSplitterVector = Vector<LayoutBoxSplitter>;
+    using LayoutBoxSplitterSpan = Span<const LayoutBoxSplitter>;
+
+    enum class LayoutBoxEditKind : uint8_t
+    {
+        None,
+        Select,
+        MoveSplitter,
+        ResizePadding,
+        ChangeGap,
+        Place
+    };
+
+    struct LayoutBoxEditOptions
+    {
+        float handleThickness = 7.f;
+        float snapThreshold = 6.f;
+        bool snapping = true;
+        bool pairedEdges = false;
+        bool snappingTemporarilyDisabled = false;
+        bool drawCellBounds = true;
+        bool drawSafeArea = true;
+    };
+
+    struct TimelineSnapQuery
+    {
+        Id owner = InvalidId;
+        double time = 0.0;
+        double threshold = 0.0;
+        bool frames = true;
+        bool keyframes = true;
+        bool markers = true;
+        bool boundaries = true;
+    };
+
+    struct TimelineSnapResult
+    {
+        double time = 0.0;
+        Id target = InvalidId;
+        bool snapped = false;
+    };
+
+    using TimelineSnapProvider = bool (*)(const TimelineSnapQuery & query, TimelineSnapResult * const _out, void * userData);
+
+    struct TimelineTrack
+    {
+        Id id = InvalidId;
+        Id parent = InvalidId;
+        uint32_t depth = 0;
+        StringView label;
+        Icon icon;
+        bool expanded = true;
+        bool selected = false;
+        bool muted = false;
+        bool locked = false;
+    };
+
+    using TimelineTrackVector = Vector<TimelineTrack>;
+    using TimelineTrackSpan = Span<const TimelineTrack>;
+
+    struct TimelineKeyframe
+    {
+        Id id = InvalidId;
+        Id track = InvalidId;
+        double time = 0.0;
+        bool selected = false;
+    };
+
+    using TimelineKeyframeVector = Vector<TimelineKeyframe>;
+    using TimelineKeyframeSpan = Span<const TimelineKeyframe>;
+
+    struct TimelineState
+    {
+        double visibleBegin = 0.0;
+        double visibleEnd = 10.0;
+        double playhead = 0.0;
+        double workBegin = 0.0;
+        double workEnd = 10.0;
+        double loopBegin = 0.0;
+        double loopEnd = 10.0;
+        float trackWidth = 240.f;
+        float trackHeight = 22.f;
+        float trackScroll = 0.f;
+    };
+
+    struct TimelineOptions
+    {
+        LayoutOptions layout;
+        DoubleSpan markers;
+        TimelineSnapProvider snapProvider = nullptr;
+        void * snapUserData = nullptr;
+        double frameRate = 60.0;
+        float snapThreshold = 6.f;
+        bool snapFrames = true;
+        bool snapKeyframes = true;
+        bool snapMarkers = true;
+        bool snapBoundaries = true;
+        bool allowDuplicate = true;
+        bool allowScale = true;
+    };
+
+    struct TimelineResponse
+    {
+        Id item = InvalidId;
+        double time = 0.0;
+        double timeDelta = 0.0;
+        double selectionBegin = 0.0;
+        double selectionEnd = 0.0;
+        double scale = 1.0;
+        Rect selectionBounds;
+        size_t firstSelectedTrack = std::numeric_limits<size_t>::max();
+        size_t lastSelectedTrack = std::numeric_limits<size_t>::max();
+        EditorTransactionPhase phase = EditorTransactionPhase::Change;
+        bool playheadChanged = false;
+        bool keyframesChanged = false;
+        bool marquee = false;
+        bool selectionFinished = false;
+        bool duplicateRequested = false;
+        bool scaleRequested = false;
+        bool snapped = false;
+    };
+
+    struct CurvePoint
+    {
+        Id id = InvalidId;
+        Vec2 value;
+        Vec2 incomingTangent;
+        Vec2 outgoingTangent;
+        Color color = {0.3f, 0.75f, 1.f, 1.f};
+        bool selected = false;
+    };
+
+    using CurvePointVector = Vector<CurvePoint>;
+    using CurvePointSpan = Span<const CurvePoint>;
+
+    struct CurveEditorResponse
+    {
+        Id point = InvalidId;
+        enum class Handle : uint8_t
+        {
+            Point,
+            IncomingTangent,
+            OutgoingTangent
+        } handle = Handle::Point;
+        Vec2 delta;
+        Rect selectionBounds;
+        EditorTransactionPhase phase = EditorTransactionPhase::Change;
+        bool changed = false;
+        bool boxSelection = false;
+    };
+
+    struct CurveEditorOptions
+    {
+        LayoutOptions layout;
+        float pointRadius = 5.f;
+        float tangentRadius = 4.f;
+        float hitRadius = 9.f;
+        bool editTangents = true;
+        bool boxSelection = true;
+    };
+
+    enum class NodePinDirection : uint8_t
+    {
+        Input,
+        Output
+    };
+
+    struct NodePin
+    {
+        Id id = InvalidId;
+        Id node = InvalidId;
+        TypeId type = 0;
+        NodePinDirection direction = NodePinDirection::Input;
+        StringView label;
+        Color color = {0.5f, 0.7f, 1.f, 1.f};
+    };
+
+    using NodePinVector = Vector<NodePin>;
+    using NodePinSpan = Span<const NodePin>;
+
+    struct GraphNode
+    {
+        Id id = InvalidId;
+        Rect bounds;
+        StringView title;
+        Icon icon;
+        NodePinSpan pins;
+        bool selected = false;
+    };
+
+    using GraphNodeVector = Vector<GraphNode>;
+    using GraphNodeSpan = Span<const GraphNode>;
+
+    struct GraphLink
+    {
+        Id id = InvalidId;
+        Id outputPin = InvalidId;
+        Id inputPin = InvalidId;
+        Color color = {0.5f, 0.7f, 1.f, 1.f};
+    };
+
+    using GraphLinkVector = Vector<GraphLink>;
+    using GraphLinkSpan = Span<const GraphLink>;
+
+    using NodeConnectionValidator = bool (*)(const NodePin & output, const NodePin & input, void * userData);
+
+    struct NodeGraphOptions
+    {
+        LayoutOptions layout;
+        NodeConnectionValidator connectionValidator = nullptr;
+        void * connectionUserData = nullptr;
+        Vec2 minimapSize = {180.f, 120.f};
+        float pinHitRadius = 10.f;
+        bool showMinimap = true;
+        bool allowConnections = true;
+    };
+
+    struct NodeGraphResponse
+    {
+        Id node = InvalidId;
+        Id pin = InvalidId;
+        Id link = InvalidId;
+        Id outputPin = InvalidId;
+        Id inputPin = InvalidId;
+        Vec2 delta;
+        Vec2 connectionPosition;
+        EditorTransactionPhase phase = EditorTransactionPhase::Change;
+        bool connectionPreview = false;
+        bool connectionCommitted = false;
+        bool connectionAccepted = false;
+        bool minimapInteracted = false;
+    };
+
     enum class FillType : uint8_t
     {
         Solid,

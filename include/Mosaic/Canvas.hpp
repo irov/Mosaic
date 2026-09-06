@@ -8,6 +8,7 @@ namespace Mosaic
     enum class CanvasLayer : uint8_t
     {
         Local,
+        Overlay,
         Background,
         Foreground
     };
@@ -21,6 +22,8 @@ namespace Mosaic
         [[nodiscard]] bool localPointerPosition(Vec2 * const _out) const noexcept;
         [[nodiscard]] bool focused() const noexcept;
         bool setLayer(CanvasLayer layer) noexcept;
+        bool pushTransform(const Transform2D & transform, StrokeScale strokeScale = StrokeScale::World);
+        bool popTransform();
 
         bool rect(const Rect & bounds, const Color & color);
         bool rects(RectInstanceSpan instances);
@@ -52,6 +55,8 @@ namespace Mosaic
         bool pushClip(const Rect & bounds);
         bool popClip();
         bool image(TextureHandle texture, const Rect & bounds, const Rect & uv = {0.f, 0.f, 1.f, 1.f}, const Color & tint = {1.f, 1.f, 1.f, 1.f}, SamplerFilter sampler = SamplerFilter::Linear);
+        bool nineSlice(TextureHandle texture, const Rect & bounds, const NineSliceOptions & options, SamplerFilter sampler = SamplerFilter::Linear);
+        bool grid(const Rect & bounds, const GridStyle & style);
         bool custom(VertexSpan vertices, IndexSpan indices, const RenderState & state = {});
     };
 } // namespace Mosaic

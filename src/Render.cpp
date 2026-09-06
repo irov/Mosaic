@@ -178,7 +178,7 @@ namespace Mosaic
     {
         Node & node = nodes[index];
 
-        if(node.kind == Detail::NodeKind::Canvas && node.canvasLayer != canvasPass)
+        if(node.kind == Detail::NodeKind::Canvas && hasCanvasCommands(node, canvasPass) == false)
         {
             if(canvasPass == CanvasLayer::Local)
             {
@@ -304,7 +304,7 @@ namespace Mosaic
         drawList.setAlphaMultiplier(nodeAlpha);
         Color textColor = node.disabled ? node.style->colors.textDisabled : node.style->colors.text;
         RenderState baseState;
-        baseState.clip = node.kind == Detail::NodeKind::Canvas && node.canvasLayer != CanvasLayer::Local ? viewport.bounds : node.visualClip;
+        baseState.clip = node.kind == Detail::NodeKind::Canvas && canvasPass != CanvasLayer::Local ? viewport.bounds : node.visualClip;
         baseState.blend = BlendMode::PremultipliedAlpha;
         baseState.renderTarget = viewport.renderTarget;
         float physicalPixel = 1.f / std::max(1.f, viewport.dpiScale);
@@ -1435,11 +1435,12 @@ namespace Mosaic
             break;
         case Detail::NodeKind::Canvas:
         {
-            drawList.pushClip(node.canvasLayer == CanvasLayer::Local ? node.clip : viewport.bounds, baseKey);
-            DrawCommandVector & commands = canvasCommands(node);
+            drawList.pushClip(canvasPass == CanvasLayer::Local ? node.clip : viewport.bounds, baseKey);
+            DrawCommandVector & commands = canvasCommands(node, canvasPass);
             Vec2 offset = {node.content.x, node.content.y};
-            Rect canvasClip = node.canvasLayer == CanvasLayer::Local ? node.clip : viewport.bounds;
-            auto emitCommand = [this, &drawList, baseKey, &offset, &canvasClip](DrawCommand & command)
+            Rect canvasClip = canvasPass == CanvasLayer::Local ? node.clip : viewport.bounds;
+            uint32_t transformDepth = 0;
+            auto emitCommand = [this, &drawList, baseKey, &offset, &canvasClip, &transformDepth](DrawCommand & command)
             {
                 if(command.renderKey == 0)
                 {
@@ -1465,77 +1466,148 @@ namespace Mosaic
 
                 switch(command.type)
                 {
+                case DrawCommandType::PushTransform:
+                    if(transformDepth == 0)
+                    {
+                        command.payload.transform.transform.translation = command.payload.transform.transform.translation + offset;
+                    }
+
+                    ++transformDepth;
+                    break;
+                case DrawCommandType::PopTransform:
+                    if(transformDepth != 0)
+                    {
+                        --transformDepth;
+                    }
+
+                    break;
                 case DrawCommandType::Rect:
                 case DrawCommandType::RoundedRect:
                 case DrawCommandType::Image:
                 case DrawCommandType::PushClip:
-                    command.payload.rectangle.bounds.x += offset.x;
-                    command.payload.rectangle.bounds.y += offset.y;
+                    if(transformDepth == 0)
+                    {
+                        command.payload.rectangle.bounds.x += offset.x;
+                        command.payload.rectangle.bounds.y += offset.y;
+                    }
+
                     break;
                 case DrawCommandType::RectBatch:
-                    for(RectInstance & instance : drawCommandStorage.mutableRectangleSpan(command.payload.rectBatch.instances))
+                    if(transformDepth == 0)
                     {
-                        instance.bounds.x += offset.x;
-                        instance.bounds.y += offset.y;
-                    }
-                    break;
-                case DrawCommandType::QuadBatch:
-                    for(QuadInstance & instance : drawCommandStorage.mutableQuadSpan(command.payload.quadBatch.instances))
-                    {
-                        for(Vertex & vertex : instance.vertices)
+                        for(RectInstance & instance : drawCommandStorage.mutableRectangleSpan(command.payload.rectBatch.instances))
                         {
-                            vertex.position = vertex.position + offset;
+                            instance.bounds.x += offset.x;
+                            instance.bounds.y += offset.y;
                         }
                     }
+
+                    break;
+                case DrawCommandType::QuadBatch:
+                    if(transformDepth == 0)
+                    {
+                        for(QuadInstance & instance : drawCommandStorage.mutableQuadSpan(command.payload.quadBatch.instances))
+                        {
+                            for(Vertex & vertex : instance.vertices)
+                            {
+                                vertex.position = vertex.position + offset;
+                            }
+                        }
+                    }
+
                     break;
                 case DrawCommandType::Box:
-                    command.payload.box.bounds.x += offset.x;
-                    command.payload.box.bounds.y += offset.y;
-
-                    if(command.payload.box.style.fill.type != FillType::Solid)
+                    if(transformDepth == 0)
                     {
-                        command.payload.box.style.fill.from = command.payload.box.style.fill.from + offset;
+                        command.payload.box.bounds.x += offset.x;
+                        command.payload.box.bounds.y += offset.y;
 
-                        if(command.payload.box.style.fill.type == FillType::Linear)
+                        if(command.payload.box.style.fill.type != FillType::Solid)
                         {
-                            command.payload.box.style.fill.to = command.payload.box.style.fill.to + offset;
+                            command.payload.box.style.fill.from = command.payload.box.style.fill.from + offset;
+
+                            if(command.payload.box.style.fill.type == FillType::Linear)
+                            {
+                                command.payload.box.style.fill.to = command.payload.box.style.fill.to + offset;
+                            }
                         }
                     }
 
                     break;
                 case DrawCommandType::Gradient:
-                    command.payload.gradient.bounds.x += offset.x;
-                    command.payload.gradient.bounds.y += offset.y;
+                    if(transformDepth == 0)
+                    {
+                        command.payload.gradient.bounds.x += offset.x;
+                        command.payload.gradient.bounds.y += offset.y;
+                    }
+
                     break;
                 case DrawCommandType::Line:
-                    command.payload.line.first = command.payload.line.first + offset;
-                    command.payload.line.second = command.payload.line.second + offset;
+                    if(transformDepth == 0)
+                    {
+                        command.payload.line.first = command.payload.line.first + offset;
+                        command.payload.line.second = command.payload.line.second + offset;
+                    }
+
                     break;
                 case DrawCommandType::Polyline:
-                    for(Vec2 & point : drawCommandStorage.mutablePointSpan(command.payload.polyline.points))
+                    if(transformDepth == 0)
                     {
-                        point = point + offset;
+                        for(Vec2 & point : drawCommandStorage.mutablePointSpan(command.payload.polyline.points))
+                        {
+                            point = point + offset;
+                        }
                     }
+
                     break;
                 case DrawCommandType::Path:
-                    command.payload.path.center = command.payload.path.center + offset;
-                    for(Vec2 & point : drawCommandStorage.mutablePointSpan(command.payload.path.points))
+                    if(transformDepth == 0)
                     {
-                        point = point + offset;
+                        command.payload.path.center = command.payload.path.center + offset;
+                        for(Vec2 & point : drawCommandStorage.mutablePointSpan(command.payload.path.points))
+                        {
+                            point = point + offset;
+                        }
+                        for(ColoredPoint & point : drawCommandStorage.mutableColoredPointSpan(command.payload.path.coloredPoints))
+                        {
+                            point.position = point.position + offset;
+                        }
                     }
-                    for(ColoredPoint & point : drawCommandStorage.mutableColoredPointSpan(command.payload.path.coloredPoints))
-                    {
-                        point.position = point.position + offset;
-                    }
+
                     break;
                 case DrawCommandType::CustomGeometry:
-                    for(Vertex & vertex : drawCommandStorage.mutableVertexSpan(command.payload.custom.vertices))
+                    if(transformDepth == 0)
                     {
-                        vertex.position = vertex.position + offset;
+                        for(Vertex & vertex : drawCommandStorage.mutableVertexSpan(command.payload.custom.vertices))
+                        {
+                            vertex.position = vertex.position + offset;
+                        }
                     }
+
                     break;
                 case DrawCommandType::TextGeometry:
-                    command.payload.textGeometry.translation = command.payload.textGeometry.translation + offset;
+                    if(transformDepth == 0)
+                    {
+                        command.payload.textGeometry.translation = command.payload.textGeometry.translation + offset;
+                    }
+
+                    break;
+                case DrawCommandType::NineSlice:
+                    if(transformDepth == 0)
+                    {
+                        command.payload.nineSlice.bounds.x += offset.x;
+                        command.payload.nineSlice.bounds.y += offset.y;
+                    }
+
+                    break;
+                case DrawCommandType::Grid:
+                    if(transformDepth == 0)
+                    {
+                        command.payload.grid.bounds.x += offset.x;
+                        command.payload.grid.bounds.y += offset.y;
+                        command.payload.grid.style.origin = command.payload.grid.style.origin + offset;
+                    }
+
                     break;
                 case DrawCommandType::PopClip:
                     break;
@@ -1546,6 +1618,17 @@ namespace Mosaic
             for(DrawCommand & command : commands)
             {
                 emitCommand(command);
+            }
+
+            if(canvasPass == CanvasLayer::Local && hasCanvasCommands(node, CanvasLayer::Overlay) == true)
+            {
+                transformDepth = 0;
+                DrawCommandVector & overlayCommands = canvasCommands(node, CanvasLayer::Overlay);
+
+                for(DrawCommand & command : overlayCommands)
+                {
+                    emitCommand(command);
+                }
             }
 
             drawList.popClip(baseKey);
@@ -1741,7 +1824,7 @@ namespace Mosaic
 
         emitMetadata();
 
-        if(node.kind != Detail::NodeKind::Canvas || node.canvasLayer == CanvasLayer::Local)
+        if(node.kind != Detail::NodeKind::Canvas || canvasPass == CanvasLayer::Local)
         {
             emitChildren();
         }

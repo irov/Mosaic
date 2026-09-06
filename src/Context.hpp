@@ -496,6 +496,49 @@ namespace Mosaic
             bool colorMarkerEnabled : 1 = false;
         };
 
+        struct CanvasInteractionState
+        {
+            Transform2D transform;
+            Vector<Transform2D> stack;
+        };
+
+        struct PropertyEditorRegistration
+        {
+            PropertyEditorCallback callback = nullptr;
+            void * userData = nullptr;
+        };
+
+        struct CurveEditorInteractionState
+        {
+            Id point = InvalidId;
+            CurveEditorResponse::Handle handle = CurveEditorResponse::Handle::Point;
+            Vec2 selectionAnchor;
+            bool boxSelecting = false;
+        };
+
+        struct TimelineInteractionState
+        {
+            Vec2 selectionAnchor;
+            Rect selectionBounds;
+            Vec2 keyframePointerAnchor;
+            double selectionBegin = 0.0;
+            double selectionEnd = 0.0;
+            double keyframeBeginTime = 0.0;
+            double keyframeTime = 0.0;
+            size_t firstSelectedTrack = std::numeric_limits<size_t>::max();
+            size_t lastSelectedTrack = std::numeric_limits<size_t>::max();
+            Id keyframe = InvalidId;
+            bool selecting = false;
+        };
+
+        struct NodeGraphInteractionState
+        {
+            Id pin = InvalidId;
+            TypeId type = 0;
+            NodePinDirection direction = NodePinDirection::Input;
+            bool connecting = false;
+        };
+
         struct Node
         {
             Detail::NodeKind kind = Detail::NodeKind::Scope;
@@ -608,6 +651,9 @@ namespace Mosaic
             const CachedText * textRun = nullptr;
             const CachedText * valueTextRun = nullptr;
             size_t canvasCommandIndex = std::numeric_limits<size_t>::max();
+            size_t canvasOverlayCommandIndex = std::numeric_limits<size_t>::max();
+            size_t canvasBackgroundCommandIndex = std::numeric_limits<size_t>::max();
+            size_t canvasForegroundCommandIndex = std::numeric_limits<size_t>::max();
             CanvasLayer canvasLayer = CanvasLayer::Local;
             size_t frameStringIndex = std::numeric_limits<size_t>::max();
 
@@ -1403,6 +1449,15 @@ namespace Mosaic
         size_t frameCanvasCommandCount = 0;
         Detail::FrameRenderDataPtrVector frameRenderData;
         size_t frameRenderDataCount = 0;
+        UnorderedMap<Id, CanvasInteractionState> canvasInteractionStates;
+        UnorderedMap<TypeId, PropertyEditorRegistration> propertyEditors;
+        UnorderedMap<Id, Id> editorActiveItems;
+        UnorderedMap<Id, TimelineInteractionState> timelineInteractions;
+        UnorderedMap<Id, CurveEditorInteractionState> curveEditorInteractions;
+        UnorderedMap<Id, NodeGraphInteractionState> nodeGraphInteractions;
+        UnorderedMap<Id, size_t> treeViewPendingFocus;
+        EditorTransactionCallback editorTransactionCallback = nullptr;
+        void * editorTransactionUserData = nullptr;
         FrameNodeStringVector frameNodeStrings;
         size_t frameNodeStringCount = 0;
         Id activeBoxSelection = InvalidId;
@@ -1545,6 +1600,8 @@ namespace Mosaic
         void updateInteractionScrollAnimations();
         void routeInteractionWheel();
         [[nodiscard]] DrawCommandVector & canvasCommands(Node & node);
+        [[nodiscard]] DrawCommandVector & canvasCommands(Node & node, CanvasLayer layer);
+        [[nodiscard]] bool hasCanvasCommands(const Node & node, CanvasLayer layer) const noexcept;
         [[nodiscard]] FrameNodeStrings & ensureNodeStrings(Node & node);
         [[nodiscard]] String & nodeSemanticValue(Node & node);
         [[nodiscard]] StringView nodeSemanticValue(const Node & node) const noexcept;

@@ -180,6 +180,30 @@ namespace Mosaic
         return result;
     }
     //////////////////////////////////////////////////////////////////////////
+    bool Canvas::pushTransform(const Transform2D & transform, StrokeScale strokeScale)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasPushTransform(m_context, m_id, transform, strokeScale);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::popTransform()
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasPopTransform(m_context, m_id);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
     bool Canvas::rect(const Rect & bounds, const Color & color)
     {
         if(m_context == nullptr)
@@ -548,6 +572,30 @@ namespace Mosaic
         }
 
         bool result = Mosaic::canvasImage(m_context, m_id, texture, bounds, uv, tint, sampler);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::nineSlice(TextureHandle texture, const Rect & bounds, const NineSliceOptions & options, SamplerFilter sampler)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasNineSlice(m_context, m_id, texture, bounds, options, sampler);
+
+        return result;
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool Canvas::grid(const Rect & bounds, const GridStyle & style)
+    {
+        if(m_context == nullptr)
+        {
+            return false;
+        }
+
+        bool result = Mosaic::canvasGrid(m_context, m_id, bounds, style);
 
         return result;
     }

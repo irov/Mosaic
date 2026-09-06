@@ -160,6 +160,7 @@ namespace Mosaic
     using FloatVector = Vector<float>;
     using FloatSpan = Span<float>;
     using ConstFloatSpan = Span<const float>;
+    using DoubleSpan = Span<const double>;
     using Int32Span = Span<int32_t>;
     using StringVector = Vector<String>;
     using StringViewVector = Vector<StringView>;

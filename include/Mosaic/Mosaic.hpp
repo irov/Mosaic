@@ -213,6 +213,130 @@ namespace Mosaic
         }
     };
 
+    struct TreeRowResponse
+    {
+        Response response;
+        TreeDropZone dropZone = TreeDropZone::None;
+        Id activatedAction = InvalidId;
+        bool toggleExpanded = false;
+        bool beginRename = false;
+        bool renameChanged = false;
+        bool renameCommitted = false;
+        bool renameCancelled = false;
+        bool beginDrag = false;
+        bool dropped = false;
+        bool autoExpand = false;
+        float autoScrollDelta = 0.f;
+    };
+
+    struct TreeViewRowResponse
+    {
+        size_t index = 0;
+        TreeRowResponse row;
+    };
+
+    using TreeViewRowResponseVector = Vector<TreeViewRowResponse>;
+
+    struct TreeViewResponse
+    {
+        Id id = InvalidId;
+        VisibleRange visibleRows;
+        TreeViewRowResponseVector rows;
+        size_t navigationItem = std::numeric_limits<size_t>::max();
+        bool navigationRequested = false;
+    };
+
+    struct ResourceTileResponse
+    {
+        Response response;
+        bool activated = false;
+        bool beginDrag = false;
+    };
+
+    struct ResourceBrowserItemResponse
+    {
+        size_t index = 0;
+        ResourceTileResponse item;
+    };
+
+    using ResourceBrowserItemResponseVector = Vector<ResourceBrowserItemResponse>;
+
+    struct ResourceBrowserResponse
+    {
+        Id id = InvalidId;
+        VisibleRange visibleItems;
+        ResourceBrowserItemResponseVector items;
+    };
+
+    struct DesignSurfaceOptions
+    {
+        LayoutOptions layout;
+        PointerButton panButton = PointerButton::Middle;
+        float minimumZoom = 0.05f;
+        float maximumZoom = 32.f;
+        float wheelZoomSpeed = 0.12f;
+        float autoPanMargin = 24.f;
+        float autoPanSpeed = 360.f;
+        float rulerSize = 20.f;
+        DesignSelectionMode selectionMode = DesignSelectionMode::Marquee;
+        DesignGuideSpan guides;
+        bool drawGrid = true;
+        bool drawRulers = false;
+        GridStyle grid;
+    };
+
+    struct DesignSurfaceResponse
+    {
+        Response response;
+        Rect bounds;
+        Transform2D worldTransform;
+        Vec2 pointerWorld;
+        Vec2 panDelta;
+        Rect selectionBounds;
+        Vec2Span lasso;
+        float zoomDelta = 0.f;
+        bool panning = false;
+        bool marquee = false;
+        bool lassoChanged = false;
+        bool autoPanning = false;
+        bool selectionFinished = false;
+    };
+
+    struct GizmoResponse
+    {
+        Response response;
+        Vec2 delta;
+        float scalarDelta = 0.f;
+        EditorTransactionPhase phase = EditorTransactionPhase::Change;
+    };
+
+    struct LayoutBoxEditResponse
+    {
+        Response response;
+        LayoutBoxEditKind kind = LayoutBoxEditKind::None;
+        Id item = InvalidId;
+        Id before = InvalidId;
+        Id after = InvalidId;
+        Vec2 delta;
+        float snapRatio = 0.f;
+        EditorTransactionPhase phase = EditorTransactionPhase::Change;
+        bool paired = false;
+        bool snapped = false;
+    };
+
+    struct PropertyEditResponse
+    {
+        Response value;
+        Response reset;
+        Response resourcePicker;
+        EditorTransactionPhase phase = EditorTransactionPhase::Change;
+        bool changed = false;
+        bool resetRequested = false;
+        bool resourcePickerRequested = false;
+    };
+
+    using PropertyEditorCallback = Response (*)(Context * ui, StringView label, void * value, const PropertyEditOptions & options, void * userData);
+
     struct ItemQueryOptions
     {
         bool rectOnly = false;
@@ -1485,6 +1609,36 @@ namespace Mosaic
         SelectableOptions item;
     };
 
+    struct TreeViewOptions
+    {
+        LayoutOptions layout;
+        ScrollOptions scroll;
+        SelectionOptions selection;
+        VirtualScrollAnchor * anchor = nullptr;
+        IdSpan orderedItems;
+        size_t overscan = 3;
+        size_t scrollToItem = std::numeric_limits<size_t>::max();
+        float scrollToAlignment = 0.f;
+    };
+
+    struct ResourceBrowserOptions
+    {
+        LayoutOptions layout;
+        ScrollOptions scroll;
+        SelectionOptions selection;
+        VirtualScrollAnchor * anchor = nullptr;
+        IdSpan orderedItems;
+        ResourceBrowserMode mode = ResourceBrowserMode::Tiles;
+        Vec2 tileSize = {128.f, 144.f};
+        Vec2 tileSpacing = {8.f, 8.f};
+        size_t minimumColumns = 1;
+        size_t overscan = 2;
+        size_t scrollToItem = std::numeric_limits<size_t>::max();
+        float scrollToAlignment = 0.f;
+        float listRowHeight = 24.f;
+        float availableWidth = 0.f;
+    };
+
     struct SplitOptions
     {
         float minimumFirst = 80.f;
@@ -1638,6 +1792,21 @@ namespace Mosaic
     Response image(Context * ui, TextureHandle texture, const Vec2 & size, const ImageOptions & options, const SourceLocation & location = SourceLocation::current());
     Response imageButton(Context * ui, const Key & key, TextureHandle texture, const Vec2 & size, const SourceLocation & location = SourceLocation::current());
     Response imageButton(Context * ui, const Key & key, TextureHandle texture, const Vec2 & size, const ImageButtonOptions & options, const SourceLocation & location = SourceLocation::current());
+    Response icon(Context * ui, const Icon & value, const SourceLocation & location = SourceLocation::current());
+    Response highlightedText(Context * ui, StringView value, HighlightedTextRangeSpan ranges, const SourceLocation & location = SourceLocation::current());
+    TreeRowResponse treeRow(Context * ui, const TreeRow & row, SelectionModel * selection = nullptr, IdSpan orderedItems = {}, const SelectionOptions & selectionOptions = {}, const SourceLocation & location = SourceLocation::current());
+    bool treeView(Context * ui, const Key & key, StringView label, TreeRowSpan rows, SelectionModel * selection, TreeViewResponse * const _out, const TreeViewOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] bool beginVirtualList(Context * ui, size_t itemCount, const VirtualListOptions & options, VirtualListState * const _out, const SourceLocation & location = SourceLocation::current());
+    void endVirtualList(Context * ui, const VirtualListState & state, const VirtualListOptions & options, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] bool beginVirtualGrid(Context * ui, size_t itemCount, float availableWidth, const VirtualGridOptions & options, VirtualGridState * const _out, const SourceLocation & location = SourceLocation::current());
+    void endVirtualGrid(Context * ui, const VirtualGridState & state, const VirtualGridOptions & options, const SourceLocation & location = SourceLocation::current());
+    ResourceTileResponse resourceTile(Context * ui, const ResourceTile & tile, SelectionModel * selection = nullptr, IdSpan orderedItems = {}, const SourceLocation & location = SourceLocation::current());
+    bool resourceBrowser(Context * ui, const Key & key, StringView label, ResourceTileSpan resources, SelectionModel * selection, ResourceBrowserResponse * const _out, const ResourceBrowserOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    Response typeBadge(Context * ui, StringView type, const Color & color, const SourceLocation & location = SourceLocation::current());
+    Response filterChip(Context * ui, const Key & key, StringView label, bool * removed = nullptr, const SourceLocation & location = SourceLocation::current());
+    Response thumbnailPlaceholder(Context * ui, const Key & key, const Vec2 & size, StringView label = {}, const SourceLocation & location = SourceLocation::current());
+    Response thumbnailPlaceholder(Context * ui, const Vec2 & size, StringView label = {}, const SourceLocation & location = SourceLocation::current());
+    Response editorStateMessage(Context * ui, StringView title, StringView detail, const Icon & iconValue = {}, const SourceLocation & location = SourceLocation::current());
     Response inputText(Context * ui, StringView label, String * value, const TextInputOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response inputMultiline(Context * ui, StringView label, String * value, const TextInputOptions & options = {}, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
     Response inputInt(Context * ui, StringView label, int8_t * value, int8_t step = 1, int8_t fastStep = 10, const SourceLocation & location = SourceLocation::current());
@@ -1666,6 +1835,23 @@ namespace Mosaic
     [[nodiscard]] TreeScope treeNode(Context * ui, const Key & key, StringView label, SelectionModel * selection, Id item, IdSpan orderedItems, const TreeNodeOptions & treeOptions = {}, const SelectionOptions & selectionOptions = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Canvas canvas(Context * ui, StringView label, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     [[nodiscard]] Canvas canvas(Context * ui, const Key & key, StringView label, const LayoutOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    [[nodiscard]] Canvas beginDesignSurface(Context * ui, const Key & key, StringView label, DesignSurfaceState * state, const DesignSurfaceOptions & options, DesignSurfaceResponse * const _out = nullptr, const SourceLocation & location = SourceLocation::current());
+    bool endDesignSurface(Canvas * surface);
+    GizmoResponse gizmo(Context * ui, Canvas & canvasValue, const Key & key, const Rect & bounds, const GizmoOptions & options = {}, SnapProvider snapProvider = nullptr, void * snapUserData = nullptr, const SourceLocation & location = SourceLocation::current());
+    LayoutBoxEditResponse layoutBoxEditor(Context * ui, Canvas & canvasValue, const Key & key, LayoutBoxCellSpan cells, LayoutBoxSplitterSpan splitters, const LayoutBoxEditOptions & options = {}, SnapProvider snapProvider = nullptr, void * snapUserData = nullptr, const SourceLocation & location = SourceLocation::current());
+    Response timeline(Context * ui, const Key & key, StringView label, TimelineTrackSpan tracks, TimelineKeyframeSpan keyframes, TimelineState * state, TimelineResponse * const _out = nullptr, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
+    Response timeline(Context * ui, const Key & key, StringView label, TimelineTrackSpan tracks, TimelineKeyframeSpan keyframes, TimelineState * state, const TimelineOptions & options, TimelineResponse * const _out = nullptr, const SourceLocation & location = SourceLocation::current());
+    Response curveEditor(Context * ui, const Key & key, StringView label, CurvePointSpan points, const Rect & valueRange, CurveEditorResponse * const _out = nullptr, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
+    Response curveEditor(Context * ui, const Key & key, StringView label, CurvePointSpan points, const Rect & valueRange, const CurveEditorOptions & options, CurveEditorResponse * const _out = nullptr, const SourceLocation & location = SourceLocation::current());
+    Response nodeGraph(Context * ui, const Key & key, StringView label, GraphNodeSpan nodes, GraphLinkSpan links, DesignSurfaceState * state, NodeGraphResponse * const _out = nullptr, const LayoutOptions & layout = {}, const SourceLocation & location = SourceLocation::current());
+    Response nodeGraph(Context * ui, const Key & key, StringView label, GraphNodeSpan nodes, GraphLinkSpan links, DesignSurfaceState * state, const NodeGraphOptions & options, NodeGraphResponse * const _out = nullptr, const SourceLocation & location = SourceLocation::current());
+    void setEditorTransactionCallback(Context * ui, EditorTransactionCallback callback, void * userData = nullptr) noexcept;
+    bool emitEditorTransaction(Context * ui, const EditorTransaction & transaction);
+    bool registerPropertyEditor(Context * ui, TypeId type, PropertyEditorCallback callback, void * userData = nullptr);
+    void unregisterPropertyEditor(Context * ui, TypeId type) noexcept;
+    PropertyEditResponse propertyEditor(Context * ui, const Key & key, TypeId type, StringView label, void * value, const PropertyEditOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    Response customProperty(Context * ui, const Key & key, TypeId type, StringView label, void * value, const PropertyEditOptions & options = {}, const SourceLocation & location = SourceLocation::current());
+    Response customProperty(Context * ui, TypeId type, StringView label, void * value, const PropertyEditOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragValue(Context * ui, StringView label, float * value, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragValue(Context * ui, StringView label, double * value, const SliderOptions & options = {}, const SourceLocation & location = SourceLocation::current());
     Response dragRange(Context * ui, StringView label, float * minimumValue, float * maximumValue, float lowerBound, float upperBound, const RangeOptions & options = {}, const SourceLocation & location = SourceLocation::current());
@@ -1985,6 +2171,8 @@ namespace Mosaic
     [[nodiscard]] Fill conicFill(const Vec2 & center, float startAngle, FillStopSpan stops, FillSpread spread = FillSpread::Repeat) noexcept;
 
     bool canvasRect(Context * ui, Id canvas, const Rect & bounds, const Color & color);
+    bool canvasPushTransform(Context * ui, Id canvas, const Transform2D & transform, StrokeScale strokeScale = StrokeScale::World);
+    bool canvasPopTransform(Context * ui, Id canvas);
     bool canvasRects(Context * ui, Id canvas, RectInstanceSpan instances);
     bool canvasQuads(Context * ui, Id canvas, QuadInstanceSpan instances);
     bool canvasBox(Context * ui, Id canvas, const Rect & bounds, const BoxStyle & style);
@@ -2013,6 +2201,8 @@ namespace Mosaic
     bool canvasPushClip(Context * ui, Id canvas, const Rect & bounds);
     bool canvasPopClip(Context * ui, Id canvas);
     bool canvasImage(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const Rect & uv, const Color & tint, SamplerFilter sampler = SamplerFilter::Linear);
+    bool canvasNineSlice(Context * ui, Id canvas, TextureHandle texture, const Rect & bounds, const NineSliceOptions & options, SamplerFilter sampler = SamplerFilter::Linear);
+    bool canvasGrid(Context * ui, Id canvas, const Rect & bounds, const GridStyle & style);
     bool canvasCustom(Context * ui, Id canvas, VertexSpan vertices, IndexSpan indices, const RenderState & state);
     bool canvasSetLayer(Context * ui, Id canvas, CanvasLayer layer) noexcept;
 } // namespace Mosaic
