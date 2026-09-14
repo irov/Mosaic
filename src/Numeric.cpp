@@ -1,8 +1,8 @@
+#include "Charconv.hpp"
 #include "Context.hpp"
 #include "Utility.hpp"
 
 #include <bit>
-#include <charconv>
 #include <cmath>
 #include <cctype>
 #include <limits>
@@ -40,7 +40,7 @@ namespace Mosaic
 
                 using Unsigned = std::make_unsigned_t<T>;
                 Unsigned parsed{};
-                auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, 16);
+                auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed, 16);
 
                 if(result.ec != std::errc{})
                 {
@@ -66,7 +66,7 @@ namespace Mosaic
             }
 
             T parsed{};
-            auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+            auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed);
 
             if(result.ec != std::errc{})
             {
@@ -98,7 +98,7 @@ namespace Mosaic
             }
 
             T parsed{};
-            auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, std::chars_format::general);
+            auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed);
 
             if(result.ec != std::errc{})
             {
@@ -139,7 +139,7 @@ namespace Mosaic
             using Unsigned = std::make_unsigned_t<T>;
             Unsigned unsignedValue = std::is_signed_v<T> ? std::bit_cast<Unsigned>(value) : value;
             Array<char, sizeof(T) * 2 + 1> buffer{};
-            auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), unsignedValue, 16);
+            auto result = Detail::toChars(buffer.data(), buffer.data() + buffer.size(), unsignedValue, 16);
 
             if(result.ec != std::errc{})
             {

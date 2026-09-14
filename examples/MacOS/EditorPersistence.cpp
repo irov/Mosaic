@@ -1,6 +1,6 @@
 #include "EditorPersistence.hpp"
+#include "Charconv.hpp"
 
-#include <charconv>
 #include <limits>
 #include <utility>
 
@@ -12,7 +12,7 @@ namespace MosaicExample
         void appendUnsigned(Mosaic::String & output, uint64_t value)
         {
             Mosaic::Array<char, 32> buffer;
-            std::to_chars_result conversion = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+            Mosaic::Detail::ToCharsResult conversion = Mosaic::Detail::toChars(buffer.data(), buffer.data() + buffer.size(), value);
 
             if(conversion.ec != std::errc{})
             {
@@ -63,7 +63,7 @@ namespace MosaicExample
             const char * begin = input.data() + offset;
             const char * end = input.data() + input.size();
             uint64_t parsedValue = 0;
-            std::from_chars_result conversion = std::from_chars(begin, end, parsedValue);
+            Mosaic::Detail::FromCharsResult conversion = Mosaic::Detail::fromChars(begin, end, parsedValue);
 
             if(conversion.ec != std::errc{})
             {

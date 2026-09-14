@@ -1,3 +1,4 @@
+#include "Charconv.hpp"
 #include "Context.hpp"
 #include "ContextDetail.hpp"
 #include "Interaction.hpp"
@@ -9,7 +10,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <charconv>
 #include <cmath>
 #include <limits>
 #include <type_traits>
@@ -391,7 +391,7 @@ namespace Mosaic
             }
 
             unsigned parsed = 0;
-            auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+            auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed);
 
             if(result.ec != std::errc{})
             {
@@ -534,7 +534,7 @@ namespace Mosaic
             if constexpr(std::is_signed_v<T>)
             {
                 int64_t parsed = 0;
-                auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+                auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed);
 
                 if(result.ec != std::errc{})
                 {
@@ -561,7 +561,7 @@ namespace Mosaic
             else
             {
                 uint64_t parsed = 0;
-                auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+                auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed);
 
                 if(result.ec != std::errc{})
                 {
@@ -611,7 +611,7 @@ namespace Mosaic
             }
 
             T parsed{};
-            auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, std::chars_format::general);
+            auto result = Detail::fromChars(text.data(), text.data() + text.size(), parsed);
 
             if(result.ec != std::errc{})
             {
@@ -878,18 +878,9 @@ namespace Mosaic
 
             const char * begin = text.data();
             const char * end = begin + text.size();
-            std::from_chars_result result;
             T output{};
 
-            //////////////////////////////////////////////////////////////////////////
-            if constexpr(std::is_floating_point_v<T>)
-            {
-                result = std::from_chars(begin, end, output, std::chars_format::general);
-            }
-            else
-            {
-                result = std::from_chars(begin, end, output);
-            }
+            auto result = Detail::fromChars(begin, end, output);
 
             if(result.ec != std::errc{})
             {

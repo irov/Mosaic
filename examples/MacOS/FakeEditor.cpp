@@ -1,7 +1,7 @@
 #include "FakeEditor.hpp"
+#include "Charconv.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 
 namespace MosaicExample
@@ -135,7 +135,7 @@ namespace MosaicExample
         template<class T> [[nodiscard]] Mosaic::String number(T value)
         {
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+            auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;
@@ -160,7 +160,7 @@ namespace MosaicExample
             uint32_t parsed = 0;
             const char * begin = text.data();
             const char * end = begin + text.size();
-            auto result = std::from_chars(begin, end, parsed);
+            auto result = Mosaic::Detail::fromChars(begin, end, parsed);
 
             if(result.ec != std::errc{})
             {

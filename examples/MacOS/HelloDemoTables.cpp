@@ -1,7 +1,7 @@
 #include "HelloDemoTables.hpp"
+#include "Charconv.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <limits>
 
 namespace MosaicExample
@@ -12,7 +12,7 @@ namespace MosaicExample
         template<class T> [[nodiscard]] Mosaic::String tableDemoNumber(T value)
         {
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+            auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;
@@ -21,7 +21,7 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::String tableDemoFixed(double value, int precision)
         {
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::fixed, precision);
+            auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value, Mosaic::Detail::NumberFormat::Fixed, precision);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;

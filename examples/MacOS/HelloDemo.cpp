@@ -1,9 +1,9 @@
 #include "HelloDemo.hpp"
+#include "Charconv.hpp"
 #include "HelloDemoTables.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -19,7 +19,7 @@ namespace MosaicExample
         template<class T> [[nodiscard]] Mosaic::String demoNumber(T value)
         {
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+            auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;
@@ -40,7 +40,7 @@ namespace MosaicExample
         template<class T> [[nodiscard]] Mosaic::String demoHexadecimal(T value)
         {
             char buffer[2 + sizeof(T) * 2] = {'0', 'x'};
-            auto result = std::to_chars(buffer + 2, buffer + sizeof(buffer), value, 16);
+            auto result = Mosaic::Detail::toChars(buffer + 2, buffer + sizeof(buffer), value, 16);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;
@@ -49,7 +49,7 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::String demoFixed(double value, int precision)
         {
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::fixed, precision);
+            auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value, Mosaic::Detail::NumberFormat::Fixed, precision);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;
@@ -58,7 +58,7 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::String demoCodepoint(char32_t value)
         {
             char buffer[16] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), static_cast<uint32_t>(value), 16);
+            auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), static_cast<uint32_t>(value), 16);
 
             if(result.ec != std::errc{})
             {
@@ -82,7 +82,7 @@ namespace MosaicExample
         [[nodiscard]] Mosaic::String demoPointer(const void * value)
         {
             char buffer[2 + sizeof(uintptr_t) * 2] = {'0', 'x'};
-            auto result = std::to_chars(buffer + 2, buffer + sizeof(buffer), reinterpret_cast<uintptr_t>(value), 16);
+            auto result = Mosaic::Detail::toChars(buffer + 2, buffer + sizeof(buffer), reinterpret_cast<uintptr_t>(value), 16);
             auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
             return returnedValue;

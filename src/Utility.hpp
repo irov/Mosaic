@@ -1,9 +1,9 @@
 #pragma once
 
+#include "Charconv.hpp"
 #include "Context.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
 #include <type_traits>
 
@@ -34,7 +34,7 @@ namespace Mosaic
             }
 
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+            auto result = toChars(buffer, buffer + sizeof(buffer), value);
 
             if(result.ec != std::errc{})
             {
@@ -56,7 +56,7 @@ namespace Mosaic
                 return false;
             }
 
-            std::chars_format numberFormat = std::chars_format::fixed;
+            NumberFormat numberFormat = NumberFormat::Fixed;
             int resolvedPrecision = std::clamp(precision, 0, 8);
             size_t tokenBegin = StringView::npos;
             size_t tokenEnd = StringView::npos;
@@ -121,19 +121,19 @@ namespace Mosaic
 
                             if(conversion == 'e')
                             {
-                                numberFormat = std::chars_format::scientific;
+                                numberFormat = NumberFormat::Scientific;
                             }
                             else if(conversion == 'E')
                             {
-                                numberFormat = std::chars_format::scientific;
+                                numberFormat = NumberFormat::Scientific;
                             }
                             else if(conversion == 'g')
                             {
-                                numberFormat = std::chars_format::general;
+                                numberFormat = NumberFormat::General;
                             }
                             else if(conversion == 'G')
                             {
-                                numberFormat = std::chars_format::general;
+                                numberFormat = NumberFormat::General;
                             }
 
                             break;
@@ -162,7 +162,7 @@ namespace Mosaic
             }
 
             char buffer[64] = {};
-            auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, numberFormat, resolvedPrecision);
+            auto result = toChars(buffer, buffer + sizeof(buffer), value, numberFormat, resolvedPrecision);
 
             if(result.ec != std::errc{})
             {
@@ -287,7 +287,7 @@ namespace Mosaic
             {
                 using Unsigned = std::make_unsigned_t<T>;
                 char buffer[2 + sizeof(T) * 2] = {};
-                auto result = std::to_chars(buffer, buffer + sizeof(buffer), static_cast<Unsigned>(value), 16);
+                auto result = toChars(buffer, buffer + sizeof(buffer), static_cast<Unsigned>(value), 16);
 
                 if(result.ec != std::errc{})
                 {

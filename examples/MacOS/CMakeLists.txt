@@ -6,6 +6,7 @@ add_executable(MosaicMacOSExample MACOSX_BUNDLE
 )
 
 target_compile_features(MosaicMacOSExample PRIVATE cxx_std_20)
+target_include_directories(MosaicMacOSExample PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 target_compile_options(MosaicMacOSExample PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 target_link_libraries(MosaicMacOSExample PRIVATE
     Mosaic::Mosaic
@@ -32,6 +33,7 @@ add_executable(MosaicHelloDemoExample MACOSX_BUNDLE
 )
 
 target_compile_features(MosaicHelloDemoExample PRIVATE cxx_std_20)
+target_include_directories(MosaicHelloDemoExample PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 target_compile_options(MosaicHelloDemoExample PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 target_link_libraries(MosaicHelloDemoExample PRIVATE
     Mosaic::Mosaic

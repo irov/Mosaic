@@ -22,6 +22,7 @@ if(MOSAIC_BUILD_EXAMPLES)
         ${PROJECT_SOURCE_DIR}/examples/MacOS/EditorPersistence.cpp
     )
     target_include_directories(MosaicEditorSmokeTests PRIVATE ${PROJECT_SOURCE_DIR}/examples/MacOS)
+    target_include_directories(MosaicEditorSmokeTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(MosaicEditorSmokeTests PRIVATE Mosaic::Mosaic)
     mosaic_target_warnings(MosaicEditorSmokeTests)
     add_test(NAME MosaicEditorSmokeTests COMMAND MosaicEditorSmokeTests)

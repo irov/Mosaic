@@ -1,8 +1,8 @@
 #include "HelloDemo.hpp"
+#include "Charconv.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <utility>
@@ -48,7 +48,7 @@ namespace MosaicExample::ExamplesDetail
     template<class T> [[nodiscard]] Mosaic::String number(T value)
     {
         char buffer[64] = {};
-        auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+        auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value);
         auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
         return returnedValue;
@@ -57,7 +57,7 @@ namespace MosaicExample::ExamplesDetail
     [[nodiscard]] Mosaic::String hexadecimal(Mosaic::Id value)
     {
         char digits[32] = {};
-        auto result = std::to_chars(digits, digits + sizeof(digits), value, 16);
+        auto result = Mosaic::Detail::toChars(digits, digits + sizeof(digits), value, 16);
 
         if(result.ec != std::errc{})
         {
@@ -141,7 +141,7 @@ namespace MosaicExample::ExamplesDetail
     [[nodiscard]] Mosaic::String codepoint(char32_t value)
     {
         char digits[16] = {};
-        auto conversion = std::to_chars(digits, digits + sizeof(digits), static_cast<uint32_t>(value), 16);
+        auto conversion = Mosaic::Detail::toChars(digits, digits + sizeof(digits), static_cast<uint32_t>(value), 16);
         Mosaic::String output = "U+";
 
         if(conversion.ec != std::errc{})
@@ -189,7 +189,7 @@ namespace MosaicExample::ExamplesDetail
     [[nodiscard]] Mosaic::String fixed(double value, int precision)
     {
         char buffer[64] = {};
-        auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::fixed, precision);
+        auto result = Mosaic::Detail::toChars(buffer, buffer + sizeof(buffer), value, Mosaic::Detail::NumberFormat::Fixed, precision);
         auto returnedValue = result.ec == std::errc{} ? Mosaic::String(buffer, result.ptr) : Mosaic::String("?");
 
         return returnedValue;

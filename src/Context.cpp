@@ -1,3 +1,4 @@
+#include "Charconv.hpp"
 #include "Context.hpp"
 #include "ContextDetail.hpp"
 #include "Interaction.hpp"
@@ -11,7 +12,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <charconv>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -8367,7 +8367,7 @@ namespace Mosaic
                 {
                     const char * begin = value.data();
                     const char * end = value.data() + value.size();
-                    auto result = std::from_chars(begin, end, output);
+                    auto result = Detail::fromChars(begin, end, output);
 
                     if(result.ec != std::errc{} || result.ptr != end || std::isfinite(output) == false)
                     {
@@ -8378,7 +8378,7 @@ namespace Mosaic
                 {
                     const char * begin = value.data();
                     const char * end = value.data() + value.size();
-                    auto result = std::from_chars(begin, end, output);
+                    auto result = Detail::fromChars(begin, end, output);
 
                     if(result.ec != std::errc{} || result.ptr != end)
                     {
@@ -8468,7 +8468,7 @@ namespace Mosaic
                     StringView indexText = key.substr(firstSeparator + 1, secondSeparator - firstSeparator - 1);
                     StringView field = key.substr(secondSeparator + 1);
                     uint64_t index = 0;
-                    auto indexResult = std::from_chars(indexText.data(), indexText.data() + indexText.size(), index);
+                    auto indexResult = Detail::fromChars(indexText.data(), indexText.data() + indexText.size(), index);
 
                     if(indexResult.ec != std::errc{})
                     {
@@ -8614,7 +8614,7 @@ namespace Mosaic
                             size_t end = separator == StringView::npos ? value.size() : separator;
                             StringView item = value.substr(begin, end - begin);
                             uint64_t tab = 0;
-                            auto result = std::from_chars(item.data(), item.data() + item.size(), tab);
+                            auto result = Detail::fromChars(item.data(), item.data() + item.size(), tab);
 
                             if(result.ec != std::errc{} || result.ptr != item.data() + item.size())
                             {
