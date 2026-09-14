@@ -6509,7 +6509,7 @@ namespace Mosaic
                     String headerLabel(label.empty() == true ? StringView("Color") : label);
                     headerLabel += includeAlpha ? "  RGBA" : "  RGB";
                     {
-                        auto header = Mosaic::row(ui, {}, location);
+                        auto header = Mosaic::row(ui, Key("Color picker header"), {}, location);
                         Mosaic::text(ui, headerLabel, location);
                         float labelWidth = ui->estimateText(headerLabel, *ui->currentStyle).x;
                         float fillerWidth = std::max(0.f, stripWidth - labelWidth - 28.f);
@@ -6517,7 +6517,7 @@ namespace Mosaic
                             auto filler = Mosaic::column(ui, Detail::fixedLayout(fillerWidth, 20.f), location);
                         }
                         {
-                            auto close = Mosaic::canvas(ui, "Close color picker", Detail::fixedLayout(20.f, 20.f), location);
+                            auto close = Mosaic::canvas(ui, Key("Close color picker"), "Close color picker", Detail::fixedLayout(20.f, 20.f), location);
                             const Context::Node & closeNode = ui->nodes.back();
                             Response closeResponse = closeNode.response;
 
@@ -6542,10 +6542,10 @@ namespace Mosaic
                     constexpr float pickerAreaHeight = 156.f;
                     constexpr float hueWidth = 20.f;
                     {
-                        auto pickerRow = Mosaic::row(ui, {}, location);
+                        auto pickerRow = Mosaic::row(ui, Key("Color picker area"), {}, location);
                         const PointerState * pointer = ui->input.primaryPointer();
                         {
-                            auto saturationCanvas = Mosaic::canvas(ui, "Saturation and value", Detail::fixedLayout(saturationWidth, pickerAreaHeight), location);
+                            auto saturationCanvas = Mosaic::canvas(ui, Key("Saturation and value"), "Saturation and value", Detail::fixedLayout(saturationWidth, pickerAreaHeight), location);
                             size_t saturationNode = ui->nodes.size() - 1;
                             Detail::contextMenuTrigger(ui, response, node, saturationNode);
                             Rect saturationBounds = {0.f, 0.f, saturationWidth, pickerAreaHeight};
@@ -6581,7 +6581,7 @@ namespace Mosaic
                         }
 
                         {
-                            auto hueCanvas = Mosaic::canvas(ui, "Hue", Detail::fixedLayout(hueWidth, pickerAreaHeight), location);
+                            auto hueCanvas = Mosaic::canvas(ui, Key("Hue"), "Hue", Detail::fixedLayout(hueWidth, pickerAreaHeight), location);
                             size_t hueNode = ui->nodes.size() - 1;
                             Detail::contextMenuTrigger(ui, response, node, hueNode);
                             constexpr Detail::HueColorArray hueColors = {Color{1.f, 0.f, 0.f, 1.f}, Color{1.f, 1.f, 0.f, 1.f}, Color{0.f, 1.f, 0.f, 1.f}, Color{0.f, 1.f, 1.f, 1.f}, Color{0.f, 0.f, 1.f, 1.f}, Color{1.f, 0.f, 1.f, 1.f}, Color{1.f, 0.f, 0.f, 1.f}};
@@ -6621,7 +6621,7 @@ namespace Mosaic
 
                     if(includeAlpha == true)
                     {
-                        auto alphaCanvas = Mosaic::canvas(ui, "Alpha", Detail::fixedLayout(stripWidth, stripHeight), location);
+                        auto alphaCanvas = Mosaic::canvas(ui, Key("Alpha"), "Alpha", Detail::fixedLayout(stripWidth, stripHeight), location);
                         size_t alphaNode = ui->nodes.size() - 1;
                         Detail::contextMenuTrigger(ui, response, node, alphaNode);
                         Rect alphaBounds = {0.f, 0.f, stripWidth, stripHeight};
@@ -6652,7 +6652,7 @@ namespace Mosaic
                     }
 
                     {
-                        auto previewRow = Mosaic::row(ui, {}, location);
+                        auto previewRow = Mosaic::row(ui, Key("Color picker preview"), {}, location);
                         constexpr StringView previewLabel = "Current";
                         Mosaic::text(ui, previewLabel, location);
                         bool screenPickerAvailable = ui->platform->supportsScreenColorPicker();
@@ -6661,7 +6661,7 @@ namespace Mosaic
                         float buttonAndGap = screenPickerAvailable ? pickerButtonWidth + ui->currentStyle->metrics.gap : 0.f;
                         float previewWidth = std::max(48.f, stripWidth - labelWidth - ui->currentStyle->metrics.gap - buttonAndGap);
                         {
-                            auto preview = Mosaic::canvas(ui, "Current color", Detail::fixedLayout(previewWidth, ui->currentStyle->metrics.controlHeight), location);
+                            auto preview = Mosaic::canvas(ui, Key("Current color"), "Current color", Detail::fixedLayout(previewWidth, ui->currentStyle->metrics.controlHeight), location);
                             size_t previewNode = ui->nodes.size() - 1;
                             Detail::contextMenuTrigger(ui, response, node, previewNode);
                             Rect previewBounds = {0.f, 0.f, previewWidth, ui->currentStyle->metrics.controlHeight};
@@ -6672,7 +6672,7 @@ namespace Mosaic
 
                         if(screenPickerAvailable == true)
                         {
-                            auto eyedropper = Mosaic::canvas(ui, "Pick screen color", Detail::fixedLayout(pickerButtonWidth, ui->currentStyle->metrics.controlHeight), location);
+                            auto eyedropper = Mosaic::canvas(ui, Key("Pick screen color"), "Pick screen color", Detail::fixedLayout(pickerButtonWidth, ui->currentStyle->metrics.controlHeight), location);
                             Context::Node & eyedropperNode = ui->nodes.back();
                             eyedropperNode.semanticRole = SemanticRole::Button;
                             Response eyedropperResponse = eyedropperNode.response;
@@ -6698,7 +6698,7 @@ namespace Mosaic
                     Mosaic::text(ui, includeAlpha ? StringView("RGBA Palette") : StringView("RGB Palette"), location);
                     constexpr float paletteHeight = 24.f;
                     {
-                        auto paletteCanvas = Mosaic::canvas(ui, "Color presets", Detail::fixedLayout(stripWidth, paletteHeight), location);
+                        auto paletteCanvas = Mosaic::canvas(ui, Key("Color presets"), "Color presets", Detail::fixedLayout(stripWidth, paletteHeight), location);
                         size_t paletteNode = ui->nodes.size() - 1;
                         Detail::contextMenuTrigger(ui, response, node, paletteNode);
                         constexpr Detail::ColorPalette palette = {Color::fromBytes(236, 239, 244), Color::fromBytes(143, 151, 164), Color::fromBytes(34, 38, 46), Color::fromBytes(226, 72, 82), Color::fromBytes(239, 145, 52), Color::fromBytes(237, 202, 67), Color::fromBytes(70, 188, 116), Color::fromBytes(61, 191, 203), Color::fromBytes(68, 136, 236), Color::fromBytes(178, 92, 222)};
@@ -6728,7 +6728,7 @@ namespace Mosaic
 
                     bool hexFocused = false;
                     {
-                        auto hexRow = Mosaic::row(ui, {}, location);
+                        auto hexRow = Mosaic::row(ui, Key("Color picker hex"), {}, location);
                         Mosaic::text(ui, "HEX", location);
                         TextInputOptions hexOptions;
                         hexOptions.selectAllOnFocus = true;
@@ -6781,7 +6781,7 @@ namespace Mosaic
                     for(size_t index = 0; index != channelCount; ++index)
                     {
                         auto channelScope = Mosaic::scope(ui, Key(index), location);
-                        auto channelRow = Mosaic::row(ui, {}, location);
+                        auto channelRow = Mosaic::row(ui, Key("Color picker channel"), {}, location);
                         Mosaic::text(ui, names[index], location);
                         Response channelSlider = Mosaic::slider(ui, StringView{}, channels[index], 0.f, 1.f, location);
                         Context::Node & sliderNode = ui->nodes.back();
@@ -7061,11 +7061,11 @@ namespace Mosaic
         float areaWidth = options.hueWheel ? 0.f : std::max(40.f, options.size.x - hueWidth - gap);
         const PointerState * pointer = ui->input.primaryPointer();
         {
-            auto pickerRow = Mosaic::row(ui, {}, location);
+            auto pickerRow = Mosaic::row(ui, Key("Color picker area"), {}, location);
 
             if(options.hueWheel == false)
             {
-                auto saturationCanvas = Mosaic::canvas(ui, "Saturation and value", Detail::fixedLayout(areaWidth, areaHeight), location);
+                auto saturationCanvas = Mosaic::canvas(ui, Key("Saturation and value"), "Saturation and value", Detail::fixedLayout(areaWidth, areaHeight), location);
                 Response saturationResponse = ui->nodes[ui->currentParent].response;
                 aggregate.flags |= saturationResponse.flags;
                 Rect saturationBounds = {0.f, 0.f, areaWidth, areaHeight};
@@ -7233,7 +7233,7 @@ namespace Mosaic
 
         if(alphaHeight > 0.f)
         {
-            auto alphaCanvas = Mosaic::canvas(ui, "Alpha", Detail::fixedLayout(options.size.x, alphaHeight), location);
+            auto alphaCanvas = Mosaic::canvas(ui, Key("Alpha"), "Alpha", Detail::fixedLayout(options.size.x, alphaHeight), location);
             Response alphaResponse = ui->nodes[ui->currentParent].response;
             aggregate.flags |= alphaResponse.flags;
             Rect alphaBounds = {0.f, 0.f, options.size.x, alphaHeight};
@@ -7255,7 +7255,7 @@ namespace Mosaic
 
         if(options.showPreview == true && options.reference != nullptr)
         {
-            auto previews = Mosaic::row(ui, {}, location);
+            auto previews = Mosaic::row(ui, Key("Color picker previews"), {}, location);
             Mosaic::text(ui, "Current", location);
             ColorEditOptions previewOptions;
             previewOptions.width = Dimension::fixed(64.f);
