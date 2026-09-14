@@ -17,6 +17,18 @@ set(MOSAIC_GRAPHICS_TARGET "" CACHE STRING "Existing Graphics CMake target suppl
 set(MOSAIC_GRAPHICS_SOURCE_DIR "" CACHE PATH "Graphics source checkout added directly to this build")
 set(MOSAIC_GRAPHICS_GIT_REPOSITORY "https://github.com/irov/graphics.git" CACHE STRING
     "Git repository used to download Graphics")
+set(MOSAIC_ZLIB_INCLUDE "" CACHE STRING "Zlib include directories supplied by the host")
+set(MOSAIC_ZLIB_LIBS "" CACHE STRING "Zlib libraries supplied by the host")
+set(MOSAIC_ZLIB_DEPENDENCY "" CACHE STRING "Optional target which prepares the external Zlib library")
+set(MOSAIC_ZLIB_TARGET "" CACHE STRING "Existing Zlib CMake target supplied by the host")
+set(MOSAIC_ZLIB_SOURCE_DIR "" CACHE PATH "Zlib source checkout added directly to this build")
+set(MOSAIC_ZLIB_GIT_REPOSITORY "https://github.com/madler/zlib.git" CACHE STRING
+    "Git repository used to download Zlib")
+set(MOSAIC_ZLIB_GIT_TAG "v1.3.1" CACHE STRING "Git tag used to download Zlib")
+set(MOSAIC_DEFAULT_FONT_URL "https://raw.githubusercontent.com/googlefonts/roboto-2/main/src/hinted/Roboto-Medium.ttf"
+    CACHE STRING "Font downloaded and packed into the library as the default font")
+set(MOSAIC_DEFAULT_FONT_SHA256 "2879a5ecb7fbfa13a7fc3e2cdd7fecbf73aa45e91b541dfdfa2c442eed0aac21"
+    CACHE STRING "Expected SHA256 of the downloaded default font")
 
 function(mosaic_target_warnings target)
     if(MSVC)
@@ -99,6 +111,55 @@ endif()
 
 set(MOSAIC_GRAPHICS_PACKAGE_LIBRARY "${CMAKE_STATIC_LIBRARY_PREFIX}MosaicGraphicsDependency${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
+set(mosaic_zlib_mode_count 0)
+if(MOSAIC_ZLIB_TARGET)
+    math(EXPR mosaic_zlib_mode_count "${mosaic_zlib_mode_count} + 1")
+endif()
+if(MOSAIC_ZLIB_SOURCE_DIR)
+    math(EXPR mosaic_zlib_mode_count "${mosaic_zlib_mode_count} + 1")
+endif()
+if(MOSAIC_ZLIB_INCLUDE OR MOSAIC_ZLIB_LIBS)
+    math(EXPR mosaic_zlib_mode_count "${mosaic_zlib_mode_count} + 1")
+endif()
+if(mosaic_zlib_mode_count GREATER 1)
+    message(FATAL_ERROR "Choose only one Zlib integration mode: TARGET, SOURCE_DIR, or INCLUDE/LIBS")
+endif()
+
+if(MOSAIC_ZLIB_TARGET)
+    if(NOT TARGET ${MOSAIC_ZLIB_TARGET})
+        message(FATAL_ERROR "MOSAIC_ZLIB_TARGET '${MOSAIC_ZLIB_TARGET}' does not exist")
+    endif()
+    set(mosaic_zlib_library ${MOSAIC_ZLIB_TARGET})
+elseif(MOSAIC_ZLIB_SOURCE_DIR)
+    if(NOT EXISTS "${MOSAIC_ZLIB_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "MOSAIC_ZLIB_SOURCE_DIR does not contain CMakeLists.txt")
+    endif()
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${MOSAIC_ZLIB_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ZlibSource")
+    set(mosaic_zlib_library zlibstatic)
+elseif(MOSAIC_ZLIB_INCLUDE OR MOSAIC_ZLIB_LIBS)
+    if(NOT MOSAIC_ZLIB_INCLUDE OR NOT MOSAIC_ZLIB_LIBS)
+        message(FATAL_ERROR "MOSAIC_ZLIB_INCLUDE and MOSAIC_ZLIB_LIBS must be provided together")
+    endif()
+    list(LENGTH MOSAIC_ZLIB_LIBS mosaic_zlib_library_count)
+    if(NOT mosaic_zlib_library_count EQUAL 1)
+        message(FATAL_ERROR "MOSAIC_ZLIB_LIBS must identify exactly one Zlib library")
+    endif()
+    list(GET MOSAIC_ZLIB_LIBS 0 mosaic_zlib_library)
+else()
+    include(cmake/ZlibDownload.cmake)
+    set(mosaic_zlib_library ${MOSAIC_ZLIB_LIBS})
+endif()
+
+if(MOSAIC_ZLIB_DEPENDENCY AND NOT TARGET ${MOSAIC_ZLIB_DEPENDENCY})
+    message(FATAL_ERROR "MOSAIC_ZLIB_DEPENDENCY '${MOSAIC_ZLIB_DEPENDENCY}' does not exist")
+endif()
+
+include(cmake/DefaultFont.cmake)
+mosaic_pack_default_font("${MOSAIC_DEFAULT_FONT_URL}" "${MOSAIC_DEFAULT_FONT_SHA256}"
+    "${CMAKE_CURRENT_BINARY_DIR}/DefaultFont/MosaicDefaultFontData.cpp" mosaic_default_font_source)
+
+
 add_library(MosaicCore
     src/Allocator.cpp
     src/Canvas.cpp
@@ -127,6 +188,8 @@ add_library(MosaicCore
     src/Theme.cpp
     src/Window.cpp
     src/Widgets.cpp
+    src/DefaultFont.cpp
+    ${mosaic_default_font_source}
 )
 add_library(Mosaic::Core ALIAS MosaicCore)
 
@@ -142,6 +205,13 @@ set_target_properties(MosaicCore PROPERTIES
     EXPORT_NAME Core
 )
 mosaic_target_warnings(MosaicCore)
+
+target_include_directories(MosaicCore PRIVATE ${MOSAIC_ZLIB_INCLUDE})
+target_link_libraries(MosaicCore PRIVATE ${mosaic_zlib_library})
+
+if(MOSAIC_ZLIB_DEPENDENCY)
+    add_dependencies(MosaicCore ${MOSAIC_ZLIB_DEPENDENCY})
+endif()
 
 add_library(MosaicGraphics
     src/GraphicsBridge.cpp
