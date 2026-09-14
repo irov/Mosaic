@@ -249,7 +249,9 @@ namespace Mosaic
             contentSize = {std::max(200.f, node.style->metrics.minimumControlWidth), node.style->metrics.controlHeight};
             break;
         case Detail::NodeKind::ColorEdit:
-            contentSize = {std::max(node.colorShowInputs ? 250.f : 200.f, node.style->metrics.minimumControlWidth) + Detail::itemLabelWidth(node), node.style->metrics.controlHeight};
+            // the wide control exists to host the channel inputs, so without them it only
+            // needs to be as wide as the swatch instead of trailing empty space
+            contentSize = {(node.colorShowInputs ? std::max(250.f, node.style->metrics.minimumControlWidth) : 64.f) + Detail::itemLabelWidth(node), node.style->metrics.controlHeight};
             break;
         case Detail::NodeKind::DragValue:
             contentSize = {std::max(96.f, node.style->metrics.minimumControlWidth), node.style->metrics.controlHeight};

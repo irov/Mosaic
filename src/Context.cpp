@@ -938,7 +938,9 @@ namespace Mosaic
             }
 
             float innerGap = 3.f;
-            float previewWidth = node.colorShowPreview ? (node.colorShowInputs ? std::min(geometry.control.height, geometry.control.width) : std::clamp(geometry.control.width * 0.28f, 42.f, 64.f)) : 0.f;
+            // with the inputs hidden the swatch is the whole control, so a caller that gives
+            // the editor a wider size gets a wider swatch rather than a gap beside it
+            float previewWidth = node.colorShowPreview ? (node.colorShowInputs ? std::min(geometry.control.height, geometry.control.width) : geometry.control.width) : 0.f;
             bool previewOnLeft = node.style->metrics.colorButtonPosition == ColorButtonPosition::Left;
             geometry.preview = {previewOnLeft ? geometry.control.x : geometry.control.right() - previewWidth, geometry.control.y, previewWidth, geometry.control.height};
             geometry.channelCount = node.colorShowInputs ? node.colorComponents : 0;
