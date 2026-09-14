@@ -2043,9 +2043,30 @@ namespace Mosaic
             return cursor;
         }
         //////////////////////////////////////////////////////////////////////////
+        [[nodiscard]] size_t textExtent(const Context::Node & node) noexcept
+        {
+            // an input node still carries its widget label while the pointer is hit tested,
+            // because the label only becomes the display text further down the widget, so
+            // the caret range has to come from the shaped run
+            if(node.textRun != nullptr)
+            {
+                if(node.textRun->positions.empty() == false)
+                {
+                    return node.textRun->positions.size() - 1;
+                }
+
+                if(node.textRun->clusters.empty() == false)
+                {
+                    return node.textRun->clusters.back();
+                }
+            }
+
+            return node.label.size();
+        }
+        //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] Vec2 textPosition(const Context::Node & node, size_t position) noexcept
         {
-            size_t clamped = std::min(position, node.label.size());
+            size_t clamped = std::min(position, Detail::textExtent(node));
 
             if(node.textRun != nullptr && clamped < node.textRun->positions.size())
             {
@@ -2215,7 +2236,7 @@ namespace Mosaic
         //////////////////////////////////////////////////////////////////////////
         [[nodiscard]] Vec2 textCursorPosition(Context * ui, const Context::Node & node, size_t position)
         {
-            size_t clamped = std::min(position, node.label.size());
+            size_t clamped = std::min(position, Detail::textExtent(node));
             Vec2 local = Detail::textPosition(node, clamped);
             float x = Detail::snapToPixel(node.bounds.x + node.style->metrics.padding - node.textEditData().scrollX + local.x, ui->viewport.dpiScale);
             float y = Detail::snapToPixel(node.bounds.y + node.style->metrics.padding * 0.5f - node.textEditData().scrollY + local.y, ui->viewport.dpiScale);
@@ -2296,7 +2317,7 @@ namespace Mosaic
             }
 
             float visibleWidth = Detail::inputTextViewportWidth(node, bounds);
-            size_t cursor = std::min(node.textEditData().cursor, node.label.size());
+            size_t cursor = std::min(node.textEditData().cursor, Detail::textExtent(node));
             Vec2 cursorPosition = Detail::textPosition(node, cursor);
             float cursorX = cursorPosition.x;
 
