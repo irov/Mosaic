@@ -371,6 +371,7 @@ namespace Mosaic
                 ui->capturedPointer = pointer->id;
                 ui->pointerFocused = node.id;
                 ui->focused = node.id;
+                ui->focusClaimedByPointer = true;
 
                 if(node.navigationBlocked == false)
                 {

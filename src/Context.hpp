@@ -1562,6 +1562,7 @@ namespace Mosaic
         size_t currentParent = 0;
         Id focused = InvalidId;
         Id pointerFocused = InvalidId;
+        bool focusClaimedByPointer = false;
         Id navigationFocused = InvalidId;
         int32_t focusNextOffset = 0;
         bool focusNextPending = false;

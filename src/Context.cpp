@@ -5127,6 +5127,7 @@ namespace Mosaic
         ui->blockingInputLayer = InvalidId;
         ui->popupReplacementAllowed = false;
         ui->popupClosedByOutsidePointer = false;
+        ui->focusClaimedByPointer = false;
         ui->popupClosedThisFrame.clear();
         ui->frameTheme = ui->theme;
         ui->frameTheme.metrics.fontSize *= ui->mainFontScale;
@@ -6030,6 +6031,20 @@ namespace Mosaic
         }
 
         ui->currentCursor = cursor;
+
+        // pressing somewhere that takes no focus blurs whatever held it, so a temporary
+        // numeric editor commits on a click away the same way it does on Enter
+        if(ui->focused != InvalidId && ui->focusClaimedByPointer == false && ui->popupClosedByOutsidePointer == false)
+        {
+            const PointerState * blurPointer = ui->input.primaryPointer();
+
+            if(blurPointer != nullptr && blurPointer->isPressed() == true)
+            {
+                ui->focused = InvalidId;
+                ui->navigationFocused = InvalidId;
+            }
+        }
+
         Detail::updateInputCapture(ui);
         double emitEnd = ui->platform->monotonicTime();
 
