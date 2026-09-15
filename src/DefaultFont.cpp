@@ -45,4 +45,14 @@ namespace Mosaic
 
         return true;
     }
+
+    uint32_t defaultFontLicenseSize() noexcept
+    {
+        return Detail::DefaultFontLicenseSize;
+    }
+
+    const char * defaultFontLicense() noexcept
+    {
+        return reinterpret_cast<const char *>(Detail::DefaultFontLicense);
+    }
 }

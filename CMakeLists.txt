@@ -25,10 +25,6 @@ set(MOSAIC_ZLIB_SOURCE_DIR "" CACHE PATH "Zlib source checkout added directly to
 set(MOSAIC_ZLIB_GIT_REPOSITORY "https://github.com/madler/zlib.git" CACHE STRING
     "Git repository used to download Zlib")
 set(MOSAIC_ZLIB_GIT_TAG "v1.3.1" CACHE STRING "Git tag used to download Zlib")
-set(MOSAIC_DEFAULT_FONT_URL "https://raw.githubusercontent.com/googlefonts/roboto-2/main/src/hinted/Roboto-Medium.ttf"
-    CACHE STRING "Font downloaded and packed into the library as the default font")
-set(MOSAIC_DEFAULT_FONT_SHA256 "2879a5ecb7fbfa13a7fc3e2cdd7fecbf73aa45e91b541dfdfa2c442eed0aac21"
-    CACHE STRING "Expected SHA256 of the downloaded default font")
 
 function(mosaic_target_warnings target)
     if(MSVC)
@@ -156,8 +152,8 @@ if(MOSAIC_ZLIB_DEPENDENCY AND NOT TARGET ${MOSAIC_ZLIB_DEPENDENCY})
 endif()
 
 include(cmake/DefaultFont.cmake)
-mosaic_pack_default_font("${MOSAIC_DEFAULT_FONT_URL}" "${MOSAIC_DEFAULT_FONT_SHA256}"
-    "${CMAKE_CURRENT_BINARY_DIR}/DefaultFont/MosaicDefaultFontData.cpp" mosaic_default_font_source)
+mosaic_pack_default_font("${CMAKE_CURRENT_BINARY_DIR}/DefaultFont/MosaicDefaultFontData.cpp"
+    mosaic_default_font_source)
 
 
 add_library(MosaicCore
