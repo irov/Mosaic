@@ -7,6 +7,8 @@ include(CMakePackageConfigHelpers)
 
 option(MOSAIC_BUILD_EXAMPLES "Build Mosaic examples" ${PROJECT_IS_TOP_LEVEL})
 option(MOSAIC_BUILD_TESTS "Build Mosaic regression tests" ${PROJECT_IS_TOP_LEVEL})
+option(MOSAIC_BUILD_BACKENDS "Build the native Mosaic backends" ${PROJECT_IS_TOP_LEVEL})
+option(MOSAIC_INSTALL "Generate the Mosaic install and export rules" ${PROJECT_IS_TOP_LEVEL})
 option(MOSAIC_ENABLE_EXCEPTIONS "Compile Mosaic C++ sources with exception support" ON)
 option(MOSAIC_ENABLE_RTTI "Compile Mosaic C++ sources with RTTI support" ON)
 option(MOSAIC_WARNINGS_AS_ERRORS "Treat Mosaic compiler warnings as errors" ${PROJECT_IS_TOP_LEVEL})
@@ -257,8 +259,10 @@ if(APPLE)
     enable_language(OBJCXX)
 endif()
 
-if(APPLE OR WIN32)
-    add_subdirectory(backends)
+if(MOSAIC_BUILD_BACKENDS)
+    if(APPLE OR WIN32)
+        add_subdirectory(backends)
+    endif()
 endif()
 
 if(NOT MOSAIC_ENABLE_EXCEPTIONS)
@@ -290,38 +294,40 @@ if(MOSAIC_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-install(TARGETS Mosaic MosaicCore MosaicGraphics MosaicPlatform
-    EXPORT MosaicTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-install(FILES "${mosaic_graphics_install_source}"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RENAME "${MOSAIC_GRAPHICS_PACKAGE_LIBRARY}"
-)
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    PATTERN ".DS_Store" EXCLUDE
-)
-install(EXPORT MosaicTargets
-    FILE MosaicTargets.cmake
-    NAMESPACE Mosaic::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Mosaic
-)
+if(MOSAIC_INSTALL)
+    install(TARGETS Mosaic MosaicCore MosaicGraphics MosaicPlatform
+        EXPORT MosaicTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+    install(FILES "${mosaic_graphics_install_source}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RENAME "${MOSAIC_GRAPHICS_PACKAGE_LIBRARY}"
+    )
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        PATTERN ".DS_Store" EXCLUDE
+    )
+    install(EXPORT MosaicTargets
+        FILE MosaicTargets.cmake
+        NAMESPACE Mosaic::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Mosaic
+    )
 
-configure_package_config_file(
-    cmake/MosaicConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfig.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Mosaic
-    PATH_VARS CMAKE_INSTALL_LIBDIR
-)
-write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfigVersion.cmake
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
-)
-install(FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfig.cmake
-    ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfigVersion.cmake
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Mosaic
-)
+    configure_package_config_file(
+        cmake/MosaicConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Mosaic
+        PATH_VARS CMAKE_INSTALL_LIBDIR
+    )
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/MosaicConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Mosaic
+    )
+endif()
