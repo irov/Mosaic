@@ -2,6 +2,8 @@
 
 #include "Mosaic/Frame.hpp"
 
+struct gp_graphics_t;
+
 namespace Mosaic
 {
     class PlatformAdapter;
@@ -14,13 +16,18 @@ namespace Mosaic
     class GraphicsBridge
     {
     public:
-        explicit GraphicsBridge(Allocator * allocator = nullptr);
+        GraphicsBridge();
         ~GraphicsBridge();
 
         GraphicsBridge(const GraphicsBridge &) = delete;
         GraphicsBridge & operator=(const GraphicsBridge &) = delete;
         GraphicsBridge(GraphicsBridge &&) = delete;
         GraphicsBridge & operator=(GraphicsBridge &&) = delete;
+
+        // graphics is the host-owned irov/graphics object every canvas of this
+        // bridge is created from.
+        [[nodiscard]] bool initialize(gp_graphics_t * graphics, Allocator * allocator = nullptr);
+        void finalize();
 
         [[nodiscard]] bool build(const Frame & frame, RenderMesh * const _out, size_t viewportIndex = 0) const;
         [[nodiscard]] bool build(const Frame & frame, RenderMesh * const _out, PlatformAdapter & platform, size_t viewportIndex = 0) const;

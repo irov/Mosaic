@@ -4,9 +4,9 @@
 #include "Mosaic/Platform.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <limits>
 
 #if defined(MOSAIC_HAS_IROV_GRAPHICS)
@@ -86,85 +86,6 @@ namespace Mosaic
         }
         //////////////////////////////////////////////////////////////////////////
 #if defined(MOSAIC_HAS_IROV_GRAPHICS)
-        struct alignas(std::max_align_t) GpAllocationHeader
-        {
-            size_t size = 0;
-        };
-        //////////////////////////////////////////////////////////////////////////
-        void * gpMalloc(gp_size_t size, void * data)
-        {
-            if(data == nullptr)
-            {
-                return nullptr;
-            }
-
-            if(size > std::numeric_limits<size_t>::max() - sizeof(GpAllocationHeader))
-            {
-                return nullptr;
-            }
-
-            Allocator & allocator = *static_cast<Allocator *>(data);
-            size_t allocationSize = sizeof(GpAllocationHeader) + size;
-            void * memory = allocator.allocate(allocationSize, alignof(GpAllocationHeader));
-
-            if(memory == nullptr)
-            {
-                return nullptr;
-            }
-
-            auto * header = static_cast<GpAllocationHeader *>(memory);
-            header->size = size;
-
-            return header + 1;
-        }
-        //////////////////////////////////////////////////////////////////////////
-        void gpFree(void * pointer, void * data)
-        {
-            if(pointer == nullptr)
-            {
-                return;
-            }
-
-            if(data == nullptr)
-            {
-                return;
-            }
-
-            Allocator & allocator = *static_cast<Allocator *>(data);
-            auto * header = static_cast<GpAllocationHeader *>(pointer) - 1;
-            allocator.deallocate(header, sizeof(GpAllocationHeader) + header->size, alignof(GpAllocationHeader));
-        }
-        //////////////////////////////////////////////////////////////////////////
-        void * gpRealloc(void * pointer, gp_size_t size, void * data)
-        {
-            if(pointer == nullptr)
-            {
-                auto returnedValue = Detail::gpMalloc(size, data);
-
-                return returnedValue;
-            }
-
-            if(size == 0)
-            {
-                Detail::gpFree(pointer, data);
-
-                return nullptr;
-            }
-
-            const auto * header = static_cast<const GpAllocationHeader *>(pointer) - 1;
-            void * replacement = Detail::gpMalloc(size, data);
-
-            if(replacement == nullptr)
-            {
-                return nullptr;
-            }
-
-            std::memcpy(replacement, pointer, std::min(header->size, static_cast<size_t>(size)));
-            Detail::gpFree(pointer, data);
-
-            return replacement;
-        }
-
         struct GraphicsBridgeState
         {
             explicit GraphicsBridgeState(Allocator & value) : allocator(&value), renderData(&value), batches(StlAllocator<gp_render_batch_t>(value))
@@ -1186,16 +1107,32 @@ namespace Mosaic
         metrics = {};
     }
     //////////////////////////////////////////////////////////////////////////
-    GraphicsBridge::GraphicsBridge(Allocator * allocator)
+    GraphicsBridge::GraphicsBridge()
+    {
+    }
+    //////////////////////////////////////////////////////////////////////////
+    GraphicsBridge::~GraphicsBridge()
+    {
+        assert(m_state == nullptr && "GraphicsBridge::finalize not called");
+    }
+    //////////////////////////////////////////////////////////////////////////
+    bool GraphicsBridge::initialize(gp_graphics_t * graphics, Allocator * allocator)
     {
 #if defined(MOSAIC_HAS_IROV_GRAPHICS)
+        if(graphics == nullptr)
+        {
+            m_lastError = "Graphics object is null";
+
+            return false;
+        }
+
         uint32_t apiVersion = gp_get_api_version();
 
         if(apiVersion < GP_API_VERSION)
         {
             m_lastError = "Graphics runtime API is older than the headers used to build Mosaic";
 
-            return;
+            return false;
         }
 
         Allocator & resolvedAllocator = allocator == nullptr ? defaultAllocator() : *allocator;
@@ -1205,11 +1142,12 @@ namespace Mosaic
         {
             m_lastError = "Graphics bridge state allocation failed";
 
-            return;
+            return false;
         }
 
         auto * state = ::new(memory) Detail::GraphicsBridgeState(resolvedAllocator);
-        gp_result_t createResult = gp_canvas_create(&state->canvas, Detail::gpMalloc, Detail::gpRealloc, Detail::gpFree, &resolvedAllocator);
+
+        gp_result_t createResult = gp_canvas_create(graphics, &state->canvas);
 
         if(createResult != GP_SUCCESSFUL)
         {
@@ -1217,14 +1155,21 @@ namespace Mosaic
             resolvedAllocator.deallocate(state, sizeof(Detail::GraphicsBridgeState), alignof(Detail::GraphicsBridgeState));
             m_lastError = "Graphics canvas creation failed";
 
-            return;
+            return false;
         }
 
         m_state = state;
+
+        return true;
+#else
+        (void)graphics;
+        (void)allocator;
+
+        return true;
 #endif
     }
     //////////////////////////////////////////////////////////////////////////
-    GraphicsBridge::~GraphicsBridge()
+    void GraphicsBridge::finalize()
     {
 #if defined(MOSAIC_HAS_IROV_GRAPHICS)
         if(m_state != nullptr)
@@ -1240,6 +1185,8 @@ namespace Mosaic
             Detail::AllocatorReference keepAllocatorAlive(allocator);
             state.~GraphicsBridgeState();
             allocator.deallocate(&state, sizeof(Detail::GraphicsBridgeState), alignof(Detail::GraphicsBridgeState));
+
+            m_state = nullptr;
         }
 #endif
     }

@@ -1,4 +1,5 @@
 #include "FakeEditor.hpp"
+#include "GraphicsObject.hpp"
 #include <Mosaic/GraphicsBridge.hpp>
 
 #include <algorithm>
@@ -11,7 +12,22 @@ int main()
     MosaicExample::FakeEditor editor(0, persistence);
     Mosaic::Context * ui = Mosaic::newContext(&platform);
     editor.configure(ui);
+    gp_graphics_t * graphicsObject = MosaicExample::createGraphics();
+    if(graphicsObject == nullptr)
+    {
+        std::fprintf(stderr, "Graphics object creation failed\n");
+        Mosaic::deleteContext(ui);
+        return 1;
+    }
     Mosaic::GraphicsBridge graphics;
+    if(!graphics.initialize(graphicsObject))
+    {
+        auto error = graphics.lastError();
+        std::fprintf(stderr, "Graphics bridge initialize failed: %.*s\n", static_cast<int>(error.size()), error.data());
+        gp_graphics_destroy(graphicsObject);
+        Mosaic::deleteContext(ui);
+        return 1;
+    }
     int failures = 0;
     for(const Mosaic::Vec2 size : {Mosaic::Vec2{1440, 860}, Mosaic::Vec2{1000, 650}})
     {
@@ -51,6 +67,8 @@ int main()
             }
         }
     }
+    graphics.finalize();
+    gp_graphics_destroy(graphicsObject);
     Mosaic::deleteContext(ui);
     return failures == 0 ? 0 : 1;
 }
